@@ -3,6 +3,9 @@
  * neutral (no electron or node imports) so every tsconfig can include it
  * without dragging in process-specific code.
  */
+import type { GithubConnectOptions, GithubConnectResult, GithubStatus } from './github'
+
+export type { GithubConnectOptions, GithubConnectResult, GithubStatus } from './github'
 
 export type PackageManager = 'bun' | 'pnpm' | 'yarn' | 'npm'
 export type Framework =
@@ -1048,6 +1051,12 @@ export interface PraxisApi {
     /** Full ship: commit all → push → PR → squash-merge to the default branch →
      *  pull it → delete the merged branch → start a fresh praxis/* branch. */
     ship: (root: string, summary?: string[], mode?: 'merge' | 'pr') => Promise<PublishResult>
+  }
+  github: {
+    /** GitHub link + gh readiness for the header + connect sheet. */
+    status: (root: string) => Promise<GithubStatus>
+    /** First-publish bridge: create the repo, wire origin, push the built work. */
+    connect: (root: string, opts: GithubConnectOptions) => Promise<GithubConnectResult>
   }
   setup: {
     /** Write the dev-only source-stamping plugin into the repo (deterministic). */

@@ -32,6 +32,7 @@ const UNIT = [
   'publish-message',
   'slash-token',
   'skills-discovery',
+  'github-connect',
   'project-key',
   'project-create',
   'devserver-net',

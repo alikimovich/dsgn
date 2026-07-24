@@ -28,6 +28,7 @@ import { createProject } from './scaffold'
 import { registerDiagnoseIpc } from './diagnose'
 import { registerUpdateIpc } from './update-ipc'
 import { registerFeedbackIpc } from './feedback'
+import { registerGithubIpc } from './github'
 import { registerPreviewSource } from './preview-state'
 
 // Product name — drives the macOS app menu label and the About panel. Set at
@@ -1025,6 +1026,7 @@ app.whenReady().then(() => {
   registerStylesIpc()
   registerControlsIpc()
   registerAnnotationsIpc()
+  registerGithubIpc()
   registerTokensIpc()
   registerSetupIpc()
   ipcMain.handle('git:ensure', (_e, root: string) => ensureBranch(root))
