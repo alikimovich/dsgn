@@ -9,6 +9,7 @@ import PreviewUrl from './components/PreviewUrl'
 import CodeDrawer from './components/CodeDrawer'
 import SessionReview from './components/SessionReview'
 import FeedbackDialog from './components/FeedbackDialog'
+import ConnectDialog from './components/ConnectDialog'
 import {
   describeSelectionForPrompt,
   chatAgentSettingsFor,
@@ -36,6 +37,7 @@ import {
   usePreviewFreeze,
   openWithPreviewFreeze,
   usePublishMode,
+  useGithub,
   useRecents,
   usePanelInset,
   useCodeDrawer,
@@ -103,6 +105,7 @@ export default function App(): React.JSX.Element {
   const [publishing, setPublishing] = useState(false)
   const viewport = useViewport((s) => s.viewport)
   const publishMode = usePublishMode((s) => s.mode)
+  const githubStatus = useGithub((s) => s.status)
   const recents = useRecents((s) => s.recents)
   // Boot restore deps (App closures), kept current for the once-on-mount effect.
   const restoreDepsRef = useRef<RestoreDeps | null>(null)
@@ -841,6 +844,9 @@ export default function App(): React.JSX.Element {
           log.append('Not a git repo — branch management off.')
         }
         if (b.error) log.append(`Couldn't switch branch: ${b.error}`, 'error')
+        // GitHub link state drives the header's Connect-vs-Publish control. Only a
+        // git repo can be connected; leave it null otherwise (header keeps Publish).
+        useGithub.getState().setStatus(b.isRepo ? await window.api.github.status(root) : null)
       } catch {
         /* non-fatal — keep opening */
       }
@@ -1808,6 +1814,19 @@ export default function App(): React.JSX.Element {
                           <MonitorSmartphone className="size-4" aria-hidden="true" />
                         </button>
                       )}
+                      {/* Before the project has a GitHub home, Publish would only
+                          dead-end on "no origin" — so swap in Connect until a repo
+                          exists (main/github.ts). Once connected, Publish returns. */}
+                      {githubStatus && !githubStatus.connected ? (
+                        <button
+                          className="btn btn--primary"
+                          onClick={() => useGithub.getState().setConnectOpen(true)}
+                          title="Create a GitHub repo for this project and push it"
+                        >
+                          Connect to GitHub
+                        </button>
+                      ) : (
+                      <>
                       {/* Publish split button: the main segment runs the selected
                           mode (full publish vs PR-only); the caret picks it. */}
                       <div className="pubgroup">
@@ -1860,6 +1879,8 @@ export default function App(): React.JSX.Element {
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
+                      </>
+                      )}
                     </>
                   )}
                 </div>
@@ -1949,6 +1970,7 @@ export default function App(): React.JSX.Element {
 
       {/* LKM-27: in-app feedback → a GitHub issue on the Praxis repo. */}
       <FeedbackDialog />
+      <ConnectDialog />
     </div>
   )
 }

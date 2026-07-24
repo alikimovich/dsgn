@@ -17,6 +17,9 @@ import type {
   FeedbackInput,
   FeedbackResult,
   Framework,
+  GithubStatus,
+  GithubConnectOptions,
+  GithubConnectResult,
   ImageAttachment,
   PermissionMode,
   PreviewComment,
@@ -325,6 +328,11 @@ const api: PraxisApi = {
       ipcRenderer.invoke('publish:to-pr', root, opts),
     ship: (root: string, summary?: string[], mode?: 'merge' | 'pr'): Promise<PublishResult> =>
       ipcRenderer.invoke('publish:ship', root, summary, mode)
+  },
+  github: {
+    status: (root: string): Promise<GithubStatus> => ipcRenderer.invoke('github:status', root),
+    connect: (root: string, opts: GithubConnectOptions): Promise<GithubConnectResult> =>
+      ipcRenderer.invoke('github:connect', root, opts)
   },
   setup: {
     scaffold: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:scaffold', root),

@@ -2,6 +2,39 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-24 — "Connect to GitHub": the first-publish bridge
+
+A first-time user scaffolds a project, builds it locally (delightful, zero-
+config), then hits **Publish** — and dead-ends on `No "origin" remote — add
+one, then publish.` (`annotations.ts`). Everything up to that point needs no
+git/GitHub knowledge; Publish suddenly assumes a repo already exists, an
+`origin` is set, and `gh` is installed + authed. The one-click promise broke
+exactly at the moment of pride.
+
+New distinct step (product decisions: **separate** action, **private** default,
+lean on **gh**, **guide** don't automate, repo reflects the built work — Option B):
+
+- **`src/main/github.ts`** — `githubStatus(root)` (link state + gh readiness,
+  prefills the sheet) and `connectToGitHub(root, {name, owner, private})`:
+  preflight gh install+auth → fast-forward the clean base up to the work branch
+  when it's an ancestor (so the repo's default branch shows what the user built,
+  not the bare scaffold) → `gh repo create --private --source . --remote origin`
+  → push default + work branch → set default branch + `origin/HEAD`. Defensive:
+  every failure returns `{ ok, error }`.
+- **`src/shared/github.ts`** — pure, testable helpers: `sanitizeRepoName` and
+  `resolveConnectPlan` (the Option-B branch logic). `test/github-connect.mjs`.
+- **Renderer** — `useGithub` store holds the opened project's status (null for
+  non-repos → header keeps Publish). The header swaps Publish for **"Connect to
+  GitHub"** until an `origin` exists (`App.tsx`); once connected, Publish returns
+  and works unchanged. New `ConnectDialog` (mirrors FeedbackDialog's preview-
+  freeze): name (live-sanitized), owner (login + orgs), Private default; gh
+  missing/unauthed shows the exact step + a Retry that re-probes.
+- Publish (`shipToMain`) is untouched — it just works once a remote is present.
+
+Verified: `bun run typecheck` + full unit tier (37/37, incl. github-connect) +
+`bun run build`. NOT yet driven in the Electron UI (no existing harness for the
+no-remote fresh-project state) — a tier-2 screenshot test is a good follow-up.
+
 ## 2026-07-24 — "/" menu shows all skills (drop the 8-item cap)
 
 The composer's slash menu silently truncated at 8 matches
