@@ -2,6 +2,33 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-24 — Vanilla-JS editing, Tier 1: a door into the code editor
+
+Discovery turned up a sharp gap: a vanilla-JS / static project **can't open the
+code editor at all** from the UI. The drawer is fully capable (edit + save any
+file, conflict detection, undo/redo, live-reload, IDE hand-off) and its file
+tree works for any project — but the only two ways *in* are the element
+toolbar's "code" action (hidden unless the element has a `data-praxis-source`
+stamp) and the file tree (which lives *inside* the drawer). A static project has
+no build step to inject the stamp, so both dead-end.
+
+Tier 1 (of a two-tier plan — decided: Tier 1 now, Tier 2 next):
+- **A stamp-independent door.** New `Code2` icon button in the preview header
+  (`.previewbar__actions`, shown while the preview runs) toggles the code drawer
+  for *any* project. `toggleCodeDrawer` picks a sensible starting file (the HTML
+  entry when there is one, else the first file) via `source.tree`, then the
+  drawer's file tree takes over. `App.tsx`.
+- Universal, not framework-gated — it's additive next to the element→code path.
+
+Tier 2 (follow-up): serve-time `data-praxis-source` stamping in
+`static-server.ts` (the served bytes ARE the on-disk file, so the DOM→source map
+is nearly free) + an HTML text-splice engine, to light up click-element-to-code
+and inline text editing that writes back to the HTML. Decided: JS-generated DOM
+(no source location) falls back to chat, like framework projects do today.
+
+Verified: typecheck (node/web/preview) + build. UI test (Code button opens the
+drawer + tree) is a follow-up.
+
 ## 2026-07-24 — "Connect to GitHub": the first-publish bridge
 
 A first-time user scaffolds a project, builds it locally (delightful, zero-
