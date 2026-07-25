@@ -48,7 +48,7 @@ import {
 import { projectKey } from '../../shared/projectKey'
 import { controlsPrompt } from './lib/controls-prompt'
 import { restoreWorkspace, type RestoreDeps } from './restore'
-import { MonitorSmartphone, PanelLeft } from 'lucide-react'
+import { Code2, MonitorSmartphone, PanelLeft } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -1001,6 +1001,26 @@ export default function App(): React.JSX.Element {
     await attempt(res.root, undefined, !!useSession.getState().projectRoot)
   }
 
+  // Open (or close) the code editor without needing a selected element. The
+  // element toolbar's "code" action only appears on source-stamped elements, so
+  // an un-instrumented project (vanilla HTML/JS, no build-time stamp) otherwise
+  // has no way into the drawer at all. Pick a sensible starting file — the HTML
+  // entry when there is one — and let the drawer's file tree take it from there.
+  const toggleCodeDrawer = async (): Promise<void> => {
+    if (useCodeDrawer.getState().source) {
+      useCodeDrawer.getState().close()
+      return
+    }
+    const root = useSession.getState().projectRoot
+    if (!root) return
+    const files = await window.api.source.tree(root).catch(() => [] as string[])
+    const pick =
+      files.find((f) => f === 'index.html') ??
+      files.find((f) => f.endsWith('.html')) ??
+      files[0]
+    if (pick) useCodeDrawer.getState().open(`${pick}:1`)
+  }
+
   // Publish: commit everything on the current praxis/* branch, push, open a PR,
   // squash-merge it to main, pull main, delete the merged branch, and start a
   // fresh same-named branch to keep working on. Progress + result go to the log.
@@ -1797,6 +1817,17 @@ export default function App(): React.JSX.Element {
                       {/* Element-select moved to the chat composer (Figma Make-style);
                           comment/annotate are element-scoped actions on the selection
                           pill now. Keyboard: S select, C comment, Y annotate. */}
+                      {/* Code editor: a stamp-independent way into the drawer + file
+                          tree, so vanilla/un-instrumented projects can still edit code. */}
+                      <button
+                        className={`iconbtn ${drawerSource ? 'is-active' : ''}`}
+                        onClick={() => void toggleCodeDrawer()}
+                        aria-pressed={!!drawerSource}
+                        aria-label="Open code editor"
+                        title="Open code editor"
+                      >
+                        <Code2 className="size-4" aria-hidden="true" />
+                      </button>
                       {/* Viewport toggle (Figma-style device icon; also Actions
                           menu ⌘1 / ⌘2). Active = mobile. */}
                       {previewKind !== 'simulator' && (
