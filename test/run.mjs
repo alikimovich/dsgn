@@ -90,6 +90,7 @@ const ELECTRON = [
   'preview-location',
   'feedback-dialog',
   'connect-dialog',
+  'html-text-edit',
   'questions',
   'diagnose-card',
   'select-element',

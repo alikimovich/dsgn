@@ -60,6 +60,7 @@
     "test:skills": "bun test/skills-discovery.mjs",
     "test:github-connect": "bun test/github-connect.mjs",
     "test:html-source": "bun test/html-source.mjs",
+    "test:html-text-edit": "electron-vite build && node test/html-text-edit.mjs",
     "test:connect-dialog": "electron-vite build && node test/connect-dialog.mjs",
     "test:devnet": "bun test/devserver-net.mjs",
     "test:xcode": "bun test/xcode.mjs",
