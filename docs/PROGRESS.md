@@ -2,6 +2,22 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-25 — Fix two stale code-drawer UI tests
+
+`code-peek` and `code-drawer` failed on the electron tier — and, crucially, on
+the pre-work baseline too, so not a regression: the drawer UI evolved but the
+tests didn't follow.
+- `code-peek` waited for `.codedrawer__expand`, an explicit expand toggle that
+  no longer exists (replaced by dragging the drawer's top edge, `__resize`).
+  Now asserts open-in-editor + the drag-resize handle.
+- `code-drawer` clicked `.codedrawer__close` in the popped-out editor *window*,
+  which intentionally has no in-editor close (it uses the native traffic lights,
+  `!isWindow` guard in CodeDrawer.tsx). Now closes via `editorWin.close()`.
+
+Both deterministic green after the fix (2/2 each). The other four electron-tier
+failures that turned up (`rail`, `rail-collapse`, `style-edit`, `custom-controls`)
+are timing flakes — each passes in isolation / on retry — not addressed here.
+
 ## 2026-07-24 — Vanilla-JS editing, Tier 2: click-to-code + inline text edit
 
 Tier 2 of the vanilla-JS editing plan (Tier 1 added the header code-editor

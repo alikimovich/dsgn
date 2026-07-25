@@ -4,8 +4,8 @@
  *
  *   source.read resolves the stamped file + the element's line span (single- and
  *   multi-line, root-escape refused); the Inspector's Code button opens the editor
- *   drawer on that file (with Editor + Expand affordances); openInEditor fails
- *   soft on a bad stamp instead of throwing.
+ *   drawer on that file (with open-in-editor + drag-resize affordances);
+ *   openInEditor fails soft on a bad stamp instead of throwing.
  *
  * Run with: bun run test:codepeek
  */
@@ -105,17 +105,10 @@ try {
   const drawerText = await win.$eval('.codedrawer .cm-content', (el) => el.textContent ?? '')
   if (!drawerText.includes('variant')) throw new Error('drawer does not show the stamped source')
 
-  // The drawer offers "open in your editor" and an expand toggle.
+  // The drawer offers "open in your editor" and a drag-resize handle (the
+  // explicit expand toggle was replaced by dragging the drawer's top edge).
   await win.waitForSelector('.codedrawer__open', { timeout: 5000 })
-  await win.waitForSelector('.codedrawer__expand', { timeout: 5000 })
-
-  // Expand toggles on (and, where the window is tall enough, grows the inset).
-  await win.$eval('.codedrawer__expand', (el) => el.click())
-  await win.waitForFunction(
-    () => document.querySelector('.codedrawer__expand')?.getAttribute('aria-pressed') === 'true',
-    undefined,
-    { timeout: 5000 }
-  )
+  await win.waitForSelector('.codedrawer__resize', { timeout: 5000 })
   await win.screenshot({ path: join(artifacts, '12-code-peek.png') })
 
   console.log('CODE-PEEK OK — read + spans + escape guard, Code button opens the editor drawer')
