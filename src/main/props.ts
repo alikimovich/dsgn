@@ -22,7 +22,16 @@ import {
   removeSvelteProp
 } from './props-svelte'
 import { swapTailwindClass } from './tw-classes'
-import { recordEdit, undo, redo, canUndo, canRedo, revertGroup, canRevertGroup } from './edit-history'
+import { spliceHtmlText } from './html-source'
+import {
+  recordEdit,
+  undo,
+  redo,
+  canUndo,
+  canRedo,
+  revertGroup,
+  canRevertGroup
+} from './edit-history'
 
 /**
  * Write a source edit and record it for undo/redo (v8 F3b). A no-op (after ===
@@ -328,9 +337,7 @@ export interface TsAliases {
 
 /** Strip `//`/`/* *​/` comments and trailing commas so JSONC tsconfigs parse. */
 function parseJsonc(text: string): unknown {
-  const noComments = text
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  const noComments = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
   const noTrailingCommas = noComments.replace(/,(\s*[}\]])/g, '$1')
   return JSON.parse(noTrailingCommas)
 }
@@ -348,7 +355,10 @@ export async function loadTsAliases(root: string): Promise<TsAliases | null> {
   const readConfig = async (file: string): Promise<TsAliases | null> => {
     if (tried.has(file) || tried.size > 4) return null
     tried.add(file)
-    let cfg: { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> }; extends?: string }
+    let cfg: {
+      compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> }
+      extends?: string
+    }
     try {
       cfg = parseJsonc(await readFile(file, 'utf8')) as typeof cfg
     } catch {
@@ -723,6 +733,26 @@ async function applyTextEdit(
   if (loc.file.endsWith('.svelte')) {
     return applySvelteTextEdit(root, { source: edit.source, text: newText }, loc)
   }
+  // `.html`/`.htm` (vanilla projects, stamped at serve time) → splice the text
+  // node back into the HTML file; mixed/void content falls back to the agent.
+  if (/\.html?$/i.test(loc.file)) {
+    let html: string
+    try {
+      html = await readFile(loc.file, 'utf8')
+    } catch {
+      return { applied: false, error: 'Could not read the source file.' }
+    }
+    const next =
+      loc.column != null ? await spliceHtmlText(html, loc.line, loc.column, newText) : null
+    if (next == null) {
+      return {
+        applied: false,
+        needsAgent: true,
+        agentPrompt: textAgentPrompt(edit.source, newText)
+      }
+    }
+    return commitEdit(root, loc.file, html, next, `${edit.source}:text`)
+  }
   let code: string
   try {
     code = await readFile(loc.file, 'utf8')
@@ -774,8 +804,23 @@ async function applyTextEdit(
 
 // Main runs in Node (no CSS.supports), so family checks are regex-based.
 const NAMED_COLORS = new Set([
-  'red', 'blue', 'green', 'black', 'white', 'gray', 'grey', 'orange', 'purple', 'pink',
-  'yellow', 'teal', 'cyan', 'magenta', 'transparent', 'currentcolor', 'inherit'
+  'red',
+  'blue',
+  'green',
+  'black',
+  'white',
+  'gray',
+  'grey',
+  'orange',
+  'purple',
+  'pink',
+  'yellow',
+  'teal',
+  'cyan',
+  'magenta',
+  'transparent',
+  'currentcolor',
+  'inherit'
 ])
 function isColorValue(v: string): boolean {
   const s = v.trim().toLowerCase()
@@ -793,15 +838,49 @@ function isLengthValue(v: string): boolean {
 // T3 only swaps a style property when BOTH the property NAME and the VALUE belong
 // to the token's family — otherwise a color token could land in fontSize, etc.
 const COLOR_STYLE_PROPS = new Set([
-  'color', 'background', 'backgroundColor', 'borderColor', 'borderTopColor',
-  'borderRightColor', 'borderBottomColor', 'borderLeftColor', 'outlineColor', 'fill',
-  'stroke', 'caretColor', 'textDecorationColor', 'columnRuleColor'
+  'color',
+  'background',
+  'backgroundColor',
+  'borderColor',
+  'borderTopColor',
+  'borderRightColor',
+  'borderBottomColor',
+  'borderLeftColor',
+  'outlineColor',
+  'fill',
+  'stroke',
+  'caretColor',
+  'textDecorationColor',
+  'columnRuleColor'
 ])
 const LENGTH_STYLE_PROPS = new Set([
-  'width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'padding',
-  'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'margin', 'marginTop',
-  'marginRight', 'marginBottom', 'marginLeft', 'gap', 'rowGap', 'columnGap', 'fontSize',
-  'lineHeight', 'borderRadius', 'top', 'right', 'bottom', 'left', 'letterSpacing',
+  'width',
+  'height',
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+  'padding',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'margin',
+  'marginTop',
+  'marginRight',
+  'marginBottom',
+  'marginLeft',
+  'gap',
+  'rowGap',
+  'columnGap',
+  'fontSize',
+  'lineHeight',
+  'borderRadius',
+  'top',
+  'right',
+  'bottom',
+  'left',
+  'letterSpacing',
   'borderWidth'
 ])
 
@@ -895,9 +974,7 @@ async function applyTokenEdit(root: string, edit: TokenEdit): Promise<PropEditRe
   // T1 — schema enum swap (the token name IS a valid enum option). If more than
   // one enum prop lists it, it's ambiguous → let the agent decide.
   const schema = await resolveSchema(root, loc.file, code, found)
-  const enumFields = schema.filter(
-    (f) => f.kind === 'enum' && f.options?.includes(edit.token.name)
-  )
+  const enumFields = schema.filter((f) => f.kind === 'enum' && f.options?.includes(edit.token.name))
   if (enumFields.length === 1) {
     return applyPropEdit(root, {
       source: edit.source,
@@ -956,7 +1033,8 @@ async function applyTokenEdit(root: string, edit: TokenEdit): Promise<PropEditRe
     })
     if (matches.length === 1) {
       const valNode = matches[0].value as BabelNode
-      const next = code.slice(0, valNode.start) + JSON.stringify(tokenRef(edit)) + code.slice(valNode.end)
+      const next =
+        code.slice(0, valNode.start) + JSON.stringify(tokenRef(edit)) + code.slice(valNode.end)
       return commitEdit(root, loc.file, code, next, `${edit.source}:token`)
     }
   }
@@ -1043,7 +1121,10 @@ const EDITOR_CLIS: Array<{ cmd: string; args: (target: string) => string[] }> = 
   { cmd: 'subl', args: (t) => [t] }
 ]
 
-async function openInEditor(root: string, source: string): Promise<{ ok: boolean; error?: string }> {
+async function openInEditor(
+  root: string,
+  source: string
+): Promise<{ ok: boolean; error?: string }> {
   const loc = resolveSource(root, source)
   if (!loc) return { ok: false, error: 'Could not resolve the source location.' }
   try {
@@ -1161,7 +1242,9 @@ export function registerPropsIpc(): void {
     inspectProps(root, source, text)
   )
   ipcMain.handle('props:apply', (_e, root: string, edit: PropEdit) => applyPropEdit(root, edit))
-  ipcMain.handle('props:applyToken', (_e, root: string, edit: TokenEdit) => applyTokenEdit(root, edit))
+  ipcMain.handle('props:applyToken', (_e, root: string, edit: TokenEdit) =>
+    applyTokenEdit(root, edit)
+  )
   ipcMain.handle('props:remove', (_e, root: string, source: string, name: string) =>
     removeProp(root, source, name)
   )
@@ -1192,5 +1275,7 @@ export function registerPropsIpc(): void {
   // Per-turn "Revert changes" (chat): addressable revert of one recorded turn group
   // (chat:<wtId>:<turnNo>) — restores its pre-turn files unless any drifted since.
   ipcMain.handle('edit:revert', (_e, root: string, group: string) => revertGroup(root, group))
-  ipcMain.handle('edit:can-revert', (_e, root: string, group: string) => canRevertGroup(root, group))
+  ipcMain.handle('edit:can-revert', (_e, root: string, group: string) =>
+    canRevertGroup(root, group)
+  )
 }

@@ -2,6 +2,39 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-24 — Vanilla-JS editing, Tier 2: click-to-code + inline text edit
+
+Tier 2 of the vanilla-JS editing plan (Tier 1 added the header code-editor
+door). The key move: a static site's served bytes ARE the on-disk file, so the
+DOM→source map framework projects manufacture with a build-time plugin is nearly
+free — compute it at serve time.
+
+- **`src/main/html-source.ts`** (new, over parse5 via dynamic import):
+  `stampHtml(html, relpath)` injects `data-praxis-source="relpath:line:col"`
+  into each stampable element's start tag (attribute-only, idempotent, skips
+  head/script/style, degrades to the input on parse failure);
+  `spliceHtmlText(html, line, col, text)` rewrites a stamped text leaf back into
+  the file (null → agent fallback for element/comment children or void tags).
+  Pure, unit-tested (`test/html-source.mjs`).
+- **`static-server.ts`** stamps every served HTML response before the live-reload
+  snippet. So clicking an element in a vanilla preview now yields a `source`,
+  which lights up the existing machinery for free: the element "code" button
+  opens the drawer at the right line, and `isTextEditable` (stamp + text-leaf,
+  already framework-agnostic) enables double-click text editing — no preview
+  changes needed.
+- **`props.ts`** `applyTextEdit` gains an `.html` branch → `spliceHtmlText` →
+  `commitEdit` (undo/redo, conflict detection, live-reload), mirroring the
+  JSX/Svelte paths. JS-generated DOM (no source location) falls back to chat, as
+  decided.
+- Adds parse5. Tests: `html-source` (unit), `html-text-edit` (integration, real
+  `text:apply` IPC), and a stamp assertion in `static-serve`.
+
+Verified: typecheck + unit tier (38/38) + build + `static-serve` and
+`html-text-edit` electron tests (with isolated `PRAXIS_USER_DATA`). Note: run
+electron tests via `node test/run.mjs electron` (or with `PRAXIS_USER_DATA` set)
+— running the files directly reuses real userData and the app auto-restores a
+stale project instead of the empty state.
+
 ## 2026-07-24 — Vanilla-JS editing, Tier 1: a door into the code editor
 
 Discovery turned up a sharp gap: a vanilla-JS / static project **can't open the
