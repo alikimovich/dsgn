@@ -1530,6 +1530,7 @@ export const usePreviewLocation = create<PreviewLocationState>((set) => ({
 ;(window as unknown as { __praxisTokens?: typeof useTokens }).__praxisTokens = useTokens
 ;(window as unknown as { __praxisSetup?: typeof useSetup }).__praxisSetup = useSetup
 ;(window as unknown as { __praxisLog?: typeof useLog }).__praxisLog = useLog
+;(window as unknown as { __praxisGithub?: typeof useGithub }).__praxisGithub = useGithub
 ;(window as unknown as { __praxisDiagnosis?: typeof useDiagnosis }).__praxisDiagnosis = useDiagnosis
 ;(window as unknown as { __praxisWorkspace?: typeof useWorkspace }).__praxisWorkspace = useWorkspace
 ;(window as unknown as { __praxisHistory?: typeof useHistory }).__praxisHistory = useHistory
