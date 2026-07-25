@@ -88,6 +88,7 @@ const ELECTRON = [
   'restore-reload',
   'preview-location',
   'feedback-dialog',
+  'connect-dialog',
   'questions',
   'diagnose-card',
   'select-element',

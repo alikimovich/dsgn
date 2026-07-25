@@ -59,6 +59,7 @@
     "test:slash-token": "bun test/slash-token.mjs",
     "test:skills": "bun test/skills-discovery.mjs",
     "test:github-connect": "bun test/github-connect.mjs",
+    "test:connect-dialog": "electron-vite build && node test/connect-dialog.mjs",
     "test:devnet": "bun test/devserver-net.mjs",
     "test:xcode": "bun test/xcode.mjs",
     "test:git": "bun test/git.mjs",
