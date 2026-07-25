@@ -33,6 +33,7 @@ const UNIT = [
   'slash-token',
   'skills-discovery',
   'github-connect',
+  'html-source',
   'project-key',
   'project-create',
   'devserver-net',
