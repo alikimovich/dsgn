@@ -9,6 +9,7 @@ import PreviewUrl from './components/PreviewUrl'
 import CodeDrawer from './components/CodeDrawer'
 import SessionReview from './components/SessionReview'
 import FeedbackDialog from './components/FeedbackDialog'
+import ConnectDialog from './components/ConnectDialog'
 import {
   describeSelectionForPrompt,
   chatAgentSettingsFor,
@@ -36,6 +37,7 @@ import {
   usePreviewFreeze,
   openWithPreviewFreeze,
   usePublishMode,
+  useGithub,
   useRecents,
   usePanelInset,
   useCodeDrawer,
@@ -46,7 +48,7 @@ import {
 import { projectKey } from '../../shared/projectKey'
 import { controlsPrompt } from './lib/controls-prompt'
 import { restoreWorkspace, type RestoreDeps } from './restore'
-import { MonitorSmartphone, PanelLeft } from 'lucide-react'
+import { Code2, MonitorSmartphone, PanelLeft } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -103,6 +105,7 @@ export default function App(): React.JSX.Element {
   const [publishing, setPublishing] = useState(false)
   const viewport = useViewport((s) => s.viewport)
   const publishMode = usePublishMode((s) => s.mode)
+  const githubStatus = useGithub((s) => s.status)
   const recents = useRecents((s) => s.recents)
   // Boot restore deps (App closures), kept current for the once-on-mount effect.
   const restoreDepsRef = useRef<RestoreDeps | null>(null)
@@ -594,14 +597,40 @@ export default function App(): React.JSX.Element {
           s.setVerifying(false)
           return
         }
-        if (stamps === 0 && !s.dismissed && !s.busy) s.setNeeded(true)
-        else if (stamps > 0) s.setNeeded(false)
+        if (stamps > 0) {
+          s.setNeeded(false)
+          return
+        }
+        // stamps === 0: only offer setup when instrumentation is actually
+        // possible — a static/vanilla project has no supported framework, so
+        // "Set it up" would dead-end. Gate on `canInstrument`; if the probe
+        // hasn't resolved yet (readiness beat it), run it now and re-decide.
+        if (s.dismissed || s.busy) return
+        const offerIf = (can: boolean | null): void => {
+          const cur = useSetup.getState()
+          if (can && !cur.dismissed && !cur.busy) cur.setNeeded(true)
+        }
+        if (s.canInstrument !== null) {
+          offerIf(s.canInstrument)
+          return
+        }
+        const root = useSession.getState().projectRoot
+        if (!root) return
+        void window.api.setup
+          .detect(root)
+          .then((probe) => {
+            if (useSession.getState().projectRoot !== root) return
+            useSetup.getState().setCanInstrument(probe.canInstrument)
+            offerIf(probe.canInstrument)
+          })
+          .catch(() => {})
       }),
     []
   )
 
   // The setup turn finished → restart the dev server + reload the preview so the
   // freshly-wired config applies (one-shot: consume the signal, then restart).
+  const canInstrument = useSetup((s) => s.canInstrument)
   const restartRequested = useSetup((s) => s.restartRequested)
   useEffect(() => {
     if (!restartRequested) return
@@ -841,6 +870,9 @@ export default function App(): React.JSX.Element {
           log.append('Not a git repo — branch management off.')
         }
         if (b.error) log.append(`Couldn't switch branch: ${b.error}`, 'error')
+        // GitHub link state drives the header's Connect-vs-Publish control. Only a
+        // git repo can be connected; leave it null otherwise (header keeps Publish).
+        useGithub.getState().setStatus(b.isRepo ? await window.api.github.status(root) : null)
       } catch {
         /* non-fatal — keep opening */
       }
@@ -911,6 +943,12 @@ export default function App(): React.JSX.Element {
         const tk = useTokens.getState()
         tk.setSet(t)
         if (t.source === 'none' && !tk.offerDismissed) tk.setOfferNeeded(true)
+      })
+      // Can this project be instrumented for visual editing? Populates the setup
+      // gate + the Styles tab's read-only guidance up front (same switch guard).
+      void window.api.setup.detect(root).then((probe) => {
+        if (useSession.getState().projectRoot !== root) return
+        useSetup.getState().setCanInstrument(probe.canInstrument)
       })
       // Load this repo's existing handoff notes (renders pins via the effect above).
       useAnnotations.getState().setList(await window.api.annotations.list(root))
@@ -993,6 +1031,26 @@ export default function App(): React.JSX.Element {
     }
     log.append('Project created — starting its dev server…', 'success')
     await attempt(res.root, undefined, !!useSession.getState().projectRoot)
+  }
+
+  // Open (or close) the code editor without needing a selected element. The
+  // element toolbar's "code" action only appears on source-stamped elements, so
+  // an un-instrumented project (vanilla HTML/JS, no build-time stamp) otherwise
+  // has no way into the drawer at all. Pick a sensible starting file — the HTML
+  // entry when there is one — and let the drawer's file tree take it from there.
+  const toggleCodeDrawer = async (): Promise<void> => {
+    if (useCodeDrawer.getState().source) {
+      useCodeDrawer.getState().close()
+      return
+    }
+    const root = useSession.getState().projectRoot
+    if (!root) return
+    const files = await window.api.source.tree(root).catch(() => [] as string[])
+    const pick =
+      files.find((f) => f === 'index.html') ??
+      files.find((f) => f.endsWith('.html')) ??
+      files[0]
+    if (pick) useCodeDrawer.getState().open(`${pick}:1`)
   }
 
   // Publish: commit everything on the current praxis/* branch, push, open a PR,
@@ -1791,6 +1849,17 @@ export default function App(): React.JSX.Element {
                       {/* Element-select moved to the chat composer (Figma Make-style);
                           comment/annotate are element-scoped actions on the selection
                           pill now. Keyboard: S select, C comment, Y annotate. */}
+                      {/* Code editor: a stamp-independent way into the drawer + file
+                          tree, so vanilla/un-instrumented projects can still edit code. */}
+                      <button
+                        className={`iconbtn ${drawerSource ? 'is-active' : ''}`}
+                        onClick={() => void toggleCodeDrawer()}
+                        aria-pressed={!!drawerSource}
+                        aria-label="Open code editor"
+                        title="Open code editor"
+                      >
+                        <Code2 className="size-4" aria-hidden="true" />
+                      </button>
                       {/* Viewport toggle (Figma-style device icon; also Actions
                           menu ⌘1 / ⌘2). Active = mobile. */}
                       {previewKind !== 'simulator' && (
@@ -1808,6 +1877,19 @@ export default function App(): React.JSX.Element {
                           <MonitorSmartphone className="size-4" aria-hidden="true" />
                         </button>
                       )}
+                      {/* Before the project has a GitHub home, Publish would only
+                          dead-end on "no origin" — so swap in Connect until a repo
+                          exists (main/github.ts). Once connected, Publish returns. */}
+                      {githubStatus && !githubStatus.connected ? (
+                        <button
+                          className="btn btn--primary"
+                          onClick={() => useGithub.getState().setConnectOpen(true)}
+                          title="Create a GitHub repo for this project and push it"
+                        >
+                          Connect to GitHub
+                        </button>
+                      ) : (
+                      <>
                       {/* Publish split button: the main segment runs the selected
                           mode (full publish vs PR-only); the caret picks it. */}
                       <div className="pubgroup">
@@ -1860,6 +1942,8 @@ export default function App(): React.JSX.Element {
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
+                      </>
+                      )}
                     </>
                   )}
                 </div>
@@ -1935,6 +2019,7 @@ export default function App(): React.JSX.Element {
           inspection={inspection}
           inspecting={inspecting}
           controls={islandControls}
+          canInstrument={canInstrument}
         />
       )}
 
@@ -1949,6 +2034,7 @@ export default function App(): React.JSX.Element {
 
       {/* LKM-27: in-app feedback → a GitHub issue on the Praxis repo. */}
       <FeedbackDialog />
+      <ConnectDialog />
     </div>
   )
 }

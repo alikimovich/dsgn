@@ -146,9 +146,10 @@ try {
   }
   if (app.windows().length <= windowsBefore) throw new Error('pop-out did not open a new window')
   await editorWin.screenshot({ path: join(artifacts, '13b-code-editor-window.png') })
-  // Closing from inside the popped-out editor closes its window.
-  await editorWin.$eval('.codedrawer__close', (el) => el.click())
-  await editorWin.waitForEvent('close', { timeout: 5000 })
+  // The window variant has no in-editor close button (it closes via the native
+  // traffic lights); closing the window tears the popped-out editor down.
+  await editorWin.close()
+  await editorWin.waitForEvent('close', { timeout: 5000 }).catch(() => {})
 
   if (disk() !== baseline) throw new Error('fixture left modified')
   // --- Cmd+click resolution engine + drawer nav history. ---

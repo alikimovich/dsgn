@@ -299,6 +299,13 @@ async function uninstall(root: string): Promise<SetupResult> {
 }
 
 export function registerSetupIpc(): void {
+  // Read-only probe: detect the UI framework without writing, so the renderer can
+  // decide whether setup is even possible (an 'unknown'/vanilla project has no
+  // instrumentation strategy — never offer a dead-end "Set it up").
+  ipcMain.handle('setup:detect', async (_e, root: string) => {
+    const d = await detect(root)
+    return { framework: d.framework, canInstrument: d.framework !== 'unknown' }
+  })
   ipcMain.handle('setup:scaffold', (_e, root: string) => scaffold(root))
   ipcMain.handle('setup:uninstall', (_e, root: string) => uninstall(root))
 }

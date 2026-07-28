@@ -20,7 +20,8 @@ export default function PanelHost({
   element,
   inspection,
   inspecting,
-  controls
+  controls,
+  canInstrument
 }: {
   root: string
   element: SelectedElement
@@ -29,6 +30,8 @@ export default function PanelHost({
   /** AI-surfaced control panels for the selection (Custom Controls, v10) —
    *  fetched by App via controls:get; null while unfetched. */
   controls: ResolvedControlPanel[] | null
+  /** Can praxis instrument this project? Tailors the Styles tab read-only guidance. */
+  canInstrument: boolean | null
 }): null {
   const [size, setSize] = useState({ width: 268 + PAD.left + PAD.right, height: 160 })
   const [maxHeight, setMaxHeight] = useState(480)
@@ -43,8 +46,16 @@ export default function PanelHost({
   )
 
   useEffect(() => {
-    window.api.panel.setState({ root, element, inspection, inspecting, maxHeight, controls })
-  }, [root, element, inspection, inspecting, maxHeight, controls])
+    window.api.panel.setState({
+      root,
+      element,
+      inspection,
+      inspecting,
+      maxHeight,
+      controls,
+      canInstrument
+    })
+  }, [root, element, inspection, inspecting, maxHeight, controls, canInstrument])
 
   // Place at the top right of the preview card body, tracked live.
   useEffect(() => {

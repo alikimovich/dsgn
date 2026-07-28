@@ -102,6 +102,7 @@ export default function PanelApp(): React.JSX.Element | null {
               <StylePanel
                 root={state.root}
                 element={state.element}
+                canInstrument={state.canInstrument}
                 onSeedPrompt={(text) => window.api.panel.action({ kind: 'seed', text })}
               />
             }

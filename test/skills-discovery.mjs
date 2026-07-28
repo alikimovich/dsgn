@@ -9,6 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseSkillMeta, discoverProjectSkills, mergeSlashCommands } from '../src/main/skills.ts'
+import { rankSlashMatches } from '../src/shared/slash-menu.ts'
 
 // --- parseSkillMeta ---------------------------------------------------------
 
@@ -31,10 +32,10 @@ assert.deepStrictEqual(
 )
 
 // CRLF line endings.
-assert.deepStrictEqual(
-  parseSkillMeta('---\r\nname: crlf\r\ndescription: windows\r\n---\r\nbody'),
-  { name: 'crlf', description: 'windows' }
-)
+assert.deepStrictEqual(parseSkillMeta('---\r\nname: crlf\r\ndescription: windows\r\n---\r\nbody'), {
+  name: 'crlf',
+  description: 'windows'
+})
 
 // Malformed / missing frontmatter never throws — just yields {}.
 assert.deepStrictEqual(parseSkillMeta('# no frontmatter at all'), {})
@@ -145,4 +146,44 @@ assert.deepStrictEqual(
   [{ name: 'x', description: 'first', source: 'project' }]
 )
 
-console.log('SKILLS-DISCOVERY OK — frontmatter parse, .claude/skills scan, project-first merge')
+// --- rankSlashMatches (the "/" menu, renderer-side) -------------------------
+
+const menu = [
+  { name: 'design-system', description: 'DS', source: 'project' },
+  { name: 'deploy', source: 'other' },
+  { name: 'debug', source: 'other' },
+  { name: 'commit', source: 'other' }
+]
+
+// Empty query returns every command, project skills first.
+assert.deepStrictEqual(
+  rankSlashMatches(menu, '').map((c) => c.name),
+  ['design-system', 'deploy', 'debug', 'commit']
+)
+
+// Substring filter is case-insensitive and preserves project-first order.
+assert.deepStrictEqual(
+  rankSlashMatches(menu, 'DE').map((c) => c.name),
+  ['design-system', 'deploy', 'debug']
+)
+
+// A same-named non-project command is shadowed by its project skill.
+assert.deepStrictEqual(
+  rankSlashMatches(
+    [
+      { name: 'deploy', description: 'project deploy', source: 'project' },
+      { name: 'deploy', source: 'other' }
+    ],
+    'deploy'
+  ),
+  [{ name: 'deploy', description: 'project deploy', source: 'project' }]
+)
+
+// No cap: a query matching >8 commands returns all of them (regression — the
+// menu used to .slice(0, 8) and hide the rest; the scroll container now owns overflow).
+const many = Array.from({ length: 20 }, (_, i) => ({ name: `skill-${i}`, source: 'other' }))
+assert.strictEqual(rankSlashMatches(many, 'skill').length, 20)
+
+console.log(
+  'SKILLS-DISCOVERY OK — frontmatter parse, .claude/skills scan, project-first merge, uncapped menu rank'
+)

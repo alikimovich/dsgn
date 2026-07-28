@@ -13,6 +13,7 @@ import type {
   SessionRecord,
   SessionTranscriptEntry,
   SlashCommandItem,
+  GithubStatus,
   TokenSet,
   UpdateStatus
 } from '../../shared/api'
@@ -1269,6 +1270,26 @@ export const useFeedback = create<FeedbackState>((set) => ({
   setOpen: (open) => set({ open })
 }))
 
+/**
+ * "Connect to GitHub" (the first-publish bridge). `status` is the opened
+ * project's GitHub link — `null` when it isn't a git repo (the header then keeps
+ * the normal Publish control). When `status.connected` is false the header shows
+ * "Connect to GitHub" instead, and `connectOpen` raises the one connect sheet
+ * App renders (same single-flag pattern as the feedback dialog).
+ */
+interface GithubState {
+  status: GithubStatus | null
+  connectOpen: boolean
+  setStatus: (status: GithubStatus | null) => void
+  setConnectOpen: (open: boolean) => void
+}
+export const useGithub = create<GithubState>((set) => ({
+  status: null,
+  connectOpen: false,
+  setStatus: (status) => set({ status }),
+  setConnectOpen: (connectOpen) => set({ connectOpen })
+}))
+
 /** Render a chat slice as a plain-text transcript for a feedback attachment. */
 export const formatConversation = (messages: ChatMessage[]): string =>
   messages
@@ -1301,6 +1322,12 @@ interface SetupState {
   /** The previewed app isn't source-stamped — offer to set it up. */
   needed: boolean
   dismissed: boolean
+  /**
+   * Can praxis instrument this project (a supported UI framework was detected)?
+   * Gates the offer — never dead-end a static/vanilla project on "Set it up" —
+   * and tailors the Styles tab's read-only guidance. Null until the probe runs.
+   */
+  canInstrument: boolean | null
   busy: boolean
   /** A setup was applied; the next readiness report verifies stamps actually fired. */
   verifying: boolean
@@ -1313,6 +1340,7 @@ interface SetupState {
   status: string | null
   setNeeded: (needed: boolean) => void
   setDismissed: (dismissed: boolean) => void
+  setCanInstrument: (canInstrument: boolean | null) => void
   setBusy: (busy: boolean) => void
   setVerifying: (verifying: boolean) => void
   setRestartRequested: (restartRequested: boolean) => void
@@ -1323,12 +1351,14 @@ interface SetupState {
 export const useSetup = create<SetupState>((set) => ({
   needed: false,
   dismissed: false,
+  canInstrument: null,
   busy: false,
   verifying: false,
   restartRequested: false,
   status: null,
   setNeeded: (needed) => set({ needed }),
   setDismissed: (dismissed) => set({ dismissed }),
+  setCanInstrument: (canInstrument) => set({ canInstrument }),
   setBusy: (busy) => set({ busy }),
   setVerifying: (verifying) => set({ verifying }),
   setRestartRequested: (restartRequested) => set({ restartRequested }),
@@ -1337,6 +1367,7 @@ export const useSetup = create<SetupState>((set) => ({
     set({
       needed: false,
       dismissed: false,
+      canInstrument: null,
       busy: false,
       verifying: false,
       restartRequested: false,
@@ -1509,6 +1540,7 @@ export const usePreviewLocation = create<PreviewLocationState>((set) => ({
 ;(window as unknown as { __praxisTokens?: typeof useTokens }).__praxisTokens = useTokens
 ;(window as unknown as { __praxisSetup?: typeof useSetup }).__praxisSetup = useSetup
 ;(window as unknown as { __praxisLog?: typeof useLog }).__praxisLog = useLog
+;(window as unknown as { __praxisGithub?: typeof useGithub }).__praxisGithub = useGithub
 ;(window as unknown as { __praxisDiagnosis?: typeof useDiagnosis }).__praxisDiagnosis = useDiagnosis
 ;(window as unknown as { __praxisWorkspace?: typeof useWorkspace }).__praxisWorkspace = useWorkspace
 ;(window as unknown as { __praxisHistory?: typeof useHistory }).__praxisHistory = useHistory

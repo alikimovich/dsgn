@@ -17,6 +17,9 @@ import type {
   FeedbackInput,
   FeedbackResult,
   Framework,
+  GithubStatus,
+  GithubConnectOptions,
+  GithubConnectResult,
   ImageAttachment,
   PermissionMode,
   PreviewComment,
@@ -32,6 +35,7 @@ import type {
   RunningSimulator,
   SelectedElement,
   SessionRecord,
+  SetupProbe,
   SetupResult,
   SourceView,
   SourceWriteResult,
@@ -326,7 +330,13 @@ const api: PraxisApi = {
     ship: (root: string, summary?: string[], mode?: 'merge' | 'pr'): Promise<PublishResult> =>
       ipcRenderer.invoke('publish:ship', root, summary, mode)
   },
+  github: {
+    status: (root: string): Promise<GithubStatus> => ipcRenderer.invoke('github:status', root),
+    connect: (root: string, opts: GithubConnectOptions): Promise<GithubConnectResult> =>
+      ipcRenderer.invoke('github:connect', root, opts)
+  },
   setup: {
+    detect: (root: string): Promise<SetupProbe> => ipcRenderer.invoke('setup:detect', root),
     scaffold: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:scaffold', root),
     uninstall: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:uninstall', root)
   },

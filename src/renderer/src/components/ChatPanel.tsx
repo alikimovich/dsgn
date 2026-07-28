@@ -30,6 +30,7 @@ import type {
   QuestionAnswers,
   SetupResult,
 } from "../../../shared/api";
+import { rankSlashMatches } from "../../../shared/slash-menu";
 import ConflictCard from "./ConflictCard";
 import Inspector from "./Inspector";
 import Markdown from "./Markdown";
@@ -421,6 +422,9 @@ export default function ChatPanel(): React.JSX.Element {
   const [caret, setCaret] = useState(0);
   const [menuActive, setMenuActive] = useState(0);
   const [menuDismissed, setMenuDismissed] = useState(false);
+  // The "/" menu is uncapped and scrolls (see rankSlashMatches); keep the
+  // keyboard-selected row inside the viewport as you arrow past the fold.
+  const activeItemRef = useRef<HTMLButtonElement>(null);
   // Attachments pasted/dropped into the composer. Images ride the turn as base64
   // vision blocks (as before); other files are handed to the agent by path (it
   // reads them with its own tools) and shown as a filename card.
@@ -648,16 +652,10 @@ export default function ChatPanel(): React.JSX.Element {
   const slashQuery = slashToken?.query ?? null;
   const matches = useMemo(() => {
     if (slashQuery === null) return [];
-    const q = slashQuery.toLowerCase();
-    const hits = slashCommands.filter((c) => c.name.toLowerCase().includes(q));
-    // Project skills rank first; a same-named non-project command is shadowed
-    // (main already dedupes — this guards store seeds/other backends too).
-    const project = hits.filter((c) => c.source === "project");
-    const shadowed = new Set(project.map((c) => c.name));
-    const other = hits.filter(
-      (c) => c.source !== "project" && !shadowed.has(c.name),
-    );
-    return [...project, ...other].slice(0, 8);
+    // Project skills rank first, same-named non-project commands are shadowed,
+    // and there's no cap — the .slash scroll container handles overflow so every
+    // match stays reachable. See src/shared/slash-menu.ts.
+    return rankSlashMatches(slashCommands, slashQuery);
   }, [slashQuery, slashCommands]);
   const menuOpen = slashQuery !== null && matches.length > 0 && !menuDismissed;
 
@@ -666,6 +664,11 @@ export default function ChatPanel(): React.JSX.Element {
     setMenuActive(0);
     setMenuDismissed(false);
   }, [slashQuery]);
+
+  useEffect(() => {
+    // Keep the arrow-selected row visible as it moves past the scroll fold.
+    if (menuOpen) activeItemRef.current?.scrollIntoView({ block: "nearest" });
+  }, [menuActive, menuOpen]);
 
   const onInputChange = (value: string, pos: number): void => {
     setInput(value);
@@ -1399,6 +1402,7 @@ export default function ChatPanel(): React.JSX.Element {
               {matches.map((cmd, i) => (
                 <button
                   key={cmd.name}
+                  ref={i === menuActive ? activeItemRef : undefined}
                   className={`slash__item ${i === menuActive ? "is-active" : ""}`}
                   onMouseEnter={() => setMenuActive(i)}
                   onClick={() => pickCommand(cmd.name)}

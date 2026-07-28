@@ -2,6 +2,176 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-27 — Don't offer/greypanel setup a project can't do (user feedback)
+
+Feedback from a vanilla single-HTML project (whole DOM assembled at runtime from
+JS string-templating, so nothing is source-mapped): the "Set this project up for
+visual editing?" card still appeared and dead-ended on *"Couldn't detect a
+supported framework"*, and the Styles tab showed a full set of greyed-out,
+fake-editable controls under a terse "Ask Praxis below." Two real gaps:
+
+1. **The offer was gated only on stamp count** (`stamps === 0`, `App.tsx`),
+   never on whether setup was *possible* — so a static/vanilla/unsupported repo
+   got a live "Set it up" button whose only outcome was the error message.
+2. **The Styles panel's read-only state didn't say what to do** — and looked
+   like a broken editor rather than an intentional read-only view.
+
+Fix — a read-only "can we instrument this?" probe threaded to both surfaces:
+- **`setup.ts` `setup:detect` IPC** — runs the existing deps-based `detect()`
+  WITHOUT writing, returns `{ framework, canInstrument }` (`canInstrument =
+  framework !== 'unknown'`, i.e. react/rn/svelte/solid/vue → true, vanilla →
+  false). New `SetupProbe` type + `PraxisApi.setup.detect` + preload bridge.
+- **The offer now gates on `canInstrument`** (`useSetup.canInstrument`, probed on
+  open next to `tokens.detect`; the readiness handler lazily probes + caches if
+  it fires first). A static/vanilla project never gets the dead-end card. A
+  supported framework is unchanged (React scaffold still offers — that's correct,
+  per the user: "for projects created in praxis it's definitely how it should
+  work").
+- **`StylePanel` read-only state reworked** — when the picked element has no
+  source stamp it no longer renders the greyed control list; it shows *why* it's
+  read-only + *what to do*, tailored by `canInstrument` (threaded through
+  `PanelState`): `false` → "built at runtime, ask Praxis in chat and it'll edit
+  the code"; `true` → "set up visual editing (offer in chat)"; plus an **"Ask
+  Praxis to restyle it"** button that seeds the composer.
+
+Verified: `typecheck` + full unit tier (38/38) + `build`; extended
+`setup-detect.mjs` with the probe (react/rn/svelte/solid/vue → canInstrument
+true, unknown + a real no-package.json vanilla dir → false, writes no `.praxis`);
+`ready-gating` (React offer still shows) + `style-edit` (editable path intact)
+green. The two new UI states are best eyeballed live (the user is running the
+app) — a driven screenshot test for the static path is a good follow-up.
+
+## 2026-07-25 — Fix two stale code-drawer UI tests
+
+`code-peek` and `code-drawer` failed on the electron tier — and, crucially, on
+the pre-work baseline too, so not a regression: the drawer UI evolved but the
+tests didn't follow.
+- `code-peek` waited for `.codedrawer__expand`, an explicit expand toggle that
+  no longer exists (replaced by dragging the drawer's top edge, `__resize`).
+  Now asserts open-in-editor + the drag-resize handle.
+- `code-drawer` clicked `.codedrawer__close` in the popped-out editor *window*,
+  which intentionally has no in-editor close (it uses the native traffic lights,
+  `!isWindow` guard in CodeDrawer.tsx). Now closes via `editorWin.close()`.
+
+Both deterministic green after the fix (2/2 each). The other four electron-tier
+failures that turned up (`rail`, `rail-collapse`, `style-edit`, `custom-controls`)
+are timing flakes — each passes in isolation / on retry — not addressed here.
+
+## 2026-07-24 — Vanilla-JS editing, Tier 2: click-to-code + inline text edit
+
+Tier 2 of the vanilla-JS editing plan (Tier 1 added the header code-editor
+door). The key move: a static site's served bytes ARE the on-disk file, so the
+DOM→source map framework projects manufacture with a build-time plugin is nearly
+free — compute it at serve time.
+
+- **`src/main/html-source.ts`** (new, over parse5 via dynamic import):
+  `stampHtml(html, relpath)` injects `data-praxis-source="relpath:line:col"`
+  into each stampable element's start tag (attribute-only, idempotent, skips
+  head/script/style, degrades to the input on parse failure);
+  `spliceHtmlText(html, line, col, text)` rewrites a stamped text leaf back into
+  the file (null → agent fallback for element/comment children or void tags).
+  Pure, unit-tested (`test/html-source.mjs`).
+- **`static-server.ts`** stamps every served HTML response before the live-reload
+  snippet. So clicking an element in a vanilla preview now yields a `source`,
+  which lights up the existing machinery for free: the element "code" button
+  opens the drawer at the right line, and `isTextEditable` (stamp + text-leaf,
+  already framework-agnostic) enables double-click text editing — no preview
+  changes needed.
+- **`props.ts`** `applyTextEdit` gains an `.html` branch → `spliceHtmlText` →
+  `commitEdit` (undo/redo, conflict detection, live-reload), mirroring the
+  JSX/Svelte paths. JS-generated DOM (no source location) falls back to chat, as
+  decided.
+- Adds parse5. Tests: `html-source` (unit), `html-text-edit` (integration, real
+  `text:apply` IPC), and a stamp assertion in `static-serve`.
+
+Verified: typecheck + unit tier (38/38) + build + `static-serve` and
+`html-text-edit` electron tests (with isolated `PRAXIS_USER_DATA`). Note: run
+electron tests via `node test/run.mjs electron` (or with `PRAXIS_USER_DATA` set)
+— running the files directly reuses real userData and the app auto-restores a
+stale project instead of the empty state.
+
+## 2026-07-24 — Vanilla-JS editing, Tier 1: a door into the code editor
+
+Discovery turned up a sharp gap: a vanilla-JS / static project **can't open the
+code editor at all** from the UI. The drawer is fully capable (edit + save any
+file, conflict detection, undo/redo, live-reload, IDE hand-off) and its file
+tree works for any project — but the only two ways *in* are the element
+toolbar's "code" action (hidden unless the element has a `data-praxis-source`
+stamp) and the file tree (which lives *inside* the drawer). A static project has
+no build step to inject the stamp, so both dead-end.
+
+Tier 1 (of a two-tier plan — decided: Tier 1 now, Tier 2 next):
+- **A stamp-independent door.** New `Code2` icon button in the preview header
+  (`.previewbar__actions`, shown while the preview runs) toggles the code drawer
+  for *any* project. `toggleCodeDrawer` picks a sensible starting file (the HTML
+  entry when there is one, else the first file) via `source.tree`, then the
+  drawer's file tree takes over. `App.tsx`.
+- Universal, not framework-gated — it's additive next to the element→code path.
+
+Tier 2 (follow-up): serve-time `data-praxis-source` stamping in
+`static-server.ts` (the served bytes ARE the on-disk file, so the DOM→source map
+is nearly free) + an HTML text-splice engine, to light up click-element-to-code
+and inline text editing that writes back to the HTML. Decided: JS-generated DOM
+(no source location) falls back to chat, like framework projects do today.
+
+Verified: typecheck (node/web/preview) + build. UI test (Code button opens the
+drawer + tree) is a follow-up.
+
+## 2026-07-24 — "Connect to GitHub": the first-publish bridge
+
+A first-time user scaffolds a project, builds it locally (delightful, zero-
+config), then hits **Publish** — and dead-ends on `No "origin" remote — add
+one, then publish.` (`annotations.ts`). Everything up to that point needs no
+git/GitHub knowledge; Publish suddenly assumes a repo already exists, an
+`origin` is set, and `gh` is installed + authed. The one-click promise broke
+exactly at the moment of pride.
+
+New distinct step (product decisions: **separate** action, **private** default,
+lean on **gh**, **guide** don't automate, repo reflects the built work — Option B):
+
+- **`src/main/github.ts`** — `githubStatus(root)` (link state + gh readiness,
+  prefills the sheet) and `connectToGitHub(root, {name, owner, private})`:
+  preflight gh install+auth → fast-forward the clean base up to the work branch
+  when it's an ancestor (so the repo's default branch shows what the user built,
+  not the bare scaffold) → `gh repo create --private --source . --remote origin`
+  → push default + work branch → set default branch + `origin/HEAD`. Defensive:
+  every failure returns `{ ok, error }`.
+- **`src/shared/github.ts`** — pure, testable helpers: `sanitizeRepoName` and
+  `resolveConnectPlan` (the Option-B branch logic). `test/github-connect.mjs`.
+- **Renderer** — `useGithub` store holds the opened project's status (null for
+  non-repos → header keeps Publish). The header swaps Publish for **"Connect to
+  GitHub"** until an `origin` exists (`App.tsx`); once connected, Publish returns
+  and works unchanged. New `ConnectDialog` (mirrors FeedbackDialog's preview-
+  freeze): name (live-sanitized), owner (login + orgs), Private default; gh
+  missing/unauthed shows the exact step + a Retry that re-probes.
+- Publish (`shipToMain`) is untouched — it just works once a remote is present.
+
+Verified: `bun run typecheck` + full unit tier (37/37, incl. github-connect) +
+`bun run build`. NOT yet driven in the Electron UI (no existing harness for the
+no-remote fresh-project state) — a tier-2 screenshot test is a good follow-up.
+
+## 2026-07-24 — "/" menu shows all skills (drop the 8-item cap)
+
+The composer's slash menu silently truncated at 8 matches
+(`ChatPanel.tsx` did `[...project, ...other].slice(0, 8)`), so anyone with more
+than a handful of project skills + backend commands only ever saw a fraction of
+them — the rest were unreachable unless you typed enough letters to filter down.
+
+- **Extracted the ranking to `src/shared/slash-menu.ts` (`rankSlashMatches`)** —
+  pure (renderer can't import `main/skills.ts`; it pulls in `node:fs`), so it's
+  unit-testable and shared. Same behavior as before *minus the cap*: case-
+  insensitive substring filter, project skills first, same-named non-project
+  command shadowed by its project skill.
+- **No cap.** The `.slash` popup already has `max-height: 240px; overflow-y:
+  auto`, so overflow was always meant to scroll — the slice just hid it. Project
+  skills stay at the front of the list, so they're never the ones scrolled past.
+- **Keyboard nav follows the scroll:** an effect calls
+  `activeItemRef.scrollIntoView({ block: 'nearest' })` on `menuActive` change, so
+  arrowing down past the fold keeps the selected row visible.
+- Tests: extended `test/skills-discovery.mjs` with `rankSlashMatches` cases
+  (empty query returns all, case-insensitive filter, project-first, shadowing,
+  and a >8-match no-truncation regression).
+
 ## 2026-07-23 — Stop the "Object has been destroyed" crash dialog on wake
 
 Closing the window (traffic-light close, NOT quit — the app stays alive to own
