@@ -11,6 +11,14 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       live-reload). Anything un-auto-launchable now errors with "Enter a command
       to launch this project", which the preview error bar already turns into a
       custom-command retry. `test/static-serve.mjs`.
+- [x] **Don't offer/greypanel setup on a project that can't be instrumented.**
+      ✅ 2026-07-27 — `setup:detect` read-only probe (`{ framework, canInstrument }`);
+      the on-open offer gates on `canInstrument` (no dead-end "Set it up" on a
+      static/vanilla repo) and the Styles tab's no-source state shows tailored
+      guidance + an "Ask Praxis to restyle it" seed instead of greyed controls.
+      Extended `test/setup-detect.mjs`. See PROGRESS 2026-07-27.
+- [ ] **Follow-up:** driven screenshot test for the static path — offer absent +
+      StylePanel read-only guidance rendered on a JS-generated (no-source) element.
 
 ## v9 — in-tool code view  ⭐ (2026-07-03, user-requested) — SHIPPED
 

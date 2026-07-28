@@ -2,6 +2,45 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-27 — Don't offer/greypanel setup a project can't do (user feedback)
+
+Feedback from a vanilla single-HTML project (whole DOM assembled at runtime from
+JS string-templating, so nothing is source-mapped): the "Set this project up for
+visual editing?" card still appeared and dead-ended on *"Couldn't detect a
+supported framework"*, and the Styles tab showed a full set of greyed-out,
+fake-editable controls under a terse "Ask Praxis below." Two real gaps:
+
+1. **The offer was gated only on stamp count** (`stamps === 0`, `App.tsx`),
+   never on whether setup was *possible* — so a static/vanilla/unsupported repo
+   got a live "Set it up" button whose only outcome was the error message.
+2. **The Styles panel's read-only state didn't say what to do** — and looked
+   like a broken editor rather than an intentional read-only view.
+
+Fix — a read-only "can we instrument this?" probe threaded to both surfaces:
+- **`setup.ts` `setup:detect` IPC** — runs the existing deps-based `detect()`
+  WITHOUT writing, returns `{ framework, canInstrument }` (`canInstrument =
+  framework !== 'unknown'`, i.e. react/rn/svelte/solid/vue → true, vanilla →
+  false). New `SetupProbe` type + `PraxisApi.setup.detect` + preload bridge.
+- **The offer now gates on `canInstrument`** (`useSetup.canInstrument`, probed on
+  open next to `tokens.detect`; the readiness handler lazily probes + caches if
+  it fires first). A static/vanilla project never gets the dead-end card. A
+  supported framework is unchanged (React scaffold still offers — that's correct,
+  per the user: "for projects created in praxis it's definitely how it should
+  work").
+- **`StylePanel` read-only state reworked** — when the picked element has no
+  source stamp it no longer renders the greyed control list; it shows *why* it's
+  read-only + *what to do*, tailored by `canInstrument` (threaded through
+  `PanelState`): `false` → "built at runtime, ask Praxis in chat and it'll edit
+  the code"; `true` → "set up visual editing (offer in chat)"; plus an **"Ask
+  Praxis to restyle it"** button that seeds the composer.
+
+Verified: `typecheck` + full unit tier (38/38) + `build`; extended
+`setup-detect.mjs` with the probe (react/rn/svelte/solid/vue → canInstrument
+true, unknown + a real no-package.json vanilla dir → false, writes no `.praxis`);
+`ready-gating` (React offer still shows) + `style-edit` (editable path intact)
+green. The two new UI states are best eyeballed live (the user is running the
+app) — a driven screenshot test for the static path is a good follow-up.
+
 ## 2026-07-25 — Fix two stale code-drawer UI tests
 
 `code-peek` and `code-drawer` failed on the electron tier — and, crucially, on

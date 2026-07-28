@@ -22,6 +22,13 @@ import ScrubInput from './styles/ScrubInput'
 interface Props {
   root: string
   element: SelectedElement
+  /**
+   * Can praxis instrument this project for visual editing (supported framework)?
+   * When the picked element has no source stamp the panel is read-only; this
+   * tailors the guidance — point a framework project at setup, tell a
+   * static/runtime-rendered one to ask in chat. Null while unprobed.
+   */
+  canInstrument: boolean | null
   /** Seed a chat prompt for changes the styles engine can't land as a literal. */
   onSeedPrompt: (text: string) => void
 }
@@ -164,7 +171,12 @@ interface RowCtx {
  * stamp — never `componentSource` (a css edit lands on the element, not the
  * component call site).
  */
-export default function StylePanel({ root, element, onSeedPrompt }: Props): React.JSX.Element {
+export default function StylePanel({
+  root,
+  element,
+  canInstrument,
+  onSeedPrompt
+}: Props): React.JSX.Element {
   const [values, setValuesRaw] = useState<Record<string, string>>(() => ({ ...element.styles }))
   const [lost, setLost] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -328,6 +340,46 @@ export default function StylePanel({ root, element, onSeedPrompt }: Props): Reac
       }\`) of the <${element.tag}> element.`
     )
 
+  // No source stamp → style edits can't be written back. Rather than a full set
+  // of dead, greyed-out controls, show WHY it's read-only and WHAT to do about
+  // it — tailored to whether the project could be set up at all.
+  if (disabled) {
+    const ask = (): void =>
+      onSeedPrompt(`Change the styling of the selected <${element.tag}> element (${element.selector}).`)
+    return (
+      <div className="stylepanel__rows flex flex-col gap-3 overflow-y-auto px-3 pb-3 pt-2">
+        <div className="stylepanel__note text-[12px] leading-snug text-muted-foreground">
+          {canInstrument === false ? (
+            <>
+              Styles here are read-only. This element is built at runtime, so Praxis can’t map it
+              back to your source to save changes. Describe the change in chat and Praxis will edit
+              the code directly.
+            </>
+          ) : canInstrument ? (
+            <>
+              Styles here are read-only until this project is set up for visual editing (there’s an
+              offer in the chat) — then Praxis maps elements to your source and you can edit styles
+              directly. Meanwhile, ask Praxis in chat to make the change.
+            </>
+          ) : (
+            <>
+              Styles here are read-only — this element isn’t mapped to your source, so changes can’t
+              be saved. Ask Praxis in chat to make the change and it’ll edit the code.
+            </>
+          )}
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          className="stylepanel__ask h-7 self-start px-2 text-[11.5px]"
+          onClick={ask}
+        >
+          Ask Praxis to restyle it
+        </Button>
+      </div>
+    )
+  }
+
   if (lost) {
     return (
       <div className="stylepanel__rows flex flex-col gap-2 overflow-y-auto px-3 pb-3 pt-1.5">
@@ -345,11 +397,6 @@ export default function StylePanel({ root, element, onSeedPrompt }: Props): Reac
     <>
       {error && (
         <div className="stylepanel__error mx-3 mt-1 text-[11.5px] text-red-700">{error}</div>
-      )}
-      {disabled && (
-        <div className="stylepanel__note mx-3 mt-1 text-[11.5px] text-muted-foreground">
-          Not set up for style editing — changes can't be saved. Ask Praxis below.
-        </div>
       )}
       <div className="stylepanel__rows flex flex-1 flex-col gap-1 overflow-y-auto px-3 pb-3 pt-1.5">
         <StyleGroup title="Layout">

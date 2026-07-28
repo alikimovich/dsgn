@@ -483,6 +483,12 @@ export interface PanelState {
   /** AI-surfaced control panels matching the selection (Custom Controls, v10) —
    *  fetched by the main renderer via `controls:get`; null while unfetched. */
   controls: ResolvedControlPanel[] | null
+  /**
+   * Can praxis instrument this project for visual editing (a supported UI
+   * framework was detected)? Tailors the Styles tab's read-only guidance when
+   * the picked element has no source stamp. Null while unprobed.
+   */
+  canInstrument: boolean | null
 }
 
 /** A user action inside the island, relayed back to the main renderer. */
@@ -720,6 +726,20 @@ export type SetupStrategy =
   | 'svelte-preprocess'
   | 'inspector'
   | 'none'
+
+/**
+ * Read-only setup probe — can praxis instrument this project for visual editing?
+ * Runs the deps-based framework detection WITHOUT writing anything, so the
+ * renderer can decide up front whether to even offer setup (never dead-end a
+ * static/vanilla project on "Set it up") and how to word the Styles tab's
+ * read-only guidance.
+ */
+export interface SetupProbe {
+  /** The detected UI framework (deps-based), or 'unknown' when unrecognized. */
+  framework: Frontend
+  /** True when praxis can add source-mapping for this framework (i.e. framework !== 'unknown'). */
+  canInstrument: boolean
+}
 
 export interface SetupResult {
   ok: boolean
@@ -1059,6 +1079,8 @@ export interface PraxisApi {
     connect: (root: string, opts: GithubConnectOptions) => Promise<GithubConnectResult>
   }
   setup: {
+    /** Read-only: detect the UI framework + whether praxis can instrument it (no writes). */
+    detect: (root: string) => Promise<SetupProbe>
     /** Write the dev-only source-stamping plugin into the repo (deterministic). */
     scaffold: (root: string) => Promise<SetupResult>
     /** Remove praxis's scaffold files from the repo (the .praxis helpers + legacy root plugin). */

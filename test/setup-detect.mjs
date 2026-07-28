@@ -203,6 +203,41 @@ try {
   )
   assert(!existsSync(join(unknownDir, '.praxis')), 'unknown should not create .praxis')
 
+  // setup.detect — the read-only probe that gates the offer (never dead-end a
+  // project on "Set it up") and tailors the Styles tab guidance. canInstrument
+  // is true for every supported framework, false for unknown/vanilla, and it
+  // writes NOTHING (a truly empty dir stays empty).
+  const detect = (dir) => win.evaluate((d) => window.api.setup.detect(d), dir)
+  for (const [dir, framework] of [
+    [reactDir, 'react'],
+    [rnDir, 'react-native'],
+    [svelte5Dir, 'svelte'],
+    [solidDir, 'solid'],
+    [vueDir, 'vue']
+  ]) {
+    const p = await detect(dir)
+    assert(
+      p.framework === framework && p.canInstrument === true,
+      `probe ${framework}: ${JSON.stringify(p)}`
+    )
+  }
+  const probeUnknown = await detect(unknownDir)
+  assert(
+    probeUnknown.framework === 'unknown' && probeUnknown.canInstrument === false,
+    `probe unknown: ${JSON.stringify(probeUnknown)}`
+  )
+  // A vanilla/static project (no package.json) → unknown, not instrumentable,
+  // and the probe must not create a .praxis dir.
+  const vanillaDir = join(work, 'vanilla')
+  mkdirSync(vanillaDir, { recursive: true })
+  writeFileSync(join(vanillaDir, 'index.html'), '<h1>hi</h1>')
+  const probeVanilla = await detect(vanillaDir)
+  assert(
+    probeVanilla.framework === 'unknown' && probeVanilla.canInstrument === false,
+    `probe vanilla: ${JSON.stringify(probeVanilla)}`
+  )
+  assert(!existsSync(join(vanillaDir, '.praxis')), 'probe must not write .praxis')
+
   // Uninstall removes the .praxis helper...
   const rm = await uninstall(reactDir)
   assert(

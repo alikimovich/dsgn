@@ -1322,6 +1322,12 @@ interface SetupState {
   /** The previewed app isn't source-stamped — offer to set it up. */
   needed: boolean
   dismissed: boolean
+  /**
+   * Can praxis instrument this project (a supported UI framework was detected)?
+   * Gates the offer — never dead-end a static/vanilla project on "Set it up" —
+   * and tailors the Styles tab's read-only guidance. Null until the probe runs.
+   */
+  canInstrument: boolean | null
   busy: boolean
   /** A setup was applied; the next readiness report verifies stamps actually fired. */
   verifying: boolean
@@ -1334,6 +1340,7 @@ interface SetupState {
   status: string | null
   setNeeded: (needed: boolean) => void
   setDismissed: (dismissed: boolean) => void
+  setCanInstrument: (canInstrument: boolean | null) => void
   setBusy: (busy: boolean) => void
   setVerifying: (verifying: boolean) => void
   setRestartRequested: (restartRequested: boolean) => void
@@ -1344,12 +1351,14 @@ interface SetupState {
 export const useSetup = create<SetupState>((set) => ({
   needed: false,
   dismissed: false,
+  canInstrument: null,
   busy: false,
   verifying: false,
   restartRequested: false,
   status: null,
   setNeeded: (needed) => set({ needed }),
   setDismissed: (dismissed) => set({ dismissed }),
+  setCanInstrument: (canInstrument) => set({ canInstrument }),
   setBusy: (busy) => set({ busy }),
   setVerifying: (verifying) => set({ verifying }),
   setRestartRequested: (restartRequested) => set({ restartRequested }),
@@ -1358,6 +1367,7 @@ export const useSetup = create<SetupState>((set) => ({
     set({
       needed: false,
       dismissed: false,
+      canInstrument: null,
       busy: false,
       verifying: false,
       restartRequested: false,

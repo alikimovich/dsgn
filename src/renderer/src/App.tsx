@@ -597,14 +597,40 @@ export default function App(): React.JSX.Element {
           s.setVerifying(false)
           return
         }
-        if (stamps === 0 && !s.dismissed && !s.busy) s.setNeeded(true)
-        else if (stamps > 0) s.setNeeded(false)
+        if (stamps > 0) {
+          s.setNeeded(false)
+          return
+        }
+        // stamps === 0: only offer setup when instrumentation is actually
+        // possible — a static/vanilla project has no supported framework, so
+        // "Set it up" would dead-end. Gate on `canInstrument`; if the probe
+        // hasn't resolved yet (readiness beat it), run it now and re-decide.
+        if (s.dismissed || s.busy) return
+        const offerIf = (can: boolean | null): void => {
+          const cur = useSetup.getState()
+          if (can && !cur.dismissed && !cur.busy) cur.setNeeded(true)
+        }
+        if (s.canInstrument !== null) {
+          offerIf(s.canInstrument)
+          return
+        }
+        const root = useSession.getState().projectRoot
+        if (!root) return
+        void window.api.setup
+          .detect(root)
+          .then((probe) => {
+            if (useSession.getState().projectRoot !== root) return
+            useSetup.getState().setCanInstrument(probe.canInstrument)
+            offerIf(probe.canInstrument)
+          })
+          .catch(() => {})
       }),
     []
   )
 
   // The setup turn finished → restart the dev server + reload the preview so the
   // freshly-wired config applies (one-shot: consume the signal, then restart).
+  const canInstrument = useSetup((s) => s.canInstrument)
   const restartRequested = useSetup((s) => s.restartRequested)
   useEffect(() => {
     if (!restartRequested) return
@@ -917,6 +943,12 @@ export default function App(): React.JSX.Element {
         const tk = useTokens.getState()
         tk.setSet(t)
         if (t.source === 'none' && !tk.offerDismissed) tk.setOfferNeeded(true)
+      })
+      // Can this project be instrumented for visual editing? Populates the setup
+      // gate + the Styles tab's read-only guidance up front (same switch guard).
+      void window.api.setup.detect(root).then((probe) => {
+        if (useSession.getState().projectRoot !== root) return
+        useSetup.getState().setCanInstrument(probe.canInstrument)
       })
       // Load this repo's existing handoff notes (renders pins via the effect above).
       useAnnotations.getState().setList(await window.api.annotations.list(root))
@@ -1987,6 +2019,7 @@ export default function App(): React.JSX.Element {
           inspection={inspection}
           inspecting={inspecting}
           controls={islandControls}
+          canInstrument={canInstrument}
         />
       )}
 

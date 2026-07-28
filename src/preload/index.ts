@@ -35,6 +35,7 @@ import type {
   RunningSimulator,
   SelectedElement,
   SessionRecord,
+  SetupProbe,
   SetupResult,
   SourceView,
   SourceWriteResult,
@@ -335,6 +336,7 @@ const api: PraxisApi = {
       ipcRenderer.invoke('github:connect', root, opts)
   },
   setup: {
+    detect: (root: string): Promise<SetupProbe> => ipcRenderer.invoke('setup:detect', root),
     scaffold: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:scaffold', root),
     uninstall: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:uninstall', root)
   },
