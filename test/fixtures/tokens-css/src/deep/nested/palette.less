@@ -1,0 +1,17 @@
+// A LESS file five directories below the project root. Both facts matter:
+// custom properties pass through preprocessors untouched (so the same scanner
+// finds them), and the walk has to reach this depth.
+@brand: #2563eb; // a LESS variable — deliberately NOT a token (no runtime form)
+
+:root {
+  --color-brand: @brand;
+  --color-accent: #f59e0b;
+}
+
+@media (prefers-color-scheme: dark) {
+  /* A redefinition: first-definition-wins, so this must NOT replace the light
+     value above. The live value is read off the element instead. */
+  :root {
+    --color-accent: #fbbf24;
+  }
+}

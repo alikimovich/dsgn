@@ -10,7 +10,10 @@ import type { Token, TokenGroup, TokenScaffoldResult, TokenSet } from '../shared
  *
  *   1. `.praxis/tokens.json`  — an explicit, curated manifest (highest priority)
  *   2. `tailwind.config.*`  — the theme scale (static parse, no code execution)
- *   3. CSS custom properties — `--name: value` scanned from the repo's CSS
+ *   3. CSS custom properties — `--name: value` scanned from the repo's
+ *      stylesheets (css/scss/sass/less/styl/pcss — the syntax is identical
+ *      across them). This also covers Tailwind v4, whose `@theme { --color-…: }`
+ *      block IS a custom-property declaration.
  *
  * The Tailwind config is parsed *statically* (babel, literal values only) — we
  * never execute the repo's config. @babel/parser is ESM-only → dynamic import().
@@ -182,9 +185,20 @@ async function fromTailwind(root: string): Promise<TokenSet | null> {
 // ---------------------------------------------------------------------------
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', 'out', '.next', 'coverage'])
 const CSS_VAR_RE = /(--[A-Za-z0-9-]+)\s*:\s*([^;}{]+)[;}]/g
+/** Stylesheet extensions worth scanning. The preprocessor dialects are here
+ * because `--name: value` is *CSS* custom-property syntax that passes through
+ * less/sass/stylus untouched — we deliberately do NOT read their own variable
+ * forms (`@name:` / `$name:`), which don't exist at runtime and so can't be
+ * committed back as a `var()` reference. */
+const STYLESHEET_RE = /\.(css|scss|sass|less|styl|pcss)$/
+/** Walk bounds — a monorepo's `packages/ui/src/styles/tokens.css` is depth 5. */
+const MAX_DEPTH = 6
+const MAX_FILES = 120
+/** Bound the emitted set: a TokenSet rides in every PanelState push. */
+const MAX_TOKENS = 400
 
 async function findCssFiles(root: string, depth: number, acc: string[]): Promise<void> {
-  if (depth > 4 || acc.length >= 40) return
+  if (depth > MAX_DEPTH || acc.length >= MAX_FILES) return
   let entries
   try {
     entries = await readdir(root, { withFileTypes: true })
@@ -192,11 +206,11 @@ async function findCssFiles(root: string, depth: number, acc: string[]): Promise
     return
   }
   for (const e of entries) {
-    if (acc.length >= 40) return
+    if (acc.length >= MAX_FILES) return
     if (e.isDirectory()) {
       if (SKIP_DIRS.has(e.name) || e.name.startsWith('.')) continue
       await findCssFiles(join(root, e.name), depth + 1, acc)
-    } else if (/\.(css|scss)$/.test(e.name)) {
+    } else if (STYLESHEET_RE.test(e.name)) {
       acc.push(join(root, e.name))
     }
   }
@@ -208,12 +222,23 @@ function cssGroupOf(name: string): string {
   return seg || 'tokens'
 }
 
+/**
+ * First definition of a custom property wins. That's deliberate, not a
+ * limitation we mean to fix here: a theme file typically declares `--color-text`
+ * once at `:root` and again under `@media (prefers-color-scheme: dark)` / a
+ * `.dark` class, and picking a winner statically would mean modelling the
+ * cascade. The token's *identity* (name + group) is what the UI needs; its live
+ * value is read off the selected element with
+ * `getComputedStyle(el).getPropertyValue('--color-text')` — see the Styles
+ * panel's token resolution — which is theme-correct by construction.
+ */
 async function fromCss(root: string): Promise<TokenSet | null> {
   const files: string[] = []
   await findCssFiles(root, 0, files)
   const byGroup = new Map<string, Token[]>()
   const seen = new Set<string>()
   for (const f of files) {
+    if (seen.size >= MAX_TOKENS) break
     let css: string
     try {
       css = await readFile(f, 'utf8')
@@ -222,6 +247,7 @@ async function fromCss(root: string): Promise<TokenSet | null> {
     }
     if (css.length > 500_000) continue
     for (const m of css.matchAll(CSS_VAR_RE)) {
+      if (seen.size >= MAX_TOKENS) break
       const name = m[1]
       const value = m[2].trim()
       if (!value || value.startsWith('var(') || seen.has(name)) continue
@@ -240,7 +266,7 @@ function dedupe(tokens: Token[]): Token[] {
   return tokens.filter((t) => (seen.has(t.name) ? false : (seen.add(t.name), true)))
 }
 
-async function detectTokens(root: string): Promise<TokenSet> {
+export async function detectTokens(root: string): Promise<TokenSet> {
   return (
     (await fromManifest(root)) ??
     (await fromTailwind(root)) ??
