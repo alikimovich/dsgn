@@ -738,7 +738,15 @@ function clearStylePreview(prop?: string): void {
   else for (const p of Array.from(styleOriginals.keys())) restoreOriginal(p)
 }
 
-/** Fresh computed values for the panel (pick-time snapshots go stale). */
+/**
+ * Fresh computed values for the panel (pick-time snapshots go stale).
+ *
+ * `props` may include CUSTOM properties (`--color-text`): the Styles panel asks
+ * for the project's design tokens by name so it can resolve each one AGAINST
+ * THIS ELEMENT. That's what makes token naming correct under a
+ * `@media (prefers-color-scheme: dark)` override or a `var()` alias chain,
+ * where the value recorded in the token file is not.
+ */
 function readStyles(id: unknown, props: string[]): void {
   const el = resolveStyleTarget()
   if (!el) {
@@ -748,8 +756,9 @@ function readStyles(id: unknown, props: string[]): void {
   const cs = getComputedStyle(el)
   const values: Record<string, string> = {}
   // Same cap discipline as describe(): the page is only semi-trusted, so bound
-  // every string that crosses the IPC boundary.
-  for (const prop of props.slice(0, 64)) {
+  // every string that crosses the IPC boundary. Generous enough for the ~20
+  // editable longhands plus a real project's token set.
+  for (const prop of props.slice(0, 240)) {
     if (typeof prop !== 'string') continue
     const p = prop.slice(0, 64)
     values[p] = cs.getPropertyValue(p).trim().slice(0, 256)

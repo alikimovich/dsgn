@@ -5,7 +5,13 @@
  * variant-prefix immunity, font-family non-interference, and the
  * looksTailwind heuristic. Run with: bun run test:tw-styles
  */
-import { tailwindClassFor, rewriteClassList, looksTailwind } from '../src/main/tw-styles.ts'
+import {
+  tailwindClassFor,
+  tailwindTokenClassFor,
+  rewriteClassList,
+  rewriteClassListToken,
+  looksTailwind
+} from '../src/main/tw-styles.ts'
 
 let failed = 0
 const ok = (cond, msg) => {
@@ -252,6 +258,47 @@ eq(
   'font-mono alone → append, never replaced'
 )
 
+// --- design tokens: name-as-scale-key classes (no value math) ---
+
+eq(tailwindTokenClassFor('color', 'brand-500'), 'text-brand-500', 'color token class')
+eq(tailwindTokenClassFor('background-color', 'surface'), 'bg-surface', 'bg token class')
+eq(tailwindTokenClassFor('padding-top', 'gutter'), 'pt-gutter', 'spacing token uses the side prefix')
+eq(tailwindTokenClassFor('border-radius', 'card'), 'rounded-card', 'radius token class')
+eq(tailwindTokenClassFor('font-size', 'hero'), 'text-hero', 'font-size token class')
+eq(tailwindTokenClassFor('letter-spacing', 'tight'), 'tracking-tight', 'tracking token class')
+eq(tailwindTokenClassFor('transition-duration', 'slow'), null, 'no token family for durations')
+// The name is spliced as a class SUFFIX, so it must be suffix-safe — a name
+// with a space would silently inject a second class.
+eq(tailwindTokenClassFor('color', 'my token'), null, 'unsafe token name rejected')
+eq(tailwindTokenClassFor('color', 'a"b'), null, 'quote in token name rejected')
+
+// rewriteClassListToken shares rewriteClassList's replace/append/ambiguity rules
+eq(
+  rewriteClassListToken('text-gray-500 p-4', 'color', 'brand-500'),
+  'text-brand-500 p-4',
+  'token swap replaces the single color class in place'
+)
+eq(
+  rewriteClassListToken('flex p-4', 'color', 'brand-500'),
+  'flex p-4 text-brand-500',
+  'no family match → append'
+)
+eq(
+  rewriteClassListToken('text-gray-500 text-red-500', 'color', 'brand-500'),
+  null,
+  'two color classes are ambiguous → null'
+)
+eq(
+  rewriteClassListToken('p-4 hover:text-red-500', 'color', 'brand-500'),
+  'p-4 hover:text-red-500 text-brand-500',
+  'variant classes are neither candidates nor blockers'
+)
+eq(
+  rewriteClassListToken('p-4 pt-2', 'padding-top', 'gutter'),
+  'p-4 pt-gutter',
+  'padding-top replaces pt-2 and leaves p-4 alone'
+)
+
 // --- looksTailwind heuristic ---
 
 ok(looksTailwind(['flex', 'items-center', 'p-4']), 'utility classes → true')
@@ -263,6 +310,6 @@ ok(!looksTailwind(['card', 'header__nav', 'MuiButton-root']), 'BEM/MUI names →
 ok(!looksTailwind(['my-custom-class']), 'my- prefix with wordy suffix is not spacing')
 ok(!looksTailwind([]), 'empty list → false')
 
-if (failed === 0) console.log('TW-STYLES OK — mapping/snap/rewrite/variants/heuristic')
+if (failed === 0) console.log('TW-STYLES OK — mapping/snap/rewrite/tokens/variants/heuristic')
 else console.error(`TW-STYLES: ${failed} assertion(s) failed`)
 process.exitCode = failed === 0 ? 0 : 1

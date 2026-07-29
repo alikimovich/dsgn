@@ -103,6 +103,7 @@ export default function PanelApp(): React.JSX.Element | null {
                 root={state.root}
                 element={state.element}
                 canInstrument={state.canInstrument}
+                tokens={state.tokens}
                 onSeedPrompt={(text) => window.api.panel.action({ kind: 'seed', text })}
               />
             }

@@ -21,6 +21,7 @@ import {
   inspectSvelteProps,
   removeSvelteProp
 } from './props-svelte'
+import { tokenReference } from '../shared/token-match'
 import { swapTailwindClass } from './tw-classes'
 import { spliceHtmlText } from './html-source'
 import {
@@ -908,12 +909,7 @@ export function classNameStringNode(v: BabelNode | null | undefined): BabelNode 
 /** How to write a token reference into source: css vars stay var(--name); other
  * sources splice the resolved value (a manifest hex, a Tailwind scale value, …). */
 function tokenRef(edit: TokenEdit): string {
-  if (edit.tokenSource === 'css') {
-    if (/^var\(/.test(edit.token.value)) return edit.token.value
-    const n = edit.token.name
-    return `var(${n.startsWith('--') ? n : `--${n}`})`
-  }
-  return edit.token.value
+  return tokenReference(edit.tokenSource, edit.token)
 }
 
 function tokenAgentPrompt(edit: TokenEdit): string {

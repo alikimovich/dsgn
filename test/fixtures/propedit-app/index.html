@@ -20,6 +20,17 @@
     max-width: 240px;
     background: #eef2ff;
   }
+  /* Mirrors src/theme.css — the file tokens.detect reads off disk. Declared
+     here too so the panel's LIVE custom-property read
+     (getPropertyValue('--color-text') on the selected element) resolves; that
+     read is what names a token correctly even under a media-query override. */
+  :root {
+    --color-text: #6c6c6c;
+    --color-title: #212121;
+    --color-link: #212121;
+    --space-md: 24px;
+    --z-modal: 100;
+  }
 </style>
 <body>
   <main data-praxis-source="src/Badge.tsx:17">
@@ -31,6 +42,10 @@
     <!-- … and an inline-styled element (S2 style-object merge). -->
     <div id="inline-box" style="padding: 8px" data-praxis-source="src/Styled.tsx:9">
       Inline padded
+    </div>
+    <!-- … and one whose color happens to BE a design token's value. -->
+    <div id="token-box" style="color: #6c6c6c" data-praxis-source="src/Styled.tsx:17">
+      Token colored
     </div>
   </main>
 </body>

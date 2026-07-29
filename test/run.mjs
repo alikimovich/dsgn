@@ -51,6 +51,7 @@ const UNIT = [
   'rules',
   'tw-classes',
   'tw-styles',
+  'token-match',
   'inline-style',
   'css-values',
   'control-panels',

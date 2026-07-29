@@ -10,7 +10,8 @@
  * candidates and never blockers.
  */
 
-import { colorClassFamily } from './tw-classes'
+import { CSS_NAMED_COLORS } from '../shared/token-match'
+import { colorClassFamily, SAFE_CLASS_SUFFIX } from './tw-classes'
 
 // --- value parsing -----------------------------------------------------------
 
@@ -169,26 +170,7 @@ const COLOR_VALUE_RE = /^(#|rgba?\(|hsla?\(|oklch\(|oklab\(|lab\(|lch\(|color\(|
 // CSS named colors (+ transparent/currentcolor): Tailwind accepts them as bare
 // arbitrary values (`text-[red]`) and infers the color type, so they must be
 // color-family — NOT font-size — or a font-size scrub deletes the color class.
-const NAMED_COLORS = new Set(
-  ('aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue ' +
-    'blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk ' +
-    'crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki ' +
-    'darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen ' +
-    'darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue ' +
-    'dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite ' +
-    'gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki ' +
-    'lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan ' +
-    'lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen ' +
-    'lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen ' +
-    'magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen ' +
-    'mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream ' +
-    'mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid ' +
-    'palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum ' +
-    'powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown ' +
-    'seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen ' +
-    'steelblue tan teal thistle tomato turquoise violet wheat white whitesmoke yellow ' +
-    'yellowgreen transparent currentcolor').split(' ')
-)
+const NAMED_COLORS = CSS_NAMED_COLORS
 
 /** Is the inner text of an arbitrary-value class a color? Covers value grammars
  * (#hex, rgb()…, var(--…)), Tailwind's `color:` data-type hint
@@ -260,18 +242,66 @@ function isFamilyMatch(prop: string, cls: string): boolean {
 }
 
 /**
+ * Put `next` into `classList` as the prop's family class: replace the single
+ * un-variant-prefixed class of that family; append when none exists; null when
+ * ambiguous (>1 family match — we can't know which one wins at runtime).
+ */
+function spliceClass(classList: string, prop: string, next: string): string | null {
+  const classes = classList.split(/\s+/).filter(Boolean)
+  const matches = classes.filter((c) => !isVariant(c) && isFamilyMatch(prop, c))
+  if (matches.length > 1) return null
+  if (matches.length === 0) return [...classes, next].join(' ')
+  return classes.map((c) => (c === matches[0] ? next : c)).join(' ')
+}
+
+/**
  * Rewrite `classList` so `prop` renders as `value`: replace the single
  * un-variant-prefixed class of the prop's family; append when none exists;
  * null when ambiguous (>1 family match) or the prop/value can't map.
  */
 export function rewriteClassList(classList: string, prop: string, value: string): string | null {
   const next = tailwindClassFor(prop, value)
-  if (!next) return null
-  const classes = classList.split(/\s+/).filter(Boolean)
-  const matches = classes.filter((c) => !isVariant(c) && isFamilyMatch(prop, c))
-  if (matches.length > 1) return null
-  if (matches.length === 0) return [...classes, next].join(' ')
-  return classes.map((c) => (c === matches[0] ? next : c)).join(' ')
+  return next ? spliceClass(classList, prop, next) : null
+}
+
+// --- design tokens ---------------------------------------------------------
+
+/** Utility prefix per property for a NAMED token suffix (no value math). The
+ * spacing families come from SPACING_PREFIX; these are the rest. */
+const TOKEN_CLASS_PREFIX: Record<string, string> = {
+  'border-radius': 'rounded',
+  color: 'text',
+  'background-color': 'bg',
+  'font-size': 'text',
+  'font-weight': 'font',
+  'line-height': 'leading',
+  'letter-spacing': 'tracking',
+  opacity: 'opacity'
+}
+
+/**
+ * The Tailwind class that applies the design token `tokenName` to `prop` —
+ * `('color', 'brand-500')` → `text-brand-500`. Unlike `tailwindClassFor` there
+ * is no value math: the token name IS the scale key, which is only true when
+ * the tokens were read from the project's own `tailwind.config.*` (callers gate
+ * on `TokenSet.source === 'tailwind'`). Null for props with no token family or
+ * a name that isn't a safe class suffix.
+ */
+export function tailwindTokenClassFor(prop: string, tokenName: string): string | null {
+  if (!SAFE_CLASS_SUFFIX.test(tokenName)) return null
+  const prefix = SPACING_PREFIX[prop] ?? TOKEN_CLASS_PREFIX[prop]
+  return prefix ? `${prefix}-${tokenName}` : null
+}
+
+/** `rewriteClassList`'s token twin: splice in the token's class instead of a
+ *  value-derived one. Same replace/append/ambiguity contract. */
+export function rewriteClassListToken(
+  classList: string,
+  prop: string,
+  tokenName: string
+): string | null {
+  const next = tailwindTokenClassFor(prop, tokenName)
+  return next ? spliceClass(classList, prop, next) : null
 }
 
 // --- heuristic -----------------------------------------------------------------

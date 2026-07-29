@@ -229,6 +229,49 @@ export function snapBezierPreset(b: Bezier): string | null {
   return best
 }
 
+/**
+ * Tailwind's ease-* classes carry slightly DIFFERENT curves than the CSS
+ * keywords S1 maps them from (the `ease-out` class is cubic-bezier(0,0,0.2,1);
+ * CSS `ease-out` is (0,0,0.58,1)). Mirrors the EASE_KEYWORDS table in
+ * main/tw-styles.ts (`linear`/`ease` need no entry — they land as the keyword
+ * itself). Consumed two ways: `sameCssValue`'s reconcile comparison treats a
+ * committed keyword and its Tailwind curve as the same value, and
+ * `displayBezierPreset` names the Tailwind curve for readout/chip display —
+ * without it, a keyword commit on a Tailwind element would visually "drift" to
+ * raw coords when reconcile merges the computed Tailwind curve back in.
+ */
+export const TW_EASE_EQUIV: Record<string, Bezier> = {
+  'ease-in': { x1: 0.4, y1: 0, x2: 1, y2: 1 },
+  'ease-out': { x1: 0, y1: 0, x2: 0.2, y2: 1 },
+  'ease-in-out': { x1: 0.4, y1: 0, x2: 0.2, y2: 1 }
+}
+
+/**
+ * DISPLAY-ONLY preset name: the CSS keyword snap first, else a Tailwind
+ * ease-* curve read back from a committed keyword. Commits must keep using
+ * snapBezierPreset — writing a keyword for the Tailwind coords would be
+ * wrong everywhere but Tailwind.
+ */
+export function displayBezierPreset(b: Bezier): string | null {
+  const snap = snapBezierPreset(b)
+  if (snap) return snap
+  for (const [name, p] of Object.entries(TW_EASE_EQUIV)) {
+    const ds = [b.x1 - p.x1, b.y1 - p.y1, b.x2 - p.x2, b.y2 - p.y2].map(Math.abs)
+    if (ds.every((d) => d <= BEZIER_SNAP_TOLERANCE)) return name
+  }
+  return null
+}
+
+/** Coord-wise bezier equality with room for computed-style float noise. */
+export function sameBezier(a: Bezier, b: Bezier): boolean {
+  return (
+    Math.abs(a.x1 - b.x1) < 0.005 &&
+    Math.abs(a.y1 - b.y1) < 0.005 &&
+    Math.abs(a.x2 - b.x2) < 0.005 &&
+    Math.abs(a.y2 - b.y2) < 0.005
+  )
+}
+
 export function clamp(n: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, n))
 }
@@ -251,4 +294,100 @@ export function clampBezier(b: Bezier): Bezier {
     x2: clampBezierX(b.x2),
     y2: clampBezierY(b.y2)
   }
+}
+
+// ---------------------------------------------------------------------------
+// panel row helpers — computed css text ⇄ what a control shows/commits
+// ---------------------------------------------------------------------------
+
+/**
+ * The row's numeric value in its canonical unit, from the computed css text.
+ * `normal` gets a scrubbable interpretation where one exists (letter-spacing/
+ * gap → 0, line-height → font-size × 1.2); anything else non-numeric → null
+ * (the row renders as a readout instead of a scrubber).
+ */
+export function numericValue(prop: string, values: Record<string, string>): number | null {
+  const raw = values[prop]
+  if (raw === undefined) return null
+  const meta = STYLE_PROP_META[prop]
+  if (meta?.unit === 'ms') return normalizeMs(raw)
+  const p = parseCssNumber(raw)
+  if (p) return p.n
+  if (raw === 'normal') {
+    if (prop === 'letter-spacing' || prop === 'gap') return 0
+    if (prop === 'line-height') {
+      const fs = parseCssNumber(values['font-size'] ?? '')
+      return fs ? Math.round(fs.n * 1.2) : null
+    }
+  }
+  return null
+}
+
+/** Scrub value → the css text we preview/commit ('13px', '300ms', '0.5'). */
+export function toCssText(prop: string, n: number): string {
+  const meta = STYLE_PROP_META[prop]
+  if (meta?.unit === 'ms') return formatMs(n)
+  return formatCssNumber({ n, unit: meta?.unit ?? '' })
+}
+
+/** '#rrggbb[aa]' / rgb()/rgba() / transparent → channels; anything else null. */
+export function parseColorLike(text: string): { r: number; g: number; b: number; a: number } | null {
+  const t = text.trim().toLowerCase()
+  if (t === 'transparent') return { r: 0, g: 0, b: 0, a: 0 }
+  if (/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(t)) {
+    let hex = t.slice(1)
+    if (hex.length <= 4) hex = [...hex].map((c) => c + c).join('')
+    const int = (at: number): number => parseInt(hex.slice(at, at + 2), 16)
+    return { r: int(0), g: int(2), b: int(4), a: hex.length === 8 ? int(6) / 255 : 1 }
+  }
+  const m = /^rgba?\(([^)]+)\)$/.exec(t)
+  if (!m) return null
+  const parts = m[1]
+    .replace('/', ' ')
+    .trim()
+    .split(/[\s,]+/)
+  if (parts.length !== 3 && parts.length !== 4) return null
+  const nums = parts.map(Number)
+  if (!nums.every(Number.isFinite)) return null
+  return { r: nums[0], g: nums[1], b: nums[2], a: parts.length === 4 ? nums[3] : 1 }
+}
+
+/**
+ * Does a fresh computed value (`a`) equal what we committed (`b`)? Textual
+ * equality is not enough: we commit '#ff0000' and read back 'rgb(255, 0, 0)',
+ * commit '300ms' and read back '0.3s', commit 'ease-out' and read back its
+ * (Tailwind) curve. Normalize per control kind before comparing.
+ *
+ * Used by StylePanel's post-commit reconcile, by CustomPanel's style-strategy
+ * params, and as the comparator injected into the token matcher
+ * (`shared/token-match.ts` → `resolveTokenForValue`), which is why a token
+ * whose file value is '#6c6c6c' still matches a computed 'rgb(108, 108, 108)'.
+ */
+export function sameCssValue(prop: string, a: string, b: string): boolean {
+  if (a === b) return true
+  const meta = STYLE_PROP_META[prop]
+  if (meta?.control === 'color') {
+    const ca = parseColorLike(a)
+    const cb = parseColorLike(b)
+    if (!ca || !cb) return false
+    return ca.r === cb.r && ca.g === cb.g && ca.b === cb.b && Math.abs(ca.a - cb.a) < 0.02
+  }
+  if (meta?.control === 'bezier') {
+    const ba = parseBezier(a)
+    if (ba) {
+      const bb = parseBezier(b)
+      if (bb && sameBezier(ba, bb)) return true
+      const tw = TW_EASE_EQUIV[b.trim().toLowerCase()]
+      if (tw && sameBezier(ba, tw)) return true
+    }
+    return a.trim().toLowerCase() === b.trim().toLowerCase()
+  }
+  if (meta?.unit === 'ms') {
+    const ma = normalizeMs(a)
+    return ma !== null && ma === normalizeMs(b)
+  }
+  const na = parseCssNumber(a)
+  const nb = parseCssNumber(b)
+  if (na && nb) return na.n === nb.n && na.unit === nb.unit
+  return a.trim().toLowerCase() === b.trim().toLowerCase()
 }

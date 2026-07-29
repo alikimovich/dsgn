@@ -101,6 +101,7 @@
     "test:rules": "bun test/rules.mjs",
     "test:tw-classes": "bun test/tw-classes.mjs",
     "test:tw-styles": "bun test/tw-styles.mjs",
+    "test:token-match": "bun test/token-match.mjs",
     "test:inline-style": "bun test/inline-style.mjs",
     "test:css-values": "bun test/css-values.mjs",
     "test:control-panels": "bun test/control-panels.mjs",

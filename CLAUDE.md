@@ -85,6 +85,9 @@ src/
                     edit → Tailwind class rewrite, else inline-style splice,
                     else hand to the agent; tw-styles.ts + inline-style.ts are
                     the pure mapping/splicing halves
+    style-tokens.ts re-resolves a design-token pick from the island (name+group
+                    only) against the project's own tokens and decides what to
+                    write — a `var(--name)` reference or a Tailwind token class
     control-manifest.ts / control-panels.ts   AI-surfaced control panels:
                     validate + anchor-lex + render literals (pure) and the
                     main-owned .dsgn/control-panels.json store + controls:* IPC
@@ -114,8 +117,13 @@ src/
                     WebContentsView: element select/hover, comments, annotations.
                     Own tsconfig (tsconfig.preview.json)
   shared/api.ts     the IPC contract — single source of truth for cross-process types
+  shared/token-match.ts  which design tokens may be offered for a css property
+                    and which one a computed value IS. Pure + used by BOTH main
+                    (re-validating a pick) and the island (chips + picker)
   renderer/src/     React 18 UI: App.tsx, components/ (ChatPanel, PreviewPane,
                     PropPanel, CodeDrawer, Rail, …), zustand store.ts, shadcn ui/
+                    components/styles/  the Styles tab's rows + controls
+                    (ScrubInput, ColorControl, BezierEditor, TokenPicker)
   ../bin/praxis.mjs the `praxis` CLI (launch + `--update`); owns the update
                     sequence (git pull + bun install + build). ../install.sh boots it.
 test/             hand-rolled .mjs tests + fixtures/ + artifacts/ (PNGs, gitignored)

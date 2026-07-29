@@ -489,6 +489,12 @@ export interface PanelState {
    * the picked element has no source stamp. Null while unprobed.
    */
   canInstrument: boolean | null
+  /**
+   * The project's detected design tokens, so the Styles tab can name the
+   * current value ("--color-text", not "#6c6c6c") and offer a picker. Null
+   * while undetected / between projects.
+   */
+  tokens: TokenSet | null
 }
 
 /** A user action inside the island, relayed back to the main renderer. */
@@ -542,6 +548,20 @@ export interface StyleEdit {
    * edit-history's group batching is the only thing that can join them.
    */
   group?: string
+  /**
+   * Set when the user picked a DESIGN TOKEN rather than a raw value: write a
+   * reference (`var(--color-text)`, or a Tailwind token class) instead of
+   * `value`. `value` still carries the token's resolved css text, so the live
+   * preview, the post-commit reconcile and Replay all keep working against
+   * something concrete — only the text written into source differs.
+   *
+   * Only the name + group cross the boundary: main re-detects the project's
+   * tokens and re-validates the pick (name exists, value shape fits the
+   * property), so the island's claim is never trusted. An unresolvable token is
+   * dropped silently and the edit lands as a plain value edit — the value is
+   * still right, only the reference is unavailable.
+   */
+  token?: { name: string; group: string }
 }
 
 /** Result of applying a StyleEdit (mirrors PropEditResult's shape). */
@@ -549,6 +569,8 @@ export interface StyleEditResult {
   applied: boolean
   /** How the edit landed: a Tailwind class rewrite or an inline-style splice. */
   strategy?: 'tailwind' | 'inline'
+  /** True when a token REFERENCE was written (rather than the resolved value). */
+  wroteToken?: boolean
   /** When not applied directly: the change needs the agent (dynamic class / expression style). */
   needsAgent?: boolean
   /** A ready-to-send prompt describing the change, when `needsAgent`. */

@@ -2,6 +2,111 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-28 — Design tokens in the Styles panel (user-requested)
+
+The Styles tab was token-blind: it read computed CSS and showed the raw value —
+`color: #6c6c6c` — for a project that calls that `--color-text`. Tokens were
+already detected (`tokens.ts`) and parked in `useTokens`, but the only consumers
+were the chat's scaffold offer and a `props:applyToken` IPC **no renderer code
+calls** (dead since `TokenPalette.tsx` was removed). Now the panel names the
+token, offers a picker on every token-able row, and commits a *reference*.
+
+**Matching lives in `src/shared/token-match.ts`** (new, pure) because both sides
+need it — the island to render, main to re-validate. Its load-bearing rule: a
+token's **value shape gates** what it may be offered for; its **group name only
+ranks**. Group names are unconstrained (a manifest may name a group `brand`, a
+CSS-var scan derives them from the first name segment, Tailwind uses
+`colors`/`spacing`/…), so ranking on them is fine and excluding on them is not.
+That's what keeps `--z-modal: 100` out of the padding picker while still
+surfacing a spacing scale someone filed under `brand`.
+
+**Resolution is based on the LIVE custom property, not the token file.** The
+motivating repo (lkmv.ch) redefines every color under
+`@media (prefers-color-scheme: dark)`, and `fromCss` keeps the first occurrence
+— so a static value comparison silently fails in dark mode. Instead the panel
+asks `styles.read` for the token names themselves: `readStyles` already forwards
+whatever strings it gets to `getPropertyValue`, so custom properties worked
+**with no new IPC** (only the 64-prop cap needed raising). The recorded value is
+the fallback when a name doesn't resolve. Ties are real — a theme with
+`--color-title` and `--color-link` both `#212121` — so one winner is always
+chosen deterministically (class-list corroboration → group affinity → the
+sticky previous pick → detection order) rather than showing "2 tokens".
+
+**Commits write a reference.** `StyleEdit.token` carries only a name + group;
+`main/style-tokens.ts` re-detects the project's tokens, re-runs the same
+value-shape gate, and produces the text to splice — so nothing the island claims
+is written verbatim. A Tailwind-sourced token becomes a class
+(`rewriteClassListToken` → `text-brand-500`); a CSS-var token deliberately
+*skips* S1 and falls to S2, because taking the class path would write
+`text-[#6c6c6c]` — hard-coding the very value the user asked to stop hard-coding.
+`edit.value` still carries the resolved css text, so live preview, the
+post-commit reconcile and Replay all keep working against something concrete.
+An unresolvable token is dropped **silently** and the edit lands as a plain
+value edit: the value is still right, only the reference is unavailable.
+
+**UI: inline expansion, never a popover.** The island is a transparent
+WebContentsView sized to hug the card, so a portal dropdown clips at the view
+edge. A chevron expands `TokenPicker` under the row (what SideRows and
+BezierEditor already do; PanelApp's ResizeObserver grows the view). Colors get a
+swatch grid, lengths a name/value list; hovering previews live. A row with no
+offerable token renders byte-identical to before — token-less projects see no
+layout change at all. `ScrubInput.formatValue` shows the token name on numeric
+rows, and reverts to plain css text the moment a scrub moves off the committed
+value (freezing the name mid-drag would misreport what's about to commit).
+
+**Detection gaps closed:** `findCssFiles` now scans `.less`/`.sass`/`.styl`/
+`.pcss` (custom properties pass through preprocessors untouched — lkmv.ch keeps
+its whole theme in `src/routes/styles.less` and was invisible), the walk reaches
+depth 6 / 120 files (a monorepo's `packages/ui/src/styles/tokens.css` is depth
+5), and the emitted set is capped at 400 since a `TokenSet` now rides in every
+`PanelState` push. Preprocessor *variables* (`@brand:`, `$brand:`) are
+deliberately still ignored — they have no runtime form, so they could never be
+committed back as a reference.
+
+**Groundwork, no behavior change:** `StylePanel.tsx` (839 lines, guideline ~500)
+split into `components/styles/rows/*`; `sameCssValue`/`numericValue`/`toCssText`/
+`parseColorLike` moved to `lib/css-values.ts`, which meant first moving
+`TW_EASE_EQUIV` + `displayBezierPreset` down out of `BezierEditor.tsx`
+(`sameCssValue` depends on them, and a lib can't import a component).
+
+**Two things the plan got wrong, found while building:**
+- The reviewed plan claimed a live duplicate-class bug from `element.classes`
+  being a pick-time snapshot, and proposed widening `styles.read` to return
+  fresh classes. It isn't a bug: `applyStyleEdit` reads the class list from the
+  **source file** (`styles.ts:146`); `edit.classes` only gates `looksTailwind`.
+  The widening was dropped — the class list is consulted only as a tie-break,
+  where staleness degrades gracefully.
+- `--z-modal: 100` **is** a legal `font-weight`, so no value-shape rule can
+  exclude it. `test/token-match.mjs` asserts the honest behavior: offered, but
+  ranked `neutral` so it sits below any real weight scale.
+
+Tests: new `test/token-match.mjs` (unit tier — value kinds, affinity, the
+per-prop gate incl. both negative cases, reference forms per source, and the
+tie-break); `tw-styles.mjs` extended for `tailwindTokenClassFor` /
+`rewriteClassListToken`; `tokens.mjs` extended with a depth-5 `.less` fixture
+that also pins first-definition-wins and proves a LESS variable never becomes a
+token; `style-edit.mjs` drives the real island — the chip names `--color-text`,
+the picker offers *only* the color tokens, clicking `--color-title` writes
+`var(--color-title)` (never `#212121`), and one undo restores it. The fixture
+`propedit-app` gained `src/theme.css` + a `TokenCard`, making it a css-source
+project. Writing that test caught a real bug in the test itself: a
+document-wide `.stylepanel__token-toggle` grabs the *padding* row's toggle,
+since every token-able row now has one.
+
+**Verification status, honestly:** unit tier 39/39 (incl. the new
+`token-match`), plus `tokens` / `tokens-scaffold` / `prop-edit-svelte` /
+`text-edit` / `setup-detect` green. The island-DOM-driven Electron tests
+(`style-edit`, `select-element`, `custom-controls`, `ready-gating`, and
+eventually `prop-edit`) could NOT be verified on the machine this was written
+on: the island `WebContentsView` renders an empty document there, so every
+`.proppanel__*` / `.stylepanel__*` wait times out. That is **pre-existing** —
+all four fail identically with this entire change stashed at HEAD, so it's the
+environment (the Electron window never taking focus), not the feature. Inside
+`style-edit`, the token-source header and the `--color-text` chip assertions
+did pass on the one run that got that far; the picker/commit assertions written
+after the selector fix are unverified. Re-run `node test/run.mjs electron`
+somewhere the window can actually take focus before trusting them.
+
 ## 2026-07-27 — Don't offer/greypanel setup a project can't do (user feedback)
 
 Feedback from a vanilla single-HTML project (whole DOM assembled at runtime from

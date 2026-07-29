@@ -3,7 +3,8 @@ import type { StyleEdit, StyleEditResult } from '../shared/api'
 import { mergeStyleString } from './inline-style'
 import { commitEdit, type ResolvedSource } from './props'
 import { findElement } from './props-svelte'
-import { looksTailwind, rewriteClassList } from './tw-styles'
+import { type ResolvedTokenRef, tokenClassRewrite } from './style-tokens'
+import { looksTailwind } from './tw-styles'
 
 /**
  * Svelte adapter for the Styles engine — the `.svelte` counterpart of styles.ts,
@@ -81,24 +82,39 @@ const hasTransitionShorthand = (styleValue: string): boolean =>
     return (colon === -1 ? decl : decl.slice(0, colon)).trim().toLowerCase() === 'transition'
   })
 
-const styleAgentPrompt = (edit: StyleEdit): string =>
-  `Set the CSS property \`${edit.prop}\` to \`${edit.value}\` on the element at ${edit.source} ` +
-  `(rewrite its classes or styles however fits the component best).`
+/**
+ * The S3 seed. The scoped-`<style>` sentence is load-bearing: a Svelte
+ * component usually styles its elements from its own `<style>` block, which
+ * neither S1 nor S2 can reach — without saying so, the agent hunts for a class
+ * or style attribute that isn't there.
+ */
+const styleAgentPrompt = (edit: StyleEdit, token: ResolvedTokenRef | null): string => {
+  const what = token
+    ? `to the design token \`${token.name}\` (\`${token.ref}\`, currently \`${edit.value}\`), ` +
+      'using the token reference rather than the literal value,'
+    : `to \`${edit.value}\``
+  return (
+    `Set the CSS property \`${edit.prop}\` ${what} on the element at ${edit.source}. ` +
+    "Its styles may live in this component's own `<style>` block rather than a " +
+    'class or style attribute — edit whichever fits the component best.'
+  )
+}
 
 /**
  * Apply a StyleEdit to a `.svelte` file. `resolved` is the stamp's location
  * (from resolveSource); the caller (styles.ts) has already validated the
- * prop/value against the v1 allowlist.
+ * prop/value against the v1 allowlist and re-resolved any design-token pick.
  */
 export async function applyStyleEditSvelte(
   root: string,
   edit: StyleEdit,
-  resolved: ResolvedSource
+  resolved: ResolvedSource,
+  token: ResolvedTokenRef | null = null
 ): Promise<StyleEditResult> {
   const toAgent = (): StyleEditResult => ({
     applied: false,
     needsAgent: true,
-    agentPrompt: styleAgentPrompt(edit)
+    agentPrompt: styleAgentPrompt(edit, token)
   })
   let code: string
   try {
@@ -117,7 +133,9 @@ export async function applyStyleEditSvelte(
   const commit = async (next: string, strategy: 'tailwind' | 'inline'): Promise<StyleEditResult> => {
     const key = `${edit.source}:style:${edit.prop}`
     const res = await commitEdit(root, resolved.file, code, next, key, edit.group)
-    return res.applied ? { applied: true, strategy } : { applied: false, error: res.error }
+    return res.applied
+      ? { applied: true, strategy, wroteToken: token != null }
+      : { applied: false, error: res.error }
   }
 
   // S1 — Tailwind class rewrite on a literal `class="…"`. A class: directive
@@ -125,7 +143,7 @@ export async function applyStyleEditSvelte(
   // the rewrite (the inline path below still works — it wins on specificity).
   const classAttr = findAttr(el, 'class')
   if (looksTailwind(edit.classes) && classAttr?.literal != null && !hasAttrOfType(el, 'ClassDirective')) {
-    const rewritten = rewriteClassList(classAttr.literal, edit.prop, edit.value)
+    const rewritten = tokenClassRewrite(classAttr.literal, edit, token)
     if (rewritten != null && SPLICE_SAFE_RE.test(rewritten)) {
       // findAttr spans the WHOLE attribute (`class="…"`) — rewrite it.
       const next = `${code.slice(0, classAttr.start)}class="${rewritten}"${code.slice(classAttr.end)}`
@@ -145,7 +163,8 @@ export async function applyStyleEditSvelte(
   if (edit.prop.startsWith('transition-') && hasTransitionShorthand(styleAttr?.literal ?? '')) {
     return toAgent()
   }
-  const merged = mergeStyleString(styleAttr?.literal ?? '', edit.prop, edit.value)
+  // With a resolved token this writes the REFERENCE, not what it resolves to.
+  const merged = mergeStyleString(styleAttr?.literal ?? '', edit.prop, token?.ref ?? edit.value)
   if (!SPLICE_SAFE_RE.test(merged)) return toAgent()
   if (styleAttr) {
     const next = `${code.slice(0, styleAttr.start)}style="${merged}"${code.slice(styleAttr.end)}`

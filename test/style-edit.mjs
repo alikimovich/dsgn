@@ -15,6 +15,14 @@
  *   and coalesces in edit-history → ONE `edits.undo` restores the pre-burst
  *   file → island screenshots.
  *
+ * Design tokens: select the element whose color IS `--color-text`'s value →
+ * the Styles tab's header names the token source, the color row shows a
+ * `--color-text` CHIP instead of the hex (proving the live custom-property read
+ * through the sandboxed preload + the normalizing comparator), the inline
+ * picker offers ONLY the color tokens (the value-shape gate, through real UI) →
+ * clicking `--color-title` writes `var(--color-title)` — the REFERENCE, not
+ * `#212121` — and one undo restores it.
+ *
  * v10 phase 4 — transitions: re-select the Tailwind element →
  * `transition-duration: 150ms` snaps to the named time scale (`duration-150`)
  * → a non-keyword curve lands as an arbitrary `ease-[cubic-bezier(…)]` class
@@ -38,6 +46,7 @@ const fixture = join(root, 'test', 'fixtures', 'propedit-app')
 const styled = join(fixture, 'src', 'Styled.tsx')
 const TW_SRC = 'src/Styled.tsx:5' // <div className="p-4 rounded-md"> in TwCard
 const INLINE_SRC = 'src/Styled.tsx:9' // <div style={{ padding: '8px' }}> in InlineCard
+const TOKEN_SRC = 'src/Styled.tsx:17' // <div style={{ color: '#6c6c6c' }}> in TokenCard
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
 
@@ -326,6 +335,85 @@ try {
     throw new Error('one undo did not restore the pre-burst source (burst not coalesced?)')
   }
 
+  // --- Design tokens: the element's color IS --color-text's value, so the row
+  // must NAME the token instead of showing #6c6c6c; picking a different token
+  // must write a `var()` REFERENCE into source, not the value it resolves to. ---
+  await pickElement('token-box', TOKEN_SRC)
+  await openStylesTab()
+
+  // The header line proves the TokenSet reached the island at all (it travels
+  // main renderer → panel:state → island, a seam nothing else covers).
+  const tokenSource = await waitPanel(
+    "document.querySelector('.stylepanel__tokensource')?.textContent ?? ''"
+  )
+  if (!/tokens/.test(tokenSource) || !tokenSource.includes('CSS file')) {
+    throw new Error(`token source line missing or wrong: ${JSON.stringify(tokenSource)}`)
+  }
+  // EVERY token-able row gets a toggle (padding offers --space-md), so scope
+  // every query to the `color` row — a bare document-wide selector picks up the
+  // Layout group's rows first.
+  const COLOR_ROW = `[...document.querySelectorAll('.stylepanel__tokenrow')].find(
+    (r) => r.querySelector('.stylepanel__name')?.title === 'color'
+  )`
+
+  // The chip names the token. This only works via the LIVE custom-property read
+  // (styles.read(['--color-text', …]) through the sandboxed preload) plus the
+  // injected sameCssValue comparator — the browser reports rgb(108, 108, 108)
+  // while the token file says #6c6c6c.
+  const chip = await waitPanel(
+    `${COLOR_ROW}?.querySelector('.stylepanel__token')?.textContent?.trim() ?? ''`
+  )
+  if (chip !== '--color-text') throw new Error(`token chip should name --color-text, got ${chip}`)
+
+  // Expand the color row's token picker. Click-only-until-rendered: a second
+  // click would collapse it again.
+  await waitPanel(`(() => {
+    const row = ${COLOR_ROW}
+    if (!row) return false
+    if (row.querySelector('.stylepanel__tokens')) return true
+    row.querySelector('.stylepanel__token-toggle')?.click()
+    return false
+  })()`)
+  // Only color tokens are offered — --space-md and --z-modal must be absent,
+  // which is the value-shape gate doing its job through the real UI.
+  const offered = await panelEval(
+    `[...${COLOR_ROW}.querySelectorAll('.stylepanel__tokens [data-token]')].map((e) => e.dataset.token)`
+  )
+  const expectOffered = ['--color-text', '--color-title', '--color-link']
+  if (JSON.stringify(offered) !== JSON.stringify(expectOffered)) {
+    throw new Error(`picker should offer exactly the color tokens, got ${JSON.stringify(offered)}`)
+  }
+  await shotIsland('style-edit-tokens.png')
+
+  const beforeToken = readFileSync(styled, 'utf8')
+  const picked = await panelEval(`(() => {
+    const b = ${COLOR_ROW}?.querySelector('[data-token="--color-title"]')
+    if (!b) return false
+    b.click()
+    return true
+  })()`)
+  if (picked !== true) throw new Error('the --color-title swatch was not clickable')
+  let afterToken = ''
+  for (let i = 0; i < 40; i++) {
+    afterToken = readFileSync(styled, 'utf8')
+    if (afterToken.includes('var(--color-title)')) break
+    await new Promise((r) => setTimeout(r, 150))
+  }
+  // The REFERENCE, never the resolved value — writing #212121 here would defeat
+  // the whole feature.
+  if (!afterToken.includes(`color: "var(--color-title)"`)) {
+    throw new Error(
+      `token pick did not write a var() reference; style line: ${afterToken.match(/style=\{\{ color[^}]*\}\}/)?.[0]}`
+    )
+  }
+  if (afterToken.includes('#212121')) throw new Error('the resolved value was written, not the reference')
+
+  const undoToken = await win.evaluate((a) => window.api.edits.undo(a.fixture), { fixture })
+  if (!undoToken.ok) throw new Error(`undo (token) not ok: ${JSON.stringify(undoToken)}`)
+  if (readFileSync(styled, 'utf8') !== beforeToken) {
+    throw new Error('undo did not restore the pre-token source exactly')
+  }
+
   // --- Transitions (phase 4): back to the Tailwind element. ---
   await pickElement('tw-box', TW_SRC)
   await openStylesTab()
@@ -435,8 +523,10 @@ try {
   console.log(
     'STYLE-EDIT OK — Styles tab groups + fresh read, S1 tailwind rewrite (pt-[13px]), ' +
       'live preview inject/clear, UI-driven ScrubInput commit (rounded-[13px]), ' +
-      'S2 inline merge burst, one-undo coalescing, transitions (duration-150, ' +
-      'ease-[cubic-bezier(…)] no-spaces, BezierEditor nudge → ease keyword snap), full undo chain'
+      'S2 inline merge burst, one-undo coalescing, design tokens (chip names ' +
+      '--color-text, picker offers only colors, pick writes var(--color-title)), ' +
+      'transitions (duration-150, ease-[cubic-bezier(…)] no-spaces, BezierEditor ' +
+      'nudge → ease keyword snap), full undo chain'
   )
 } catch (err) {
   console.error('STYLE-EDIT FAILED:', err?.message ?? err)

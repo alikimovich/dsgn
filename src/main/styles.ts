@@ -2,7 +2,8 @@ import { ipcMain } from 'electron'
 import { readFile } from 'fs/promises'
 import type { PropEditResult, StyleEdit, StyleEditResult } from '../shared/api'
 import { classNameStringNode, commitEdit, findElementAtLine, resolveSource } from './props'
-import { looksTailwind, rewriteClassList } from './tw-styles'
+import { type ResolvedTokenRef, resolveTokenRef, tokenClassRewrite } from './style-tokens'
+import { looksTailwind } from './tw-styles'
 import { cssPropToJsKey, mergeStyleObjectSource } from './inline-style'
 import { applyStyleEditSvelte } from './styles-svelte'
 
@@ -69,14 +70,29 @@ export function isSafeStyleValue(value: string): boolean {
   return depth === 0
 }
 
-export function styleAgentPrompt(edit: StyleEdit, element?: string): string {
+export function styleAgentPrompt(
+  edit: StyleEdit,
+  element?: string,
+  token?: ResolvedTokenRef | null
+): string {
   const el = element ? `<${element}> element` : 'selected element'
+  if (token) {
+    return (
+      `In ${edit.source}, set the css property \`${edit.prop}\` of the ${el} to the design ` +
+      `token \`${token.name}\` (\`${token.ref}\`, currently \`${edit.value}\`). ` +
+      `Use the project's token reference, not the literal value.`
+    )
+  }
   return `In ${edit.source}, set the css property \`${edit.prop}\` of the ${el} to \`${edit.value}\`.`
 }
 
 /** Map a commitEdit result into a StyleEditResult carrying the strategy used. */
-function committed(res: PropEditResult, strategy: 'tailwind' | 'inline'): StyleEditResult {
-  return res.applied ? { applied: true, strategy } : { applied: false, error: res.error }
+function committed(
+  res: PropEditResult,
+  strategy: 'tailwind' | 'inline',
+  wroteToken = false
+): StyleEditResult {
+  return res.applied ? { applied: true, strategy, wroteToken } : { applied: false, error: res.error }
 }
 
 /** The static key name of a style object entry (null for computed/spread/etc). */
@@ -111,7 +127,13 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
     classes: Array.isArray(edit.classes) ? edit.classes : [],
     group: typeof edit.group === 'string' && edit.group ? edit.group.slice(0, 120) : undefined
   }
-  if (loc.file.endsWith('.svelte')) return applyStyleEditSvelte(root, edit, loc)
+  // Resolve a token pick BEFORE the framework dispatch, so both engines get the
+  // same already-validated reference. The token's value comes from the repo's
+  // own (semi-trusted) theme file, so the reference goes through the same
+  // splice guard as any other value; failing it drops back to a plain edit.
+  let token: ResolvedTokenRef | null = await resolveTokenRef(root, edit)
+  if (token && !isSafeStyleValue(token.ref)) token = null
+  if (loc.file.endsWith('.svelte')) return applyStyleEditSvelte(root, edit, loc, token)
   let code: string
   try {
     code = await readFile(loc.file, 'utf8')
@@ -122,7 +144,7 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
   const toAgent = (): StyleEditResult => ({
     applied: false,
     needsAgent: true,
-    agentPrompt: styleAgentPrompt(edit, found?.name)
+    agentPrompt: styleAgentPrompt(edit, found?.name, token)
   })
   if (!found) return toAgent() // stale stamp — the agent can still find it
   // An element-level spread could carry className/style at runtime — the final
@@ -144,25 +166,35 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
     const strNode = classNameStringNode(classAttr?.value ?? null)
     if (strNode) {
       const current = String((strNode as unknown as { value: string }).value)
-      const rewritten = rewriteClassList(current, edit.prop, edit.value)
+      const rewritten = tokenClassRewrite(current, edit, token)
       if (rewritten != null) {
         const next =
           code.slice(0, strNode.start) + JSON.stringify(rewritten) + code.slice(strNode.end)
-        return committed(await commitEdit(root, loc.file, code, next, key, edit.group), 'tailwind')
+        return committed(
+          await commitEdit(root, loc.file, code, next, key, edit.group),
+          'tailwind',
+          token != null
+        )
       }
     }
   }
 
-  // S2 — inline style splice.
+  // S2 — inline style splice. With a resolved token this writes the REFERENCE
+  // (`var(--color-text)`) rather than the value it currently resolves to.
+  const written = token?.ref ?? edit.value
   const styleAttr = (found.opening.attributes ?? []).find(
     (a) => a.type === 'JSXAttribute' && (a.name as { name?: string })?.name === 'style'
   )
   if (!styleAttr) {
     // No style attribute — insert one right after the tag name (props.ts pattern).
     const insertAt = (found.opening.name as { end: number }).end
-    const attrText = ` style={{ ${cssPropToJsKey(edit.prop)}: ${JSON.stringify(edit.value)} }}`
+    const attrText = ` style={{ ${cssPropToJsKey(edit.prop)}: ${JSON.stringify(written)} }}`
     const next = code.slice(0, insertAt) + attrText + code.slice(insertAt)
-    return committed(await commitEdit(root, loc.file, code, next, key, edit.group), 'inline')
+    return committed(
+      await commitEdit(root, loc.file, code, next, key, edit.group),
+      'inline',
+      token != null
+    )
   }
   const attrVal = styleAttr.value
   const expr = attrVal?.type === 'JSXExpressionContainer' ? attrVal.expression : undefined
@@ -178,10 +210,14 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
     ) {
       return toAgent()
     }
-    const merged = mergeStyleObjectSource(code.slice(expr.start, expr.end), edit.prop, edit.value)
+    const merged = mergeStyleObjectSource(code.slice(expr.start, expr.end), edit.prop, written)
     if (merged != null) {
       const next = code.slice(0, expr.start) + merged + code.slice(expr.end)
-      return committed(await commitEdit(root, loc.file, code, next, key, edit.group), 'inline')
+      return committed(
+        await commitEdit(root, loc.file, code, next, key, edit.group),
+        'inline',
+        token != null
+      )
     }
   }
 

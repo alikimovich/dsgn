@@ -628,6 +628,12 @@ export default function App(): React.JSX.Element {
     []
   )
 
+  // Subscribed (not getState()) on purpose: detection resolves asynchronously
+  // after a project opens, and the island's Styles tab needs the result pushed
+  // to it — a getState() read here would never re-render, so the tokens would
+  // silently never arrive.
+  const tokenSet = useTokens((s) => s.set)
+
   // The setup turn finished → restart the dev server + reload the preview so the
   // freshly-wired config applies (one-shot: consume the signal, then restart).
   const canInstrument = useSetup((s) => s.canInstrument)
@@ -2020,6 +2026,7 @@ export default function App(): React.JSX.Element {
           inspecting={inspecting}
           controls={islandControls}
           canInstrument={canInstrument}
+          tokens={tokenSet}
         />
       )}
 
