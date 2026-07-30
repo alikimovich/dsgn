@@ -14,10 +14,12 @@ import { TokenRow } from './TokenRow'
 function TokenChip({
   prop,
   ctx,
+  trailing,
   onCustom
 }: {
   prop: string
   ctx: RowCtx
+  trailing?: React.ReactNode
   onCustom: () => void
 }): React.JSX.Element {
   const res = ctx.tokenFor(prop)
@@ -34,12 +36,17 @@ function TokenChip({
         title={`${token?.name} — ${value}. Click to edit as a raw value.`}
         aria-label={`Current color ${token?.name}`}
       />
-      <span
-        className="stylepanel__token h-7 w-[96px] overflow-hidden text-ellipsis whitespace-nowrap rounded-md border px-2 py-1 font-mono text-xs leading-5"
+      {/* Mirrors ColorControl's hex field box (same h/w/border) so the row
+          doesn't shift when a value flips between token and raw. */}
+      <div
+        className="flex h-7 w-28 items-center gap-1 rounded-md border px-2"
         title={`${token?.name} — ${value}`}
       >
-        {token?.name}
-      </span>
+        <span className="stylepanel__token min-w-0 flex-1 truncate font-mono text-xs">
+          {token?.name}
+        </span>
+        {trailing}
+      </div>
     </div>
   )
 }
@@ -63,19 +70,27 @@ export function ColorRow({
   }
   return (
     <TokenRow prop={prop} ctx={ctx} onPick={pick}>
-      <RowShell label={prop}>
-        {asToken ? (
-          <TokenChip prop={prop} ctx={ctx} onCustom={() => setCustom(true)} />
-        ) : (
-          <ColorControl
-            value={ctx.values[prop] ?? ''}
-            disabled={ctx.disabled}
-            onChange={(c) => ctx.preview(prop, c)}
-            onCommit={(c) => void ctx.commit(prop, c)}
-            onNeedsAgent={onNeedsAgent}
-          />
-        )}
-      </RowShell>
+      {(toggle) => (
+        <RowShell label={prop}>
+          {asToken ? (
+            <TokenChip
+              prop={prop}
+              ctx={ctx}
+              trailing={toggle}
+              onCustom={() => setCustom(true)}
+            />
+          ) : (
+            <ColorControl
+              value={ctx.values[prop] ?? ''}
+              disabled={ctx.disabled}
+              trailing={toggle}
+              onChange={(c) => ctx.preview(prop, c)}
+              onCommit={(c) => void ctx.commit(prop, c)}
+              onNeedsAgent={onNeedsAgent}
+            />
+          )}
+        </RowShell>
+      )}
     </TokenRow>
   )
 }

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 
 /**
  * ColorControl — swatch + hex field + hidden native color input for the
@@ -18,6 +18,9 @@ export interface ColorControlProps {
   /** Current CSS color, any computed form (hex, rgb(a), oklch(), var(), …). */
   value: string
   disabled?: boolean
+  /** Rendered at the hex field's right edge, inside its border — the
+   *  design-token dropdown chevron (see TokenRow). */
+  trailing?: React.ReactNode
   /** Live update while the native picker scrubs (its 'input' events). */
   onChange: (cssColor: string) => void
   /** Final value — native picker close, hex-field blur, or Enter. */
@@ -107,6 +110,7 @@ const CHECKER = 'repeating-conic-gradient(#cbd5e1 0% 25%, #fff 0% 50%) 0 0 / 8px
 export default function ColorControl({
   value,
   disabled,
+  trailing,
   onChange,
   onCommit,
   onNeedsAgent
@@ -215,31 +219,48 @@ export default function ColorControl({
           }}
         />
       </button>
-      <Input
-        className="colorctl__hex h-7 w-[96px] px-2 font-mono text-xs"
-        type="text"
-        value={draft}
-        disabled={disabled}
-        spellCheck={false}
-        aria-label="Hex color"
-        onChange={(e) => setDraft(e.target.value)}
-        onFocus={() => {
-          hexFocusedRef.current = true
-        }}
-        onBlur={() => {
-          hexFocusedRef.current = false
-          commitDraft()
-        }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') {
-            e.preventDefault()
+      {/* The chevron sits INSIDE the field's border, so the border lives on
+          this wrapper and the input itself goes borderless — otherwise the
+          token affordance would float outside the box it belongs to. */}
+      {/* w-28 (112px), not the 96px this was before the chevron moved inside:
+          the trailing icon eats ~16px, and design-system token names are long
+          (`--rmt-radius-none`) — at 96px they truncated to `--color…`. Kept in
+          sync with ColorRow's TokenChip so the row doesn't jump when a value
+          flips between token and raw hex. */}
+      <div
+        className={cn(
+          'flex h-7 w-28 items-center gap-1 rounded-md border px-2',
+          'focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50',
+          disabled && 'pointer-events-none opacity-50'
+        )}
+      >
+        <input
+          className="colorctl__hex min-w-0 flex-1 bg-transparent font-mono text-xs outline-none"
+          type="text"
+          value={draft}
+          disabled={disabled}
+          spellCheck={false}
+          aria-label="Hex color"
+          onChange={(e) => setDraft(e.target.value)}
+          onFocus={() => {
+            hexFocusedRef.current = true
+          }}
+          onBlur={() => {
+            hexFocusedRef.current = false
             commitDraft()
-          } else if (e.key === 'Escape') {
-            e.preventDefault()
-            setDraft(formatHex(parsed))
-          }
-        }}
-      />
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') {
+              e.preventDefault()
+              commitDraft()
+            } else if (e.key === 'Escape') {
+              e.preventDefault()
+              setDraft(formatHex(parsed))
+            }
+          }}
+        />
+        {trailing}
+      </div>
     </div>
   )
 }

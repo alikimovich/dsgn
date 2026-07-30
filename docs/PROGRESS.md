@@ -2,6 +2,53 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-30 — Token chevron moves inside the value field (user feedback)
+
+"I find the way we now invoke tokens confusing. I would expect the chevron
+down being directed down and being placed within input field, on the right of
+it, instead of to the left from label." Fair: the v1 affordance was a
+`ChevronRight`/`ChevronDown` button sitting OUTSIDE the row, left of the
+property label — it read as an unrelated expander (and sat right next to
+SideRows' own expand-sides chevron, a different action entirely) rather than
+as "this field is a picker."
+
+Now the chevron lives inside the value field at its right edge, always
+pointing down and rotating 180° when open — i.e. the shape of the native
+`<select>` the transition-property row already uses a few rows below, so the
+panel reads consistently.
+
+`TokenRow` no longer wraps the row with its own chevron. It still owns the
+open/close state and renders the picker underneath, but hands the toggle to
+`children` as a NODE via a render prop, so each control places it inside its
+own field. A render prop (not context, not cloneElement) because there are
+exactly three call sites and each needs a visibly different placement —
+explicit beats clever. `ScrubInput` and `ColorControl` gained an optional
+`trailing` slot; both are also used by `CustomPanel`, which passes nothing
+and is unaffected.
+
+Three details the move forced:
+- The toggle now sits inside fields that own pointer/key behavior, so it
+  stops propagation on pointerdown/click/keydown — otherwise clicking it
+  would also start `ScrubInput`'s pointer-lock scrub, and Enter would also
+  open its exact-value editor.
+- `ScrubInput`'s readout is wrapped in `min-w-0 truncate` so a long token
+  name shrinks instead of shoving the chevron out of the fixed-width track.
+- Color fields went 96px → 112px (`w-28`). The trailing icon eats ~16px and
+  real design-system token names are long — at 96px `--color-text` truncated
+  to `--color…`. `ColorControl`'s hex box and `ColorRow`'s `TokenChip` stay
+  the same width as each other so the row doesn't jump when a value flips
+  between token and raw hex. `ColorControl`'s hex `<Input>` became a
+  borderless `<input>` inside a bordered flex wrapper (with a `focus-within`
+  ring), since the chevron has to sit inside that border.
+
+Verified with a driven probe: all six token-able rows reported the chevron
+geometrically inside its field (`insideField: true`, 5px from the right edge)
+and a captured island screenshot confirmed it visually. The final 96→112px
+nudge was NOT re-confirmed visually — the island `WebContentsView` stopped
+rendering partway through (the known environment flakiness; an untouched
+`prop-edit` fails identically right now), and it's a pure width constant with
+no logic. `bun run typecheck` clean, unit tier 40/40.
+
 ## 2026-07-29 — Real Cmd+Z was dead: the editMenu role was eating it
 
 User: "Cmd+Z / Cmd+Shift+Z didn't work for me" — right after the previous

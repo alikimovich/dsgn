@@ -34,20 +34,23 @@ export function NumberRow({ prop, ctx }: { prop: string; ctx: RowCtx }): React.J
   if (!meta || n === null) return <ReadoutRow label={prop} value={ctx.values[prop] ?? '—'} />
   return (
     <TokenRow prop={prop} ctx={ctx}>
-      <ScrubInput
-        label={prop}
-        value={n}
-        min={meta.min ?? 0}
-        max={meta.max ?? 1000}
-        step={meta.step ?? 1}
-        unit={meta.unit}
-        disabled={ctx.disabled}
-        formatValue={tokenFormatter(prop, ctx, n)}
-        onScrub={(v) => ctx.preview(prop, toCssText(prop, v))}
-        onInput={(v) => ctx.preview(prop, toCssText(prop, v))}
-        onCommit={(v) => void ctx.commit(prop, toCssText(prop, v))}
-        onCancel={() => ctx.cancel(prop)}
-      />
+      {(toggle) => (
+        <ScrubInput
+          label={prop}
+          value={n}
+          min={meta.min ?? 0}
+          max={meta.max ?? 1000}
+          step={meta.step ?? 1}
+          unit={meta.unit}
+          disabled={ctx.disabled}
+          formatValue={tokenFormatter(prop, ctx, n)}
+          trailing={toggle}
+          onScrub={(v) => ctx.preview(prop, toCssText(prop, v))}
+          onInput={(v) => ctx.preview(prop, toCssText(prop, v))}
+          onCommit={(v) => void ctx.commit(prop, toCssText(prop, v))}
+          onCancel={() => ctx.cancel(prop)}
+        />
+      )}
     </TokenRow>
   )
 }
@@ -99,34 +102,37 @@ export function SideRows({
         previewProps={props}
         onPick={(c) => void commitTokenAll(c)}
       >
-        <div className="stylepanel__sides flex items-center gap-1">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="stylepanel__expand-sides size-5 shrink-0 text-muted-foreground"
-            onClick={() => setOpen(true)}
-            aria-label={`Edit ${base} sides separately`}
-            title="Edit sides separately"
-          >
-            <ChevronRight className="size-3.5" aria-hidden="true" />
-          </Button>
-          <div className="min-w-0 flex-1">
-            <ScrubInput
-              label={base}
-              value={nums[0] as number}
-              min={meta.min ?? 0}
-              max={meta.max ?? 400}
-              step={meta.step ?? 1}
-              unit={meta.unit}
-              disabled={ctx.disabled}
-              formatValue={tokenFormatter(props[0], ctx, nums[0] as number)}
-              onScrub={previewAll}
-              onInput={previewAll}
-              onCommit={(v) => void commitAll(v)}
-              onCancel={cancelAll}
-            />
+        {(toggle) => (
+          <div className="stylepanel__sides flex items-center gap-1">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="stylepanel__expand-sides size-5 shrink-0 text-muted-foreground"
+              onClick={() => setOpen(true)}
+              aria-label={`Edit ${base} sides separately`}
+              title="Edit sides separately"
+            >
+              <ChevronRight className="size-3.5" aria-hidden="true" />
+            </Button>
+            <div className="min-w-0 flex-1">
+              <ScrubInput
+                label={base}
+                value={nums[0] as number}
+                min={meta.min ?? 0}
+                max={meta.max ?? 400}
+                step={meta.step ?? 1}
+                unit={meta.unit}
+                disabled={ctx.disabled}
+                formatValue={tokenFormatter(props[0], ctx, nums[0] as number)}
+                trailing={toggle}
+                onScrub={previewAll}
+                onInput={previewAll}
+                onCommit={(v) => void commitAll(v)}
+                onCancel={cancelAll}
+              />
+            </div>
           </div>
-        </div>
+        )}
       </TokenRow>
     )
   }
@@ -153,20 +159,23 @@ export function SideRows({
             <ReadoutRow key={p} label={p} value={ctx.values[p] ?? '—'} />
           ) : (
             <TokenRow key={p} prop={p} ctx={ctx}>
-              <ScrubInput
-                label={p}
-                value={nums[i] as number}
-                min={meta.min ?? 0}
-                max={meta.max ?? 400}
-                step={meta.step ?? 1}
-                unit={meta.unit}
-                disabled={ctx.disabled}
-                formatValue={tokenFormatter(p, ctx, nums[i] as number)}
-                onScrub={(v) => ctx.preview(p, toCssText(p, v))}
-                onInput={(v) => ctx.preview(p, toCssText(p, v))}
-                onCommit={(v) => void ctx.commit(p, toCssText(p, v))}
-                onCancel={() => ctx.cancel(p)}
-              />
+              {(toggle) => (
+                <ScrubInput
+                  label={p}
+                  value={nums[i] as number}
+                  min={meta.min ?? 0}
+                  max={meta.max ?? 400}
+                  step={meta.step ?? 1}
+                  unit={meta.unit}
+                  disabled={ctx.disabled}
+                  formatValue={tokenFormatter(p, ctx, nums[i] as number)}
+                  trailing={toggle}
+                  onScrub={(v) => ctx.preview(p, toCssText(p, v))}
+                  onInput={(v) => ctx.preview(p, toCssText(p, v))}
+                  onCommit={(v) => void ctx.commit(p, toCssText(p, v))}
+                  onCancel={() => ctx.cancel(p)}
+                />
+              )}
             </TokenRow>
           )
         )}
