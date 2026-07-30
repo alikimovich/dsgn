@@ -917,6 +917,10 @@ export interface PraxisApi {
     setRecents: (recents: RecentMenuEntry[]) => void
     /** Fires when a project is chosen from File → Open Recent. */
     onOpenRecent: (cb: (root: string) => void) => () => void
+    /** Run the NATIVE text-editing undo/redo in this window — used when the
+     *  Edit-menu accelerator arrived while a text field was focused (the
+     *  custom menu item swallowed the keystroke the field would have gotten). */
+    nativeEdit: (cmd: 'undo' | 'redo') => void
   }
   preview: {
     setBounds: (bounds: Bounds) => void

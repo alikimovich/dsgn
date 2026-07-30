@@ -9,7 +9,8 @@ import {
   nativeTheme,
   powerMonitor,
   shell,
-  WebContentsView
+  WebContentsView,
+  webContents
 } from 'electron'
 import { join } from 'path'
 import type { MoveNodeRequest, RecentMenuEntry, SelectedElement } from '../shared/api'
@@ -271,6 +272,30 @@ function buildAppMenu(): void {
   const send = (action: string): void => sendToMain('menu:action', action)
   const openRecent = (root: string): void => sendToMain('menu:open-recent', root)
 
+  /**
+   * Edit → Undo/Redo. NOT `role: 'editMenu'`: the role's Undo item owns the
+   * Cmd+Z accelerator at the NATIVE menu level, which intercepts the keystroke
+   * in the main process and routes it to text-editing undo — the renderer's
+   * keydown listener (App.tsx, the praxis source-edit undo) never fires for a
+   * physical keyboard. (Tests never caught this: synthetic/CDP key events
+   * bypass native menu accelerators, so the renderer handler DID fire there.)
+   *
+   * Routing: a non-main focused webContents (the preview, the props island,
+   * the pop-out editor) gets plain text-editing undo — exactly what the role
+   * did, incl. CodeMirror, which maps the native historyUndo beforeinput to
+   * its own history. The MAIN renderer decides for itself (menu:action):
+   * a focused text field keeps native undo; anything else runs the praxis
+   * source-edit undo stack.
+   */
+  const editCommand = (cmd: 'undo' | 'redo'): void => {
+    const focused = webContents.getFocusedWebContents()
+    if (focused && focused !== mainWindow?.webContents) {
+      focused[cmd]()
+      return
+    }
+    send(cmd)
+  }
+
   const recentItems: MenuItemConstructorOptions[] = recentProjects.length
     ? [
         ...recentProjects.slice(0, 8).map((r) => ({
@@ -302,7 +327,20 @@ function buildAppMenu(): void {
         { label: 'Open Recent', submenu: recentItems }
       ]
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: () => editCommand('undo') },
+        { label: 'Redo', accelerator: 'Shift+CmdOrCtrl+Z', click: () => editCommand('redo') },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'delete' },
+        { role: 'selectAll' }
+      ]
+    },
     {
       label: 'Actions',
       submenu: [
@@ -1086,6 +1124,15 @@ app.whenReady().then(() => {
           .slice(0, 8)
       : []
     buildAppMenu()
+  })
+  // Edit → Undo/Redo bounced back from the main renderer: it received the
+  // menu:action, saw a text field focused, and wants the NATIVE text-editing
+  // command it would have gotten by default — which the custom menu item's
+  // accelerator swallowed (see buildAppMenu's editCommand).
+  ipcMain.on('menu:native-edit', (e, cmd: 'undo' | 'redo') => {
+    if (e.sender !== mainWindow?.webContents) return
+    if (cmd === 'undo') mainWindow.webContents.undo()
+    else if (cmd === 'redo') mainWindow.webContents.redo()
   })
   registerPreviewIpc()
   registerEditorIpc()

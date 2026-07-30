@@ -89,6 +89,11 @@ export default function LayersTree({
   const beginDrag = (e: React.PointerEvent, node: LayerNode): void => {
     if (e.button !== 0 || dragDisabled(node)) return
     e.preventDefault()
+    // preventDefault also suppresses the pointerdown's default focus move —
+    // take it explicitly (rows are tabIndex=0), or focus stays wherever it was
+    // (typically the composer textarea) and a post-drag/post-click Cmd+Z would
+    // route to the FIELD's native undo instead of undoing the layer move.
+    ;(e.currentTarget as HTMLElement).focus()
     setDragging(node)
 
     const onMove = (ev: PointerEvent): void => {

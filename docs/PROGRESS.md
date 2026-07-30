@@ -2,6 +2,47 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-29 — Real Cmd+Z was dead: the editMenu role was eating it
+
+User: "Cmd+Z / Cmd+Shift+Z didn't work for me" — right after the previous
+entry claimed a live Cmd+Z check passed. Both are true, and the gap between
+them IS the bug: the menu template had `{ role: 'editMenu' }`, whose built-in
+Undo/Redo items own the Cmd+Z / Shift+Cmd+Z accelerators at the NATIVE menu
+level. A physical keystroke is intercepted in the main process and routed to
+`webContents.undo()` (text-editing undo) — the renderer's keydown listener
+(App.tsx, the v8 F3b source-edit undo) never fires. Synthetic/CDP key events
+(what every test uses, including the previous entry's probe) BYPASS menu
+accelerators, so the keydown handler fired in tests and the feature looked
+alive. Real-keyboard source undo has therefore been broken since the role was
+added — for props/text/token edits too, not just layer moves.
+
+Fix, three routing layers (menu template + App.tsx + a new tiny IPC):
+- `role: 'editMenu'` → explicit Edit submenu. Undo/Redo are custom items
+  whose click handlers route: a non-main focused webContents (preview, props
+  island, pop-out editor) gets plain `webContents.undo()`/`redo()` — exactly
+  what the role did, incl. CodeMirror, which maps the native historyUndo
+  beforeinput to its own history — while the MAIN renderer gets a
+  `menu:action 'undo'/'redo'` and decides for itself. Clipboard items stay
+  roles.
+- App.tsx: the undo logic is shared between the (kept, now mostly-backup)
+  keydown listener and the new menu-action branch. Focused text field → ask
+  main to replay the NATIVE editing command (`menu:native-edit` →
+  `mainWindow.webContents.undo()`), because the custom accelerator swallowed
+  the keystroke the field would have received; anything else → the source-edit
+  stack.
+- LayersTree: the drag's `preventDefault()` on pointerdown also suppressed the
+  default focus move, stranding focus in the composer textarea — so even with
+  the menu fixed, Cmd+Z after a drag would have hit the field's native undo.
+  `beginDrag` now focuses the row explicitly (rows are tabIndex=0).
+
+`test/layers-panel.mjs` now drives undo through the REAL path — main sending
+`menu:action 'undo'` (which is precisely what a physical Cmd+Z produces) —
+and pins BOTH routing branches: row-focused → the move reverts; composer-
+focused → source files must NOT change, and after blur the same action
+reverts. New CLAUDE.md gotcha: menu accelerators beat renderer keydown, and
+synthetic test events bypass menu accelerators — a keydown-handler test can
+stay green while every real keyboard is broken.
+
 ## 2026-07-29 — Pinned-ask fade fix + confirmed Cmd+Z covers Layers drags
 
 User report: "when I scroll and one message starts pushing another one, the

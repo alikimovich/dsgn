@@ -198,6 +198,17 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
 
 ## Gotchas (hard-won — read before debugging these areas)
 
+- **Native menu accelerators beat renderer keydown — and tests can't see it.**
+  A menu item's accelerator (incl. every `role:` item's built-in one)
+  intercepts the PHYSICAL keystroke in the main process; a renderer
+  `window.addEventListener('keydown')` for the same combo never fires. But
+  synthetic/CDP-injected key events (Playwright, `sendInputEvent`) BYPASS menu
+  accelerators, so a test of that keydown handler passes while a real keyboard
+  is broken. This shipped a dead Cmd+Z source-undo behind `role: 'editMenu'`
+  for weeks. Rule: any app shortcut that a menu (or a role) also claims must be
+  handled via the menu item's `click` → `menu:action`, not a renderer keydown;
+  and Edit→Undo/Redo route by focus (`buildAppMenu`'s `editCommand` +
+  App.tsx's menu-action handler + `menu:native-edit` for focused text fields).
 - **ESM/CJS**: the Agent SDK is ESM-only, `main` is CJS → dynamic `import()`
   only, never static/`require`.
 - **The preview `WebContentsView` is a separate CDP target** — not in renderer

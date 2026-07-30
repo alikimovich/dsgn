@@ -78,7 +78,8 @@ const api: PraxisApi = {
       const listener = (_e: IpcRendererEvent, root: string): void => cb(root)
       ipcRenderer.on('menu:open-recent', listener)
       return () => ipcRenderer.removeListener('menu:open-recent', listener)
-    }
+    },
+    nativeEdit: (cmd: 'undo' | 'redo'): void => ipcRenderer.send('menu:native-edit', cmd)
   },
   preview: {
     setBounds: (bounds: Bounds): void => ipcRenderer.send('preview:set-bounds', bounds),

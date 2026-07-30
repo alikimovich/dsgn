@@ -198,17 +198,63 @@ try {
     throw new Error('a same-stamp move must never write the file, even called directly')
   }
 
-  // --- Undo restores the direct move exactly. ---
-  const undone = await win.evaluate((a) => window.api.edits.undo(a.fixture), { fixture })
-  if (!undone.ok) throw new Error(`undo not ok: ${JSON.stringify(undone)}`)
+  // --- Undo restores the direct move exactly — via the REAL user path. A
+  // physical Cmd+Z lands as the Edit menu's accelerator → `menu:action 'undo'`
+  // from main (native menu accelerators intercept the key before any renderer
+  // keydown, so sending the action IS what the keystroke produces). The drag
+  // focused the row (not a text field), so the renderer must route this to
+  // the source-edit stack, not a field's native undo. ---
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send('menu:action', 'undo')
+  )
+  let afterUndo = ''
+  for (let i = 0; i < 40; i++) {
+    afterUndo = readFileSync(layersFile, 'utf8')
+    if (afterUndo === original) break
+    await new Promise((r) => setTimeout(r, 150))
+  }
+  if (afterUndo !== original) {
+    throw new Error('menu-driven undo did not restore the original fixture source')
+  }
+
+  // --- The other routing branch: with a TEXT FIELD focused, the same menu
+  // action must go to the field's native undo, NOT the source-edit stack —
+  // otherwise Cmd+Z while typing would silently revert file edits. Redo the
+  // move, focus the composer, send the action, and assert the file stays
+  // moved; then blur and undo for real to restore. ---
+  await dragRow('li#li-gamma', 0, 'li#li-alpha', 0, 0.1)
+  let movedAgain = ''
+  for (let i = 0; i < 40; i++) {
+    movedAgain = readFileSync(layersFile, 'utf8')
+    if (movedAgain !== original) break
+    await new Promise((r) => setTimeout(r, 150))
+  }
+  if (movedAgain === original) throw new Error('second drag did not apply')
+  await win.evaluate(() => document.querySelector('.composer__input').focus())
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send('menu:action', 'undo')
+  )
+  await new Promise((r) => setTimeout(r, 800)) // let any (wrong) revert land
+  if (readFileSync(layersFile, 'utf8') !== movedAgain) {
+    throw new Error('menu undo with a focused text field must NOT touch source files')
+  }
+  await win.evaluate(() => document.querySelector('.composer__input').blur())
+  await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].webContents.send('menu:action', 'undo')
+  )
+  for (let i = 0; i < 40; i++) {
+    if (readFileSync(layersFile, 'utf8') === original) break
+    await new Promise((r) => setTimeout(r, 150))
+  }
   if (readFileSync(layersFile, 'utf8') !== original) {
-    throw new Error('undo did not restore the original fixture source')
+    throw new Error('post-blur menu undo did not restore the original source')
   }
 
   console.log(
     'LAYERS-PANEL OK — tree matches the fixture (incl. 3 same-stamp "mapped" rows), ' +
       'row click selects, UI-driven drag reorders distinct siblings in src/Layers.tsx, ' +
-      'a same-stamp drag needsAgent + seeds the composer without touching the file, undo restores'
+      'a same-stamp drag is inert client-side + needsAgent from the engine, ' +
+      'and Edit-menu undo (the real Cmd+Z path) restores the move'
   )
 } catch (err) {
   console.error('LAYERS-PANEL FAILED:', err?.message ?? err)
