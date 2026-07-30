@@ -172,6 +172,17 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   plain-CSS on 2026-06-26). Legacy custom-property CSS still lives in
   `renderer/src/styles.css`; prefer Tailwind utilities + shadcn primitives for
   new UI, and migrate legacy rules out of styles.css when you touch them.
+- **Never invent a new font-size or line-height** — reuse one already in use,
+  unless the user explicitly asks for a new one. There's no formal type-scale
+  token (no `--text-sm`/`--text-base` CSS vars); the de facto scale is
+  whichever `text-[Npx]` values already recur across `components/` — as of
+  this writing: `9px, 10px, 10.5px, 11px, 11.5px, 12px, 12.5px, 13px` (plus
+  the standard Tailwind `text-sm`/`text-base`/etc. for normal body text).
+  Before adding a small/muted label, grep for the closest existing sibling
+  (e.g. `.proppanel__source`, `.notes__where`) and match its exact class
+  string rather than picking a new number. Line-height is simpler: always
+  Tailwind's named scale (`leading-none`, `leading-snug`, `leading-5`, …),
+  never an arbitrary `leading-[Npx]` — grep confirms no component uses one.
 - The Claude Agent SDK is **ESM-only** — `main` is CJS, so it's loaded via
   dynamic `import()` in `agent.ts`/`backends/` (never static/`require`).
 - All cross-process types go in `src/shared/api.ts`; keep `PraxisApi`, the

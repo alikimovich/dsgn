@@ -2,6 +2,38 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-29 — Pinned-ask fade fix + confirmed Cmd+Z covers Layers drags
+
+User report: "when I scroll and one message starts pushing another one, the
+top message goes over, not behind gradient line on the top." Root cause,
+confirmed by two independent code investigations: `.msg--user-pinned`
+(styles.css, the collapsed/sticky user-ask bubble) had `z-index: 6`, a
+DELIBERATE prior choice ("so the pinned ask stays crisp over it") — but it's
+applied to every collapsed ask for the whole time it's collapsed, not only
+while genuinely stuck at `top: 44px`, so during the sticky hand-off between
+two turns the outgoing bubble also rendered above `.pane--chat::before`'s
+`z-index: 5` top fade instead of dissolving under it. No intervening
+stacking context exists anywhere in the chain (`.pane--chat` → `.chat__messages`
+→ `.chat__scroll` → `.turn` → `.msg`), so the two z-indexes compete directly —
+confirmed live via computed-style check (`getComputedStyle` reported the
+bubble's z-index as the raw `6`/`5` numbers, no scoping).
+
+User confirmed they want it to fade like everything else. Fixed:
+`z-index: 6` → `z-index: 1` on `.msg--user-pinned` — low enough to sit below
+the gradient (5), but still an explicit positive value so the pinned bubble
+keeps winning over its own turn's z-index:auto content scrolling beneath it
+(removing the z-index entirely would have silently broken the sticky visual
+effect itself, not just its relationship to the fade). Verified live:
+`getComputedStyle` now reports `1` for the bubble vs `5` for the gradient.
+
+Also verified, no code needed: dragging a Layers-panel row and pressing a
+REAL Cmd+Z keystroke (not just calling `window.api.edits.undo()` directly)
+correctly reverts the move. Layer-panel moves already go through the same
+`commitEdit`/`edit-history.ts` stack as every other direct source edit, and
+`App.tsx`'s global Cmd+Z handler already operates over that same per-root
+stack — so this "just worked" once the move engine (2026-07-29, Layers panel)
+landed.
+
 ## 2026-07-29 — Rules v9: trigger-first line_height section (found by a new live test)
 
 New live-tier test `test/tool-invocation.mjs` asks the opposite question from
