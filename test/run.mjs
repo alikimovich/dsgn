@@ -122,7 +122,7 @@ const ELECTRON = [
 ];
 
 // live = the tests present in `verify` but not in `test`.
-const LIVE = ['agent-e2e', 'codex-e2e', 'controls-agent', 'sim-e2e'];
+const LIVE = ['agent-e2e', 'codex-e2e', 'controls-agent', 'tool-invocation', 'sim-e2e'];
 
 const TIERS = {
   unit: { runner: 'bun', build: false, tests: UNIT },
