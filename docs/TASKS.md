@@ -14,22 +14,9 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       `src/main/ast-walk.ts`, `LayersPanel.tsx`/`LayersTree.tsx`.
       `test/layers-move.mjs` (unit), `test/layers-panel.mjs` (electron, new
       `test/fixtures/layers-app/`). See PROGRESS 2026-07-29.
-- [ ] **Follow-up: reparenting (`inside`).** Currently always `needsAgent`.
-      Flagged as possibly PERMANENTLY agent-routed rather than a guaranteed
-      future build — the scope-safety cost (does the moved subtree reference
-      locals only valid in its old position?) is real; revisit only if usage
-      data shows demand.
-- [ ] **Follow-up: cross-parent and cross-file moves.** Same reasoning as
-      reparenting — bigger scope-safety and import-resolution cost than v1's
-      same-parent restriction buys back in mechanized cases.
-- [ ] **Follow-up: "save this value as a token"-style promotion isn't
-      applicable here, but an analogous "attribute/text live-refresh" toggle
-      might be** — today a row's label (id/class/text) can go stale between
-      structural `MutationObserver` pings (deliberately not watched — see
-      PROGRESS); a manual refresh button covers it for now.
-- [ ] **Follow-up: virtualize the tree** for very large pages if the existing
-      node/depth/fan-out caps (`src/preview/layers.ts`) don't keep the panel
-      responsive in practice.
+      Deliberately NOT planned (dropped 2026-07-30, user call): reparenting /
+      cross-parent / cross-file moves stay agent-routed; label live-refresh
+      and tree virtualization only if real use demands them.
 
 ## Design tokens in the Styles panel (2026-07-28, user-requested) — SHIPPED
 
@@ -41,20 +28,10 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       New `src/shared/token-match.ts` + `src/main/style-tokens.ts`,
       `TokenSet` on `PanelState`, `.less`/`.sass` detection. `test/token-match.mjs`,
       extended `tw-styles.mjs` / `tokens.mjs` / `style-edit.mjs`. See PROGRESS 2026-07-28.
-- [ ] **Follow-up: edit a Svelte component's scoped `<style>` block.** Today an
-      element styled from its own `<style>` block (the common SvelteKit shape —
-      lkmv.ch is entirely this) can't be written by S1/S2, so a token pick seeds
-      the chat agent instead. A new strategy would resolve the element's selector
-      inside the component's `<style>` and rewrite the declaration in place.
-      Scope it as its own chunk: selector matching, specificity, nesting, and
-      preprocessor syntax (`lang="less"`) are all real work.
-- [ ] **Follow-up: "save this value as a token"** — promote a scrubbed value into
-      `.praxis/tokens.json` (which then wins detection), closing the loop for
-      projects with no token source yet.
-- [ ] **Follow-up: delete the dead `props:applyToken` path.** `TokenEdit` /
-      `applyTokenEdit` / `applySvelteTokenEdit` have had no renderer caller since
-      `TokenPalette.tsx` was removed; `styles:apply` now covers the use case.
-      Only `test/prop-edit*.mjs` exercise them.
+      Deliberately NOT planned (dropped 2026-07-30, user call): Svelte
+      scoped-`<style>` editing (token picks there keep seeding the agent),
+      "save this value as a token", and deleting the dead `props:applyToken`
+      path (dead-but-harmless; only `test/prop-edit*.mjs` exercise it).
 
 ## Vanilla HTML / static sites (2026-07-09, user-requested) — SHIPPED
 
