@@ -16,6 +16,7 @@
 import { ipcRenderer } from 'electron'
 import type { SelectedElement } from '../shared/api'
 import { FRAME_DATA_URI, FRAME_INSET } from '../shared/iphone-frame'
+import { buildLayersSnapshot, resolveLayerElement, type LayerFingerprint } from './layers'
 
 // Channels (preview ⇄ main). Kept local — main mirrors these strings.
 const SET_MODE = 'praxis:preview:set-select-mode'
@@ -41,6 +42,15 @@ const STYLES_CLEAR_PREVIEW = 'styles:clear-preview' // renderer → preload {pro
 const STYLES_READ = 'styles:read' // renderer → preload {id, props}
 const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null}
 const STYLES_REPLAY = 'styles:replay' // renderer → preload {prop, from, to}
+// Layers panel: bulk DOM-tree read (request-id round trip, like styles:read),
+// panel-driven select/hover by child-index path, and a watch toggle that arms
+// a MutationObserver only while the panel is open.
+const LAYERS_READ = 'layers:read' // renderer → preload {id}
+const LAYERS_READ_REPLY = 'layers:read-reply' // preload → renderer {id, snapshot}
+const LAYERS_CHANGED = 'layers:changed' // preload → renderer (debounced DOM-mutation ping)
+const LAYERS_SELECT = 'layers:select' // renderer → preload {path, fingerprint}
+const LAYERS_HOVER = 'layers:hover' // renderer → preload {path, fingerprint} | null
+const LAYERS_SET_WATCH = 'layers:set-watch' // renderer → preload boolean
 
 type CommentMode = 'comment' | 'annotate' | null
 
@@ -655,6 +665,94 @@ function describe(el: Element): SelectedElement {
     text: rawText ? rawText.slice(0, 120) : null,
     rect: { x: r.x, y: r.y, width: r.width, height: r.height },
     styles
+  }
+}
+
+// ---- Layers panel: bulk tree read, panel-driven select/hover, DOM watch -----
+
+function isValidFingerprint(fp: unknown): fp is LayerFingerprint {
+  const f = fp as LayerFingerprint | null | undefined
+  return !!f && typeof f.tag === 'string' && (f.source === null || typeof f.source === 'string')
+}
+
+/**
+ * A Layers row click. Reuses the exact same functions the real in-page click
+ * handler uses (`describe`/`showToolbar`/`setSelectionHighlight`), so the
+ * resulting SelectedElement carries a real rect/styles/selector and the normal
+ * persistent outline draws — no separate selection path to keep in sync.
+ * Ignored while an inline edit/comment composer is open, same guard `onMove`
+ * uses for HMR self-healing, so a Layers pick can't step on it.
+ */
+function layersSelect(path: number[], fingerprint: LayerFingerprint): void {
+  if (editing || commenting) return
+  const el = resolveLayerElement(path, fingerprint)
+  if (!el) return
+  ipcRenderer.send(PICKED, describe(el))
+  resetInput()
+  showToolbar(el)
+  setSelectionHighlight(el)
+}
+
+/** A Layers row hover — the transient hover box, not the persistent selection. */
+function layersHover(path: number[] | null, fingerprint: LayerFingerprint | null): void {
+  if (!path || !fingerprint) {
+    hideOverlay()
+    return
+  }
+  const el = resolveLayerElement(path, fingerprint)
+  if (el) drawOverlay(el)
+  else hideOverlay()
+}
+
+let layersObserver: MutationObserver | null = null
+let layersDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let layersFirstMutationAt = 0
+const LAYERS_DEBOUNCE_MS = 400
+// Hard ceiling so a page that never stops mutating can't starve the debounce
+// indefinitely — force-emit once this much time has passed since the first
+// unflushed mutation in the current burst.
+const LAYERS_MAX_WAIT_MS = 2000
+
+function emitLayersChanged(): void {
+  if (layersDebounceTimer) {
+    clearTimeout(layersDebounceTimer)
+    layersDebounceTimer = null
+  }
+  layersFirstMutationAt = 0
+  ipcRenderer.send(LAYERS_CHANGED)
+}
+
+function onLayersMutation(): void {
+  const now = Date.now()
+  if (!layersFirstMutationAt) layersFirstMutationAt = now
+  if (now - layersFirstMutationAt >= LAYERS_MAX_WAIT_MS) {
+    emitLayersChanged()
+    return
+  }
+  if (layersDebounceTimer) clearTimeout(layersDebounceTimer)
+  layersDebounceTimer = setTimeout(emitLayersChanged, LAYERS_DEBOUNCE_MS)
+}
+
+/**
+ * Arm/disarm a debounced structural watch, gated to "panel open" so it costs
+ * nothing otherwise. `childList`-only, no `attributes`/`characterData`: class
+ * or text churn doesn't invalidate a child-index PATH, only a row's cosmetic
+ * label (a manual refresh covers that) — watching them would multiply
+ * mutation-callback volume on a busy page for nothing structural.
+ */
+function setLayersWatch(on: boolean): void {
+  if (on) {
+    if (layersObserver || !document.body) return
+    layersObserver = new MutationObserver(onLayersMutation)
+    layersObserver.observe(document.body, { childList: true, subtree: true })
+  } else {
+    layersObserver?.disconnect()
+    layersObserver = null
+    if (layersDebounceTimer) {
+      clearTimeout(layersDebounceTimer)
+      layersDebounceTimer = null
+    }
+    layersFirstMutationAt = 0
   }
 }
 
@@ -1391,4 +1489,20 @@ window.addEventListener('load', () => {
     if (typeof p?.prop === 'string' && typeof p?.from === 'string' && typeof p?.to === 'string')
       replayStyle(p.prop, p.from, p.to)
   })
+  ipcRenderer.on(LAYERS_READ, (_e, p: { id?: unknown }) => {
+    if (typeof p?.id !== 'number') return
+    ipcRenderer.send(LAYERS_READ_REPLY, { id: p.id, snapshot: buildLayersSnapshot() })
+  })
+  ipcRenderer.on(LAYERS_SELECT, (_e, p: { path?: unknown; fingerprint?: unknown }) => {
+    if (!Array.isArray(p?.path) || !isValidFingerprint(p?.fingerprint)) return
+    layersSelect(p.path as number[], p.fingerprint)
+  })
+  ipcRenderer.on(LAYERS_HOVER, (_e, p: { path?: unknown; fingerprint?: unknown } | null) => {
+    if (!p || !Array.isArray(p.path) || !isValidFingerprint(p.fingerprint)) {
+      layersHover(null, null)
+      return
+    }
+    layersHover(p.path as number[], p.fingerprint)
+  })
+  ipcRenderer.on(LAYERS_SET_WATCH, (_e, on: boolean) => setLayersWatch(!!on))
 }

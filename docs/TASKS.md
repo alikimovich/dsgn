@@ -3,6 +3,34 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Layers panel (2026-07-29, user-requested) — SHIPPED
+
+- [x] **DOM tree + click-select + drag-to-reorder.** ✅ 2026-07-29 — a tree of
+      the previewed page above the chat, toggled from the composer. Selecting
+      a row reuses the real in-page click path; dragging writes a real source
+      edit for a same-parent sibling reorder (React/Svelte/static HTML), and
+      seeds a chat prompt for anything ambiguous (list items, reparenting,
+      cross-file). New `src/preview/layers.ts`, `src/main/move-node*.ts`,
+      `src/main/ast-walk.ts`, `LayersPanel.tsx`/`LayersTree.tsx`.
+      `test/layers-move.mjs` (unit), `test/layers-panel.mjs` (electron, new
+      `test/fixtures/layers-app/`). See PROGRESS 2026-07-29.
+- [ ] **Follow-up: reparenting (`inside`).** Currently always `needsAgent`.
+      Flagged as possibly PERMANENTLY agent-routed rather than a guaranteed
+      future build — the scope-safety cost (does the moved subtree reference
+      locals only valid in its old position?) is real; revisit only if usage
+      data shows demand.
+- [ ] **Follow-up: cross-parent and cross-file moves.** Same reasoning as
+      reparenting — bigger scope-safety and import-resolution cost than v1's
+      same-parent restriction buys back in mechanized cases.
+- [ ] **Follow-up: "save this value as a token"-style promotion isn't
+      applicable here, but an analogous "attribute/text live-refresh" toggle
+      might be** — today a row's label (id/class/text) can go stale between
+      structural `MutationObserver` pings (deliberately not watched — see
+      PROGRESS); a manual refresh button covers it for now.
+- [ ] **Follow-up: virtualize the tree** for very large pages if the existing
+      node/depth/fan-out caps (`src/preview/layers.ts`) don't keep the panel
+      responsive in practice.
+
 ## Design tokens in the Styles panel (2026-07-28, user-requested) — SHIPPED
 
 - [x] **Name the token instead of the value, and offer a picker.** ✅ 2026-07-28

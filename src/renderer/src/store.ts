@@ -1316,6 +1316,60 @@ export const usePropsIsland = create<PropsIslandState>((set) => ({
   setOpen: (open) => set({ open })
 }))
 
+// Layers panel visibility + resizable height, persisted across launches like
+// the rail's collapse preference.
+const LAYERS_OPEN_KEY = 'praxis:layers-open'
+const LAYERS_HEIGHT_KEY = 'praxis:layers-height'
+const LAYERS_HEIGHT_MIN = 120
+const LAYERS_HEIGHT_MAX = 420
+const LAYERS_HEIGHT_DEFAULT = 220
+
+const readLayersOpen = (): boolean => {
+  try {
+    return localStorage.getItem(LAYERS_OPEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const readLayersHeight = (): number => {
+  try {
+    const n = Number(localStorage.getItem(LAYERS_HEIGHT_KEY))
+    return Number.isFinite(n) && n >= LAYERS_HEIGHT_MIN && n <= LAYERS_HEIGHT_MAX
+      ? n
+      : LAYERS_HEIGHT_DEFAULT
+  } catch {
+    return LAYERS_HEIGHT_DEFAULT
+  }
+}
+
+interface LayersPanelState {
+  open: boolean
+  height: number
+  setOpen: (open: boolean) => void
+  setHeight: (height: number) => void
+}
+
+export const useLayersPanel = create<LayersPanelState>((set) => ({
+  open: readLayersOpen(),
+  height: readLayersHeight(),
+  setOpen: (open) => {
+    try {
+      localStorage.setItem(LAYERS_OPEN_KEY, open ? '1' : '0')
+    } catch {
+      /* private mode / no storage — keep it in memory only */
+    }
+    set({ open })
+  },
+  setHeight: (height) => {
+    const clamped = Math.min(LAYERS_HEIGHT_MAX, Math.max(LAYERS_HEIGHT_MIN, height))
+    try {
+      localStorage.setItem(LAYERS_HEIGHT_KEY, String(clamped))
+    } catch {
+      /* private mode / no storage — keep it in memory only */
+    }
+    set({ height: clamped })
+  }
+}))
 
 /** The on-open "set this project up for editing" offer. */
 interface SetupState {
@@ -1552,3 +1606,6 @@ export const usePreviewLocation = create<PreviewLocationState>((set) => ({
 ;(
   window as unknown as { __praxisPreviewLocation?: typeof usePreviewLocation }
 ).__praxisPreviewLocation = usePreviewLocation
+;(window as unknown as { __praxisLayersPanel?: typeof useLayersPanel }).__praxisLayersPanel =
+  useLayersPanel
+;(window as unknown as { __praxisComposer?: typeof useComposer }).__praxisComposer = useComposer

@@ -2,6 +2,148 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-29 — Layers panel: DOM tree + drag-to-reorder (user-requested)
+
+A v0.app-style Layers panel — a tree of the previewed page's DOM at the top of
+the chat column, click a row to select, drag a row to reorder in real source.
+
+**The decisive constraint, found before writing anything:** a
+`data-praxis-source` stamp identifies a JSX/element node in *source*, not a
+rendered *instance*. A `.map()` over N items puts the identical stamp on N DOM
+nodes — there is no way to tell "move rendered item 3 before item 1" apart from
+the reverse, because in source there's only one node. So drag-to-reorder is a
+real code edit for distinct siblings, and an inherently agent-routed judgment
+call for list items/reparenting/cross-file — the same `needsAgent` fallback
+every other direct-edit engine in this app already uses.
+
+**Tree read** (`src/preview/layers.ts`, new preload sibling module) walks from
+`document.body` — not `documentElement`, which is where all of Praxis's own
+overlay chrome lives, so it's excluded for free. Node identity is a DOM
+child-index path (`[0,2,1]`), recomputed fresh on every read and never
+trusted across snapshots: `data-praxis-source` isn't unique and `cssPath` is
+too lossy to serve as a handle. A bulk read is a request-id round trip
+(`layers:read`/`layers:read-reply`), the same shape as the Styles tab's
+`styles:read` — the preview preload is sandboxed, so any bulk read of its
+isolated world can only ever be message-passing, never `executeJavaScript`.
+
+**Selection reuses the real click path.** A Layers row click sends
+`layers:select {path, fingerprint}`; the preload re-resolves the path
+(re-validating a `{tag, source}` fingerprint — the same self-healing
+discipline `resolveStyleTarget()` uses), then calls the *exact* functions the
+real in-page click handler calls (`describe`/`showToolbar`/
+`setSelectionHighlight`). Zero new renderer-side selection logic, a real
+in-page outline, and it works independent of Select-mode by construction —
+none of those functions gate on it.
+
+**Freshness** is a debounced, `childList`-only `MutationObserver`, armed only
+while the panel is open (`layers:set-watch`, mirroring `SET_FRAME`'s exact
+on/off shape) plus explicit reads on open/`preview:url-changed`/after a
+successful move. Deliberately not wired to every prop/style edit elsewhere —
+the observer already catches anything that changes the tree's *shape*, and a
+same-shape edit (recoloring, retyping) has nothing here to go stale.
+
+**The panel** (`LayersPanel.tsx` host + `LayersTree.tsx` pure render/drag) sits
+as a `flex-none` sibling above `ChatPanel`'s `<Conversation>`, with the same
+`pt-11` top padding `ConversationContent` already uses to clear the
+`.chat-drag` window-drag strip and the top gradient fade. Hand-rolled, not
+`@pierre/trees` (already a dep, used in the pop-out code editor): its model is
+alphabetically-sorted path strings with `directory|file` semantics, the wrong
+shape for a DOM tree where duplicate-tag siblings must stay in exact DOM order
+and the drop gesture is "between these two specific siblings," not "into a
+folder." Every existing drag interaction in this codebase (resize handles,
+ScrubInput, BezierEditor) is already hand-rolled pointer math with no dnd
+library anywhere.
+
+**The move engine** ships for React, Svelte, and static HTML in v1 — mirroring
+the codebase's existing per-framework pairing (`props.ts`/`props-svelte.ts`).
+React Native and Vue are out, not deferred: RN's preview is an iOS-simulator
+MJPEG bridge with no live DOM, and Vue uses its own devtools inspector instead
+of a stamp — neither has anything for a mover to hook into yet.
+
+v1 scope is deliberately narrow: **same-file, same-immediate-parent
+`before`/`after` only.** `inside` (reparenting) is always `needsAgent` — same
+parent is the one case where scope-safety (does the moved node reference
+locals only valid at its old position?) is trivially guaranteed, and it's also
+an indentation win: identical nesting depth means the target's own leading
+whitespace is already the right template for the moved node's new position.
+The gates, in order: same stamp on both sides → `needsAgent` (cheapest,
+decisive — the case a `.map()`/`{#each}` produces); different files →
+`needsAgent`; not true siblings under one parent → `needsAgent`; either side
+statically inside a `.map()`/`.filter().map()` call, a `{cond && <X/>}`/
+ternary container (React), or an `{#each}`/`{#if}` block (Svelte) →
+`needsAgent` (catches the case where the *current* render shows one instance
+but the template isn't safe to hand-splice). None of this trusts the renderer
+for correctness — the Layers tree's own `dupStamp` flag (computed client-side
+during the walk) is only a pre-flight UX hint that disables dragging on rows
+already known to be templated; the actual gate is main re-deriving everything
+from source.
+
+**The splice** (`src/main/move-node-splice.ts`, new, deliberately dependency-
+free) rebuilds the parent's entire content span from an ordered list of
+original child text runs, rather than incremental substring surgery — every
+untouched sibling's text is copied byte-for-byte, and only the separator
+immediately around the moved node is recomputed. One real bug caught by its
+own unit test before it ever reached the Electron tier: the first version
+borrowed the separator gap *after* the target when inserting `after`, which
+is a sibling gap for every target except the *last* child, where it's
+actually the boundary gap before the parent's closing tag (usually
+less-indented or absent) — fixed by always preferring the gap *before* target
+regardless of `position`, falling back to the one after only when target is
+first. `test/layers-move.mjs` pins this with hand-built `{start,end}` node
+stand-ins over literal strings — no real parser needed, since the algorithm
+only ever touches spans + a whitespace predicate.
+
+**A parent-tracking primitive didn't exist anywhere in this codebase** — every
+existing AST walker (`props.ts`'s `collectNodes`, `props-svelte.ts`'s
+`collectElements`, `html-source.ts`'s `walkElements`) only collects nodes
+matching a type, never tracking parent/children. New shared, framework-
+agnostic `src/main/ast-walk.ts` (`findContainer`/`ancestorChain`, duck-typed
+over `.type`) is used by both the React and Svelte movers; static HTML gets
+its own smaller version instead, because parse5's tree carries `parentNode`
+back-references that a naive generic key-walk would loop on — descending via
+`childNodes` only sidesteps that risk entirely rather than special-casing it.
+
+**Two `props.ts`/`props-svelte.ts` refactors, additive only, zero behavior
+change:** `findElementAtLine` split into `locateJsxOpening(ast, line, col)` +
+a thin parse wrapper, so the movers can parse a file ONCE and locate both the
+dragged and target elements against the identical ast (their JSX node objects
+must be reference-equal for the container lookup to work at all); and
+`parseFile`/`collectNodes`/`BabelNode`, `parseSvelte`/`Node`, all promoted
+from module-private to exported, mirroring what was already exported.
+
+**Why the splice algorithm lives in its own file, and why the unit test only
+covers it:** `move-node.ts` imports `commitEdit`/`resolveSource` from
+`props.ts`, which imports `electron` at module scope — so the whole file (and
+anything that imports it) can't load under plain bun. `control-manifest.ts`/
+`control-panels.ts` already established the fix for exactly this shape:
+factor the pure part into its own electron-free module. The AST-aware gating
+(same-source, same-parent, templated-container detection) still can't be
+unit-tested this way — it's covered end-to-end in `test/layers-panel.mjs`
+instead, against a new fixture (`test/fixtures/layers-app/`) with a real
+`src/Layers.tsx` backing a served `index.html`: a `<ul>` of three distinctly-
+stamped `<li>`s (the direct-move path) and a second `<ul>` whose three
+rendered `<li>`s all carry the *identical* stamp (the `.map()`/needsAgent
+path). The drag itself is dispatched as real `PointerEvent`s at the rows' own
+on-screen coordinates, driving `LayersTree`'s actual pointer-gesture code —
+not a direct engine call standing in for the UI.
+
+**One environment-driven test fix, not a product bug:** `win.click()`
+(Playwright's real actionability-checked click) stalled for its full 30s
+default timeout on this machine for reasons unrelated to the feature — the
+same class of environment quirk that affects the props island elsewhere in
+this suite (documented in the 2026-07-28 entry). Dispatching the click via
+`element.click()` inside `page.evaluate()` instead — the same event the
+button's `onClick` receives either way — resolved it instantly. Confirmed via
+a throwaway probe script that the feature itself (preview load, panel open,
+10 tree rows, click-select, and the drag reordering `Alpha/Beta/Gamma` →
+`Gamma/Alpha/Beta` in `src/Layers.tsx` with exactly the right indentation)
+all worked correctly the whole time — this was purely a test-harness fix.
+
+Tests: `test/layers-move.mjs` (new, unit tier) and `test/layers-panel.mjs`
+(new, electron tier) both green; `node test/run.mjs unit` 40/40. Follow-ups
+(reparenting, a "save as token"-style promotion, whether `inside` is ever
+worth mechanizing) are in `docs/TASKS.md`.
+
 ## 2026-07-28 — Design tokens in the Styles panel (user-requested)
 
 The Styles tab was token-blind: it read computed CSS and showed the raw value —

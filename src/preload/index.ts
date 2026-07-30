@@ -21,6 +21,10 @@ import type {
   GithubConnectOptions,
   GithubConnectResult,
   ImageAttachment,
+  LayerFingerprint,
+  LayersSnapshot,
+  MoveNodeRequest,
+  MoveNodeResult,
   PermissionMode,
   PreviewComment,
   PropEdit,
@@ -252,6 +256,21 @@ const api: PraxisApi = {
       ipcRenderer.invoke('styles:read', props),
     replay: (prop: string, from: string, to: string): void =>
       ipcRenderer.send('styles:replay', { prop, from, to })
+  },
+  layers: {
+    read: (): Promise<LayersSnapshot | null> => ipcRenderer.invoke('layers:read'),
+    onChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => cb()
+      ipcRenderer.on('layers:changed', listener)
+      return () => ipcRenderer.removeListener('layers:changed', listener)
+    },
+    select: (path: number[], fingerprint: LayerFingerprint): void =>
+      ipcRenderer.send('layers:select', { path, fingerprint }),
+    hover: (path: number[] | null, fingerprint: LayerFingerprint | null): void =>
+      ipcRenderer.send('layers:hover', path && fingerprint ? { path, fingerprint } : null),
+    setWatch: (on: boolean): void => ipcRenderer.send('layers:set-watch', on),
+    move: (root: string, req: MoveNodeRequest): Promise<MoveNodeResult> =>
+      ipcRenderer.invoke('layers:move', root, req)
   },
   controls: {
     get: (root: string, q: { files: string[]; component?: string }): Promise<ResolvedControlPanel[]> =>

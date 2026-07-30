@@ -88,7 +88,7 @@ interface FoundElement {
   ast: BabelNode
 }
 
-interface BabelNode {
+export interface BabelNode {
   type: string
   start: number
   end: number
@@ -152,7 +152,7 @@ function jsxName(node: BabelNode | { type: string; name?: string } | undefined):
 }
 
 /** Recursively collect every node of a given `.type` in the tree. */
-function collectNodes(node: unknown, type: string, out: BabelNode[]): void {
+export function collectNodes(node: unknown, type: string, out: BabelNode[]): void {
   if (!node || typeof node !== 'object') return
   const n = node as BabelNode
   if (n.type === type) out.push(n)
@@ -164,7 +164,7 @@ function collectNodes(node: unknown, type: string, out: BabelNode[]): void {
   }
 }
 
-async function parseFile(code: string): Promise<BabelNode> {
+export async function parseFile(code: string): Promise<BabelNode> {
   const { parse } = await loadBabel()
   return parse(code, {
     sourceType: 'module',
@@ -174,24 +174,28 @@ async function parseFile(code: string): Promise<BabelNode> {
 }
 
 /**
- * The JSX opening element the stamp refers to. Multiple elements can share a
- * start line (e.g. `<li>Label <Badge/></li>`), so when the stamp carries a
- * column we match it; otherwise we take the innermost element starting on that
- * line (a DOM click resolves to the deepest stamped element), falling back to
- * the smallest element that encloses the line.
+ * The JSX opening element the stamp refers to, given an ALREADY-PARSED ast.
+ * Multiple elements can share a start line (e.g. `<li>Label <Badge/></li>`),
+ * so when the stamp carries a column we match it; otherwise we take the
+ * innermost element starting on that line (a DOM click resolves to the
+ * deepest stamped element), falling back to the smallest element that
+ * encloses the line.
+ *
+ * Split out from `findElementAtLine` so a caller needing TWO locations in the
+ * same file (the Layers panel's move engine) can parse once and locate both
+ * against the same ast — the JSX element objects then stay reference-equal,
+ * which is what its parent/sibling lookup depends on.
  */
-export async function findElementAtLine(
-  code: string,
+export function locateJsxOpening(
+  ast: BabelNode,
   line: number,
   column?: number
-): Promise<FoundElement | null> {
-  const ast = await parseFile(code)
+): { name: string; opening: BabelNode } | null {
   const openings: BabelNode[] = []
   collectNodes(ast, 'JSXOpeningElement', openings)
-  const wrap = (o: BabelNode): FoundElement => ({
+  const wrap = (o: BabelNode): { name: string; opening: BabelNode } => ({
     name: jsxName(o.name as BabelNode),
-    opening: o,
-    ast
+    opening: o
   })
 
   const sameLine = openings.filter((o) => o.loc?.start.line === line)
@@ -213,6 +217,16 @@ export async function findElementAtLine(
     .filter((o) => (o.loc?.start.line ?? 0) <= line && (o.loc?.end.line ?? 0) >= line)
     .sort((a, b) => b.start - a.start)[0]
   return enclosing ? wrap(enclosing) : null
+}
+
+export async function findElementAtLine(
+  code: string,
+  line: number,
+  column?: number
+): Promise<FoundElement | null> {
+  const ast = await parseFile(code)
+  const hit = locateJsxOpening(ast, line, column)
+  return hit ? { ...hit, ast } : null
 }
 
 export interface CurrentAttr {

@@ -88,6 +88,15 @@ src/
     style-tokens.ts re-resolves a design-token pick from the island (name+group
                     only) against the project's own tokens and decides what to
                     write — a `var(--name)` reference or a Tailwind token class
+    move-node.ts / move-node-svelte.ts / move-node-html.ts   the Layers panel's
+                    drag-to-reorder engines (React/Svelte/static HTML): same-
+                    parent sibling reorder writes real source; anything
+                    ambiguous (shared stamp, cross-file, templated by a
+                    .map()/{#each}) → needsAgent. move-node-splice.ts is the
+                    shared, dependency-free rebuild-from-scratch splice all
+                    three call; ast-walk.ts is the shared parent/ancestor walk
+                    (React + Svelte; static HTML uses its own, to dodge parse5's
+                    parentNode back-references)
     control-manifest.ts / control-panels.ts   AI-surfaced control panels:
                     validate + anchor-lex + render literals (pure) and the
                     main-owned .dsgn/control-panels.json store + controls:* IPC
@@ -116,12 +125,17 @@ src/
   preview/preload.ts  SECOND preload, injected into the PREVIEWED app's
                     WebContentsView: element select/hover, comments, annotations.
                     Own tsconfig (tsconfig.preview.json)
+  preview/layers.ts DOM tree walk + child-index-path node resolution for the
+                    Layers panel (bulk read, panel-driven select/hover, the
+                    structural MutationObserver watch) — split out of preload.ts,
+                    which only wires the IPC into it
   shared/api.ts     the IPC contract — single source of truth for cross-process types
   shared/token-match.ts  which design tokens may be offered for a css property
                     and which one a computed value IS. Pure + used by BOTH main
                     (re-validating a pick) and the island (chips + picker)
   renderer/src/     React 18 UI: App.tsx, components/ (ChatPanel, PreviewPane,
-                    PropPanel, CodeDrawer, Rail, …), zustand store.ts, shadcn ui/
+                    PropPanel, CodeDrawer, Rail, LayersPanel + LayersTree, …),
+                    zustand store.ts, shadcn ui/
                     components/styles/  the Styles tab's rows + controls
                     (ScrubInput, ColorControl, BezierEditor, TokenPicker)
   ../bin/praxis.mjs the `praxis` CLI (launch + `--update`); owns the update

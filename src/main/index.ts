@@ -1,35 +1,36 @@
 import {
   app,
   BrowserWindow,
-  WebContentsView,
-  Menu,
-  ipcMain,
   dialog,
-  shell,
+  ipcMain,
+  Menu,
+  type MenuItemConstructorOptions,
   nativeImage,
   nativeTheme,
   powerMonitor,
-  type MenuItemConstructorOptions
+  shell,
+  WebContentsView
 } from 'electron'
 import { join } from 'path'
-import type { RecentMenuEntry, SelectedElement } from '../shared/api'
-import { registerDevServerIpc } from './devserver'
-import { registerSimulatorIpc } from './simulator'
+import type { MoveNodeRequest, RecentMenuEntry, SelectedElement } from '../shared/api'
 import { registerAgentIpc } from './agent'
-import { registerPropsIpc } from './props'
-import { registerStylesIpc } from './styles'
-import { registerControlsIpc } from './control-panels'
 import { registerAnnotationsIpc } from './annotations'
-import { registerTokensIpc } from './tokens'
-import { registerSetupIpc } from './setup'
-import { ensureBranch, switchBranch, listBranches, checkoutBranch } from './git'
-import { listProjectFiles } from './file-tree'
-import { createProject } from './scaffold'
+import { registerControlsIpc } from './control-panels'
+import { registerDevServerIpc } from './devserver'
 import { registerDiagnoseIpc } from './diagnose'
-import { registerUpdateIpc } from './update-ipc'
 import { registerFeedbackIpc } from './feedback'
+import { listProjectFiles } from './file-tree'
+import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
 import { registerGithubIpc } from './github'
+import { applyMoveNode } from './move-node'
 import { registerPreviewSource } from './preview-state'
+import { registerPropsIpc } from './props'
+import { createProject } from './scaffold'
+import { registerSetupIpc } from './setup'
+import { registerSimulatorIpc } from './simulator'
+import { registerStylesIpc } from './styles'
+import { registerTokensIpc } from './tokens'
+import { registerUpdateIpc } from './update-ipc'
 
 // Product name — drives the macOS app menu label and the About panel. Set at
 // module load (before app is ready) so the menu bar reads "Praxis", not "Electron".
@@ -119,6 +120,10 @@ let commentModeActive: 'comment' | 'annotate' | null = null
 // Mobile viewport: draw the iPhone bezel INSIDE the preview page (pointer-events
 // none) so it overlays the app's screen corners yet passes clicks/selection through.
 let frameModeActive = false
+// Layers panel: whether the renderer wants the preload's MutationObserver armed.
+// Same lifecycle as the flags above — preload-local state that dies on every
+// fresh injection, re-armed on did-finish-load below.
+let layersWatchActive = false
 // Channels mirrored in src/preview/preload.ts (the injected preview preload).
 const PREVIEW_SET_MODE = 'praxis:preview:set-select-mode'
 const PREVIEW_PICKED = 'praxis:preview:element-picked'
@@ -135,6 +140,12 @@ const PREVIEW_TOOLBAR_ACTION = 'praxis:preview:toolbar-action'
 const PREVIEW_CLEAR_SELECTED = 'praxis:preview:clear-selected'
 const PREVIEW_SET_STATUS = 'praxis:preview:set-status'
 const PREVIEW_TOGGLE_SELECT = 'praxis:preview:toggle-select'
+const LAYERS_READ = 'layers:read'
+const LAYERS_READ_REPLY = 'layers:read-reply'
+const LAYERS_CHANGED = 'layers:changed'
+const LAYERS_SELECT = 'layers:select'
+const LAYERS_HOVER = 'layers:hover'
+const LAYERS_SET_WATCH = 'layers:set-watch'
 
 // Launch-status pill text (shown inside the preview); re-pushed after loads.
 let previewStatusText: string | null = null
@@ -458,6 +469,7 @@ function ensurePreviewView(): WebContentsView {
       if (selectModeActive) wc.send(PREVIEW_SET_MODE, true)
       if (commentModeActive) wc.send(PREVIEW_SET_COMMENT_MODE, commentModeActive)
       if (frameModeActive) wc.send(PREVIEW_SET_FRAME, true)
+      if (layersWatchActive) wc.send(LAYERS_SET_WATCH, true)
       // Only re-send pins when there are some — an empty push would make the
       // preload build (and inject) the overlay host for nothing.
       if (annotationPins.length) wc.send(PREVIEW_SET_PINS, annotationPins)
@@ -504,6 +516,7 @@ function resetStalePreview(): void {
   selectModeActive = false
   commentModeActive = null
   frameModeActive = false
+  layersWatchActive = false
   annotationPins = []
 }
 
@@ -754,6 +767,7 @@ function registerPreviewIpc(): void {
     selectModeActive = false
     commentModeActive = null
     frameModeActive = false
+    layersWatchActive = false
     annotationPins = []
     ensurePreviewView().webContents.loadURL(PLACEHOLDER_HTML)
   })
@@ -954,6 +968,62 @@ function registerPreviewIpc(): void {
       sendToMain('preview:comment', payload)
     }
   )
+
+  // ── Layers panel ─────────────────────────────────────────────────────────
+  const fromMainForLayers = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
+    e.sender === mainWindow?.webContents
+
+  // Bulk DOM-tree read: request-id round trip, same shape as styles:read — the
+  // preview preload is sandboxed, so a bulk read of its isolated world can only
+  // ever be this kind of message-passing round trip, never executeJavaScript.
+  let layersReadSeq = 0
+  const pendingLayersReads = new Map<number, (snapshot: unknown) => void>()
+  ipcMain.on(LAYERS_READ_REPLY, (e, p: { id?: unknown; snapshot?: unknown }) => {
+    if (e.sender !== previewView?.webContents) return
+    const resolve = typeof p?.id === 'number' ? pendingLayersReads.get(p.id) : undefined
+    resolve?.(p?.snapshot ?? null)
+  })
+  ipcMain.handle('layers:read', (e): Promise<unknown> | null => {
+    if (!fromMainForLayers(e) || !previewView) return null
+    const id = ++layersReadSeq
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingLayersReads.delete(id)
+        resolve(null)
+      }, 800)
+      pendingLayersReads.set(id, (snapshot) => {
+        clearTimeout(timer)
+        pendingLayersReads.delete(id)
+        resolve(snapshot)
+      })
+      previewView?.webContents.send(LAYERS_READ, { id })
+    })
+  })
+  ipcMain.on('layers:select', (e, p: { path: number[]; fingerprint: unknown }) => {
+    if (!fromMainForLayers(e)) return
+    previewView?.webContents.send(LAYERS_SELECT, p)
+  })
+  ipcMain.on('layers:hover', (e, p: { path: number[]; fingerprint: unknown } | null) => {
+    if (!fromMainForLayers(e)) return
+    previewView?.webContents.send(LAYERS_HOVER, p)
+  })
+  ipcMain.on('layers:set-watch', (e, on: boolean) => {
+    if (!fromMainForLayers(e)) return
+    layersWatchActive = !!on
+    previewView?.webContents.send(LAYERS_SET_WATCH, layersWatchActive)
+  })
+  // Debounced structural-change ping from the preload → renderer (the renderer
+  // decides whether/when to re-`layers:read`).
+  ipcMain.on(LAYERS_CHANGED, (e) => {
+    if (e.sender !== previewView?.webContents) return
+    sendToMain('layers:changed')
+  })
+  // Drag-to-reorder: writes real source for a same-parent sibling move;
+  // anything ambiguous reports `needsAgent` instead (see move-node.ts).
+  ipcMain.handle('layers:move', (e, root: string, req: MoveNodeRequest) => {
+    if (!fromMainForLayers(e)) return null
+    return applyMoveNode(root, req)
+  })
 
   ipcMain.handle('project:pick', async (): Promise<string | null> => {
     if (!mainWindow) return null

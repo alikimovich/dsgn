@@ -394,6 +394,66 @@ export interface SelectedElement {
   styles: Record<string, string>
 }
 
+/**
+ * One row in the Layers panel's DOM tree. `path` is a child-index path from
+ * `document.body` (`[0,2,1]`) — recomputed fresh on every read, never a
+ * durable id: `data-praxis-source` stamps aren't unique (a `.map()` puts the
+ * same stamp on every rendered item) and a CSS selector is too lossy, so this
+ * is the only workable handle. Every action that resolves a path back to a
+ * live element re-validates the `{tag, source}` fingerprint first.
+ */
+export interface LayerNode {
+  path: number[]
+  parentPath: number[] | null
+  depth: number
+  tag: string
+  id: string | null
+  classes: string[]
+  source: string | null
+  componentSource: string | null
+  text: string | null
+  childCount: number
+  /** This stamp appears more than once in the snapshot — a client-side UX
+   *  hint only (grey out dragging), never the correctness boundary. */
+  dupStamp: boolean
+}
+
+export interface LayersSnapshot {
+  nodes: LayerNode[]
+  truncated: boolean
+  totalSeen: number
+}
+
+/** Identifies a layer node across the renderer↔preload boundary for select/hover. */
+export interface LayerFingerprint {
+  tag: string
+  source: string | null
+}
+
+/**
+ * A Layers-panel drag-to-reorder request. Both sides are identified by their
+ * `data-praxis-source` stamp — main never needs the DOM path, only the
+ * renderer does (to resolve rows back to elements). `sessionId` is a UUID
+ * minted client-side once per drag gesture: it becomes the `commitEdit`
+ * coalesce key, and deliberately never coalesces with anything else — a move
+ * shifts every later line in the file, invalidating subsequent stamps until
+ * the next HMR restamp, so reusing a stamp-based key would misbehave across
+ * repeated drags.
+ */
+export interface MoveNodeRequest {
+  dragged: { source: string }
+  target: { source: string }
+  position: 'before' | 'after' | 'inside'
+  sessionId: string
+}
+
+export interface MoveNodeResult {
+  applied: boolean
+  needsAgent?: boolean
+  agentPrompt?: string
+  error?: string
+}
+
 /** Figma-style inline overlay modes: comment-to-agent (C) or annotation (Y). */
 export type CommentMode = 'comment' | 'annotate' | null
 
@@ -1011,6 +1071,29 @@ export interface PraxisApi {
     /** Replay a transition on the selected element: jump to `from` with
      *  transitions disabled, force reflow, then set `to` so it animates. */
     replay: (prop: string, from: string, to: string) => void
+  }
+  /** The Layers panel: a tree of the previewed page's DOM, panel-driven
+   *  select/hover, and drag-to-reorder that writes back into source. */
+  layers: {
+    /** A full snapshot of the previewed page's DOM tree. Null on timeout / no
+     *  preview (mirrors `styles.read`'s contract). */
+    read: () => Promise<LayersSnapshot | null>
+    /** Fires on a debounced structural DOM change while the watch is armed —
+     *  the renderer decides whether/when to re-`read()`. */
+    onChanged: (cb: () => void) => () => void
+    /** Select the element at `path` — routes through the preview's normal
+     *  click-pick path (`describe`/`showToolbar`/outline), independent of
+     *  Select-mode. */
+    select: (path: number[], fingerprint: LayerFingerprint) => void
+    /** Hover-highlight the element at `path` (the transient box); null clears it. */
+    hover: (path: number[] | null, fingerprint: LayerFingerprint | null) => void
+    /** Arm/disarm the preload's structural MutationObserver — only while the
+     *  panel is open, so an idle panel costs nothing. */
+    setWatch: (on: boolean) => void
+    /** Drag-to-reorder: writes a real source edit for a same-parent sibling
+     *  move; anything ambiguous (list items, reparenting, cross-file) reports
+     *  `needsAgent` with a ready-made prompt instead. */
+    move: (root: string, req: MoveNodeRequest) => Promise<MoveNodeResult>
   }
   /** AI-surfaced custom-control panels (v10) — manifests persisted by main in
    *  the repo's `.praxis/control-panels.json`, values resolved fresh per read. */
