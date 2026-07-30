@@ -1,5 +1,5 @@
 /**
- * praxis agent rules (v8 R) — pure unit test of the rules builder. Runs under bun
+ * praxis agent rules (v9 R) — pure unit test of the rules builder. Runs under bun
  * (no electron), like project-key/xcode/git.
  *
  * Run with: bun test/rules.mjs
@@ -17,7 +17,7 @@ const assert = (cond, msg) => {
 const r = praxisRules()
 assert(typeof r === 'string' && r.length > 0, 'rules render to a non-empty string')
 assert(typeof PRAXIS_RULES_VERSION === 'number', 'version is a number')
-assert(PRAXIS_RULES_VERSION === 8, 'version bumped to 8')
+assert(PRAXIS_RULES_VERSION === 9, 'version bumped to 9')
 assert(r.includes(`v${PRAXIS_RULES_VERSION}`), 'rules carry the version marker')
 // v3 naming — the product is Praxis in the rule text now.
 assert(/praxis/i.test(r), 'names the product Praxis')
@@ -71,7 +71,12 @@ assert(/color_scale/.test(withTools), 'previewTools: teaches color_scale')
 assert(/layered_shadow/.test(withTools), 'previewTools: teaches layered_shadow')
 assert(!/fluid_clamp/.test(r), 'default rendering omits fluid_clamp')
 // R8a (line-height) — size-aware line_height calculator rides with previewTools.
+// v9: promoted to its own trigger-first section ("Whenever you write or change
+// text styles…") — the buried calculator bullet never made the agent reach for it
+// (caught by test/tool-invocation.mjs).
 assert(/line_height/.test(withTools), 'previewTools: teaches line_height')
+assert(/type metrics \(line_height\)/i.test(withTools), 'previewTools: line_height has its own section')
+assert(/whenever you write or change text styles/i.test(withTools), 'previewTools: line_height trigger-first phrasing')
 assert(!/line_height/.test(r), 'default rendering omits line_height')
 // R8b (skills install) — offer-to-install skill packs rides with previewTools too.
 assert(/list_recommended_skills/.test(withTools), 'previewTools: teaches list_recommended_skills')

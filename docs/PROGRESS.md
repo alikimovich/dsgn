@@ -2,7 +2,25 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
-## 2026-07-29 — Layers panel: DOM tree + drag-to-reorder (user-requested)
+## 2026-07-29 — Rules v9: trigger-first line_height section (found by a new live test)
+
+New live-tier test `test/tool-invocation.mjs` asks the opposite question from
+every other tool test: not "does the tool work when called" but "do the rules
+make the agent CALL it at all", from natural design prompts that never name a
+tool. First run caught a real miss: `check_contrast` fired spontaneously,
+`line_height` never did — the agent hand-wrote the CSS instead.
+
+The difference was rule *shape*, not tool quality: `check_contrast` opens its
+own section with a trigger condition ("Whenever you pick, change, or review a
+text/UI color pair…"), while `line_height` was the fourth bullet in the shared
+calculators list, phrased as value substitution ("not a hardcoded 1.5").
+Adding body copy doesn't pattern-match "exact math you should not eyeball", so
+the push never landed — even though the SDK tool description already said
+"Call this WHENEVER you set a font-size or line-height". Lesson: the always-on
+rules steer tool *reach*; descriptions only matter once the model is already
+looking. Fix (v9): `line_height` got its own "Type metrics" section with the
+same trigger-first phrasing, covering new text content (headings/body/captions)
+explicitly. Both probes now pass live; `test/rules.mjs` pins the new section.
 
 A v0.app-style Layers panel — a tree of the previewed page's DOM at the top of
 the chat column, click a row to select, drag a row to reorder in real source.

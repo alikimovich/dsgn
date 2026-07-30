@@ -1,5 +1,5 @@
 /**
- * Praxis agent rules (v8 R) — a small, VERSIONED set of operating instructions
+ * Praxis agent rules (v9 R) — a small, VERSIONED set of operating instructions
  * Praxis injects so the agent behaves consistently across turns and backends. One
  * source of truth: a pure string builder (no electron import) so it's unit-testable
  * and reusable by every provider.
@@ -13,7 +13,7 @@
  *
  * Bump PRAXIS_RULES_VERSION whenever the rule text changes (so logs/tests can pin it).
  */
-export const PRAXIS_RULES_VERSION = 8
+export const PRAXIS_RULES_VERSION = 9
 
 export function praxisRules(opts?: { previewTools?: boolean }): string {
   const lines: string[] = [
@@ -83,7 +83,15 @@ export function praxisRules(opts?: { previewTools?: boolean }): string {
       `nearest accessible color with the hue preserved — use that hex so the palette still`,
       `matches, rather than guessing. See the accessible-colors skill.`,
       ``,
-      `## Design-system calculators (fluid_clamp / color_scale / layered_shadow / line_height)`,
+      `## Type metrics (line_height)`,
+      `Whenever you write or change text styles — a font-size, a line-height, a letter-spacing,`,
+      `or NEW text content that needs any of those (headings, body copy, captions) — get the`,
+      `leading from the \`line_height\` tool instead of writing one by hand. A hand-written value`,
+      `(or an inherited default) is almost always a flat 1.5; real leading is size-aware (larger`,
+      `type gets tighter leading), measure-aware, and WCAG-floored for body text. Pass the real`,
+      `fontSizePx, and includeTracking for a matching letter-spacing.`,
+      ``,
+      `## Design-system calculators (fluid_clamp / color_scale / layered_shadow)`,
       `For these, call the tool instead of hand-writing values — each is exact math you should`,
       `not eyeball:`,
       `- \`fluid_clamp\` — responsive font-size/spacing that scales with the viewport. The clamp()`,
@@ -92,9 +100,6 @@ export function praxisRules(opts?: { previewTools?: boolean }): string {
       `  brand palette). Hand-picked hex ramps drift in hue; pair steps with \`check_contrast\`.`,
       `- \`layered_shadow\` — a realistic multi-layer box-shadow from one elevation value. A single`,
       `  flat box-shadow reads as cheap/AI-generated; use the layered stack.`,
-      `- \`line_height\` — set line-height with \`line_height\`, not a hardcoded 1.5 — it's size-aware`,
-      `  (larger type gets tighter leading), measure-aware, and WCAG-floored for body text. Pass`,
-      `  includeTracking for a matching letter-spacing.`,
       `See the fluid-typography, color-scales, and depth-shadows skills.`,
       ``,
       `## Offering craft skills (list_recommended_skills / install_skills)`,
