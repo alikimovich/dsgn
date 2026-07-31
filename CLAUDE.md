@@ -82,9 +82,9 @@ src/
     props.ts / props-svelte.ts   prop editing engines (React via react-docgen /
                     Svelte 5); they mirror each other's splice/apply contract
     styles.ts / styles-svelte.ts  CSS editing for the island's Styles tab: one
-                    edit → Tailwind class rewrite, else inline-style splice,
-                    else hand to the agent; tw-styles.ts + inline-style.ts are
-                    the pure mapping/splicing halves
+                    edit → Tailwind class rewrite, else merge into an EXISTING
+                    inline style, else hand to the agent; tw-styles.ts +
+                    inline-style.ts are the pure mapping/splicing halves
     style-tokens.ts re-resolves a design-token pick from the island (name+group
                     only) against the project's own tokens and decides what to
                     write — a `var(--name)` reference or a Tailwind token class
@@ -226,6 +226,15 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
 - **Prop editing is gated** on `PropInspection.hasSchema` (a resolved
   react-docgen/svelte schema). Unready components are prompt-only; the on-open
   setup offer instruments them.
+- **The Styles ladder never INTRODUCES a styling convention.** S2 merges into a
+  `style` attribute that already exists; it will not create one, and the S3
+  prompt explicitly forbids the agent from creating one either. Re-adding an
+  insert-when-absent branch to make edits feel snappier would push inline styles
+  into projects that style from a stylesheet or a Svelte scoped `<style>` block
+  — where the inserted attribute also silently outranks that block forever after.
+  An element with no class and no `style` is SUPPOSED to cost an agent turn.
+  (Note S1 has the mirror-image gap: it can only rewrite an existing class
+  string, never add one, so Tailwind projects pay that turn too.)
 - **Dev CDP**: `bun run dev` opens `--remote-debugging-port` 9222 (override
   `PRAXIS_DEBUG_PORT`; dev-only). Inspect either target via Chrome
   `chrome://inspect#devices`; Playwright's `_electron` still can't reach the

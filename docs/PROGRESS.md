@@ -2,6 +2,70 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-30 — The Styles ladder stops inventing inline styles (user feedback)
+
+"I'm not sure if I'm fine with creating inline style unless it's project's
+approach." The user picked a color token on a bare `<h1>` and got:
+
+```
+-<h1>{greeting}, I'm Andrei</h1>
++<h1 style="color: var(--color-title)">{greeting}, I'm Andrei</h1>
+```
+
+Two gaps conspired. S1 (Tailwind) can only REWRITE an existing class string —
+neither adapter can create a `class`/`className` attribute (`styles.ts`'s
+`classNameStringNode` gate, `styles-svelte.ts`'s `classAttr?.literal != null`) —
+so an unclassed element skips it outright. And `tokenClassRewrite` returns null
+for any token whose source isn't Tailwind, so a CSS-variable token can never
+take the class path regardless. That dropped straight into S2, which had **no
+gate at all**: inline was the unconditional fallback, its only checks being
+splice-correctness (spreads, `style={expr}`). Nothing anywhere in main had any
+notion of a project's styling convention.
+
+S2 now only ever EXTENDS a `style` attribute that already exists. Absent → S3.
+Praxis writing `style="…"` into a file that never had one is Praxis choosing a
+convention on the project's behalf — the one thing a design tool editing
+someone else's repo must not do. It's worse in Svelte, where the component
+almost certainly styles from its own scoped `<style>` block: the inserted
+attribute both imposes the convention and outranks that block on specificity
+forever after. (The Svelte S3 prompt already said "may live in this component's
+own `<style>` block" — but S2 ran first, so that sentence was unreachable.)
+
+The agent prompt change is load-bearing, not cosmetic. Most of what now lands
+in S3 is "this element has nowhere obvious to put a declaration," and left to
+itself the agent reaches for the inline prop — re-introducing exactly what the
+ladder just declined to write. Both prompts now name the project's own
+approaches and explicitly forbid adding an inline `style` where there is none.
+The JSX prompt also picked up the token/literal split the Svelte one had.
+
+Cost, accepted knowingly: an element with no class and no `style` is now an
+agent turn instead of an instant edit. That includes CSS-module/BEM projects
+(`class="hero-title"` isn't Tailwind-shaped, so S1 declines it too).
+
+Verification is the uncomfortable part. `test/style-edit.mjs` gained the
+contrast case — a bare `<div>` fixture (`BareCard`, appended LAST so it can't
+shift the line numbers the other stamps pin to) asserting needsAgent + a
+byte-identical file + the prompt's forbidding sentence. But the Electron tier
+cannot launch a window on this machine: `style-edit` dies at `.empty__open`,
+and it dies identically at HEAD with these changes stashed, so that assertion
+is written but unrun. What actually proved the change was a throwaway harness
+that esbuild-bundled `styles.ts` with electron marked external (the only
+electron use is `registerStylesIpc`, never called) and drove the real
+`applyStyleEdit` in plain node across both engines. At HEAD it reproduced the
+reported bug exactly (`applied: true, strategy: 'inline'` on a bare element);
+with the fix all 14 checks pass, and the 8 non-bare checks — inline merge and
+Tailwind rewrite, both frameworks — pass in BOTH, so the working paths are
+untouched. The harness was deleted rather than kept: it duplicates assertions
+already encoded in `style-edit.mjs`, and making bundle-based tests a permanent
+tier is a bigger call than this fix warrants. Worth revisiting if the Electron
+tier stays unrunnable.
+
+Not done, deliberately: teaching S1 to CREATE a class attribute for Tailwind
+projects. Detecting "is this a Tailwind project" is genuinely unreliable now
+that v4 is CSS-first and often ships no `tailwind.config.*` for `tokens.ts`'s
+existing probe to find, and it wouldn't have helped this user (CSS-variable
+tokens). Left in TASKS.
+
 ## 2026-07-30 — Token chevron moves inside the value field (user feedback)
 
 "I find the way we now invoke tokens confusing. I would expect the chevron

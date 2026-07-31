@@ -32,3 +32,12 @@ export function CustomCard(): JSX.Element {
     </p>
   )
 }
+
+// The S2-refusal fixture: no className, no style attribute — nothing for the
+// ladder to extend. A style edit here must route to the agent rather than INVENT
+// a `style={{…}}` prop, which would impose an inline-style convention on a
+// project that may well keep its styles in a stylesheet. Kept LAST in the file
+// so its arrival can't shift the line numbers the other stamps above pin to.
+export function BareCard(): JSX.Element {
+  return <div>Bare box</div>
+}

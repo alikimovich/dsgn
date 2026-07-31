@@ -12,7 +12,10 @@
  *   Enter runs the real ScrubInput → StylePanel.commit → styles.apply wiring
  *   (`rounded-[13px]` lands) → select the inline-styled element → a two-apply
  *   same-prop BURST merges `paddingTop` into its `style={{…}}` literal (S2)
- *   and coalesces in edit-history → ONE `edits.undo` restores the pre-burst
+ *   and coalesces in edit-history → a BARE element (no class, no style attr)
+ *   refuses instead: S2 only ever EXTENDS an existing inline style, so this
+ *   falls to S3 with the file untouched and a prompt that forbids the agent
+ *   from adding the prop either → ONE `edits.undo` restores the pre-burst
  *   file → island screenshots.
  *
  * Design tokens: select the element whose color IS `--color-text`'s value →
@@ -47,6 +50,7 @@ const styled = join(fixture, 'src', 'Styled.tsx')
 const TW_SRC = 'src/Styled.tsx:5' // <div className="p-4 rounded-md"> in TwCard
 const INLINE_SRC = 'src/Styled.tsx:9' // <div style={{ padding: '8px' }}> in InlineCard
 const TOKEN_SRC = 'src/Styled.tsx:17' // <div style={{ color: '#6c6c6c' }}> in TokenCard
+const BARE_SRC = 'src/Styled.tsx:42' // <div> in BareCard — no class, no style attr
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
 
@@ -324,6 +328,32 @@ try {
   const afterInline = readFileSync(styled, 'utf8')
   if (!afterInline.includes(`style={{ padding: '8px', paddingTop: "12px" }}`)) {
     throw new Error(`S2 style-object merge not on disk; style line: ${afterInline.match(/style=\{\{[^}]*\}\}/)?.[0]}`)
+  }
+
+  // --- The S2 REFUSAL (the contrast case): a bare <div> — no className, no
+  // style attr — has nothing for the ladder to extend. Writing `style={{…}}`
+  // would impose an inline-style convention the project never showed, so this
+  // must fall to S3 with the file left byte-identical. The prompt assertion
+  // matters as much as the refusal: without that sentence the agent just adds
+  // the inline prop itself and the whole gate buys nothing. Inert w.r.t. the
+  // undo chain below — it makes no edit-history entry. ---
+  const beforeBare = readFileSync(styled, 'utf8')
+  const bareRes = await panelEval(
+    `window.api.styles.apply(${JSON.stringify(fixture)}, ${JSON.stringify({
+      source: BARE_SRC,
+      prop: 'padding-top',
+      value: '12px',
+      classes: []
+    })})`
+  )
+  if (bareRes?.applied || !bareRes?.needsAgent) {
+    throw new Error(`bare element must route to the agent, got: ${JSON.stringify(bareRes)}`)
+  }
+  if (!/do NOT add an inline `style` prop/.test(bareRes.agentPrompt ?? '')) {
+    throw new Error(`agent prompt must forbid the inline prop, got: ${bareRes.agentPrompt}`)
+  }
+  if (readFileSync(styled, 'utf8') !== beforeBare) {
+    throw new Error('a refused style edit still wrote to disk')
   }
 
   // --- Undo (real IPC): ONE step reverts the whole coalesced burst exactly —

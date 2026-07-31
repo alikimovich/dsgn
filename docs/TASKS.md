@@ -3,6 +3,29 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Styles ladder — respect the project's styling convention (2026-07-30, user-requested)
+
+- [x] **Never INTRODUCE an inline style.** ✅ 2026-07-30 — S2 now only extends a
+      `style` attribute that already exists; absent → S3, whose prompt names the
+      project's own approaches and forbids the agent from adding one either.
+      Fixes a token pick writing `style="color: var(--color-title)"` onto a bare
+      `<h1>` in a CSS-variable project. `src/main/styles.ts`,
+      `styles-svelte.ts`; contrast case + `BareCard` fixture in
+      `test/style-edit.mjs`. See PROGRESS 2026-07-30.
+- [ ] **Let S1 CREATE a class attribute for Tailwind projects.** The mirror-image
+      gap: S1 can only rewrite an existing class string, so a Tailwind project's
+      unclassed element pays an agent turn it shouldn't. Blocked on reliable
+      project-level Tailwind detection — v4 is CSS-first and often ships no
+      `tailwind.config.*` for `tokens.ts`'s `TAILWIND_CONFIGS` probe to find, and
+      `looksTailwind` only inspects the element's live classes. Probably wants an
+      `@import "tailwindcss"` scan of the project's CSS entry.
+- [ ] **A runnable tier for the styles ladder.** `style-edit.mjs` is electron-only
+      and can't launch a window on the current dev machine (dies at
+      `.empty__open`, at HEAD too), so the S2-refusal assertion is written but
+      unrun. Verified instead with a throwaway esbuild-bundled harness driving
+      the real `applyStyleEdit` in node (PROGRESS 2026-07-30 has the details).
+      Worth making permanent if the Electron tier stays unrunnable.
+
 ## Layers panel (2026-07-29, user-requested) — SHIPPED
 
 - [x] **DOM tree + click-select + drag-to-reorder.** ✅ 2026-07-29 — a tree of
