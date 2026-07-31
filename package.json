@@ -103,6 +103,7 @@
     "test:tw-classes": "bun test/tw-classes.mjs",
     "test:tw-styles": "bun test/tw-styles.mjs",
     "test:token-match": "bun test/token-match.mjs",
+    "test:style-provenance": "node test/style-provenance.mjs",
     "test:layers-move": "bun test/layers-move.mjs",
     "test:inline-style": "bun test/inline-style.mjs",
     "test:css-values": "bun test/css-values.mjs",

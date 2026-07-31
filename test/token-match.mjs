@@ -6,17 +6,18 @@
  * two-tokens-same-value tie and the cross-family naming bar (a `--radius-none`
  * must never label a `padding: 0`). Run with: bun test/token-match.mjs
  */
+
+// Cross-module contract: the panel injects sameCssValue as the comparator, so
+// resolution must survive '#6c6c6c' ⇄ 'rgb(108, 108, 108)'.
+import { sameCssValue } from '../src/renderer/src/lib/css-values.ts'
 import {
   customPropertyNames,
   groupRole,
   resolveTokenForValue,
   tokenReference,
-  tokenValueKind,
-  tokensForProp
+  tokensForProp, 
+  tokenValueKind
 } from '../src/shared/token-match.ts'
-// Cross-module contract: the panel injects sameCssValue as the comparator, so
-// resolution must survive '#6c6c6c' ⇄ 'rgb(108, 108, 108)'.
-import { sameCssValue } from '../src/renderer/src/lib/css-values.ts'
 
 let failed = 0
 const ok = (cond, msg) => {
@@ -213,131 +214,228 @@ eq(
 )
 eq(customPropertyNames({ source: 'tailwind', groups: cssSet.groups }).length, 0, 'tailwind → none')
 
-// --- resolveTokenForValue ---------------------------------------------------
+// --- resolveTokenForValue: 'css' source requires PROOF, not just equality ---
+// Reported bug: an element's color happened to equal `--color-title`'s value,
+// and the panel confidently named it — even though the source never
+// referenced that variable at all. `getComputedStyle` always resolves `var()`
+// away, so value equality can NEVER tell "IS" from "coincidentally equals";
+// only the property's SPECIFIED declaration (`provenVar`, threaded from
+// `preview/style-provenance.ts` via `styles:read`) can. No proof, no name —
+// this is the fix, at the strongest point in the pipeline.
 
 const equals = (prop) => (a, b) => sameCssValue(prop, a, b)
 const colorCands = tokensForProp(cssSet, 'color')
+const cssOpts = (extra) => ({ source: 'css', equals: equals('color'), ...extra })
 
-// The comparator normalizes notation: the file says #6c6c6c, the browser
-// reports rgb(108, 108, 108).
+// THE regression test: a value that equals exactly one token, with no proof
+// at all, must show nothing — not even the unambiguous, unopposed match the
+// pre-fix code would have happily named.
 eq(
-  resolveTokenForValue(colorCands, 'rgb(108, 108, 108)', { equals: equals('color') })?.match.token
-    .name,
-  '--color-text',
-  'a computed rgb() matches a hex token'
+  resolveTokenForValue(colorCands, 'rgb(108, 108, 108)', cssOpts({})),
+  null,
+  'no provenVar → no name, even for a unique match (the reported bug, reproduced)'
 )
-eq(resolveTokenForValue(colorCands, '#123456', { equals: equals('color') }), null, 'no match → null')
-eq(resolveTokenForValue(colorCands, '', { equals: equals('color') }), null, 'empty value → null')
-
-// The LIVE resolved custom property wins over the value in the token file —
-// this is what makes the panel right under a dark-mode override.
+// The comparator still normalizes notation (#6c6c6c ⇄ rgb(108, 108, 108)) —
+// value equality is still a real requirement, just no longer a sufficient one.
 eq(
-  resolveTokenForValue(colorCands, '#c1c1c1', {
-    resolved: { '--color-text': '#c1c1c1' },
-    equals: equals('color')
-  })?.match.token.name,
+  resolveTokenForValue(
+    colorCands,
+    'rgb(108, 108, 108)',
+    cssOpts({ provenVar: '--color-text' })
+  )?.match.token.name,
+  '--color-text',
+  'provenVar + matching value → names it'
+)
+eq(
+  resolveTokenForValue(colorCands, '#123456', cssOpts({ provenVar: '--color-text' })),
+  null,
+  'provenVar alone is not enough — the value must still tie out'
+)
+eq(resolveTokenForValue(colorCands, '', cssOpts({})), null, 'empty value → null')
+eq(
+  resolveTokenForValue(colorCands, '#6c6c6c', cssOpts({ provenVar: '--not-a-real-token' })),
+  null,
+  'a provenVar naming nothing we detected → null, never the closest guess'
+)
+
+// The LIVE resolved custom property still decides value equality — right
+// under a dark-mode override — independent of proof.
+eq(
+  resolveTokenForValue(
+    colorCands,
+    '#c1c1c1',
+    cssOpts({ resolved: { '--color-text': '#c1c1c1' }, provenVar: '--color-text' })
+  )?.match.token.name,
   '--color-text',
   'the live var value decides, not the recorded one'
 )
 eq(
-  resolveTokenForValue(colorCands, '#6c6c6c', {
-    resolved: { '--color-text': '#c1c1c1' },
-    equals: equals('color')
-  }),
+  resolveTokenForValue(
+    colorCands,
+    '#6c6c6c',
+    cssOpts({ resolved: { '--color-text': '#c1c1c1' }, provenVar: '--color-text' })
+  ),
   null,
   'the recorded value is NOT a fallback once the var resolved to something else'
 )
 
-// Ties: --color-title and --color-link are both #212121.
-const tie = resolveTokenForValue(colorCands, '#212121', { equals: equals('color') })
-eq(tie?.match.token.name, '--color-title', 'a tie resolves to detection order by default')
-eq(names(tie?.ties ?? []).join(','), '--color-link', 'the equal-valued sibling is reported')
+// Ties: --color-title and --color-link are both #212121 — proof picks the
+// right one outright, no detection-order guessing needed.
 eq(
-  resolveTokenForValue(colorCands, '#212121', {
-    classes: ['text-color-link', 'p-4'],
-    equals: equals('color')
-  })?.match.token.name,
+  resolveTokenForValue(colorCands, '#212121', cssOpts({ provenVar: '--color-link' }))?.match.token
+    .name,
   '--color-link',
-  'a class naming one of the tied tokens breaks the tie'
+  'provenVar picks the correct tied token directly'
 )
 eq(
-  resolveTokenForValue(colorCands, '#212121', {
-    sticky: '--color-link',
-    equals: equals('color')
-  })?.match.token.name,
+  names(
+    resolveTokenForValue(colorCands, '#212121', cssOpts({ provenVar: '--color-title' }))?.ties ?? []
+  ).join(','),
   '--color-link',
-  'the sticky previous pick breaks the tie, so the label does not flip'
+  'the equal-valued sibling is still reported as a tie for the picker'
 )
 
-// --- naming across property families (the `--radius-none` on padding bug) ---
-// Reported from a real theme: `padding` and three `margin` sides all showed
-// `--rmt-radius-none`. The value was right (padding really was 0) but the NAME
-// was a different property family's token, winning purely on detection order
-// because every "none" token in a theme is 0 and the coarse value kind can't
-// tell a radius from a spacing.
+// `sticky`: NOT a guessing tie-break here — it bridges the gap right after an
+// explicit pick, before the write lands. The live preview injects the
+// RESOLVED value (never a var()), so `provenVar` looks unproven for a few
+// hundred ms; we know the pick happened, so we trust it until the reconcile
+// (real proof) catches up or the value moves on.
+eq(
+  resolveTokenForValue(colorCands, '#212121', cssOpts({ sticky: '--color-link' }))?.match.token
+    .name,
+  '--color-link',
+  'sticky bridges the reconcile gap when nothing is proven yet'
+)
+eq(
+  resolveTokenForValue(
+    colorCands,
+    '#212121',
+    cssOpts({ sticky: '--color-link', provenVar: '--color-title' })
+  )?.match.token.name,
+  '--color-title',
+  'fresh proof outranks a stale sticky once the source actually changes'
+)
+eq(
+  resolveTokenForValue(colorCands, '#123456', cssOpts({ sticky: '--color-link' })),
+  null,
+  'sticky only applies while the value still ties — scrub away and it drops out'
+)
 
-const zeroSet = {
-  source: 'css',
+// --- resolveTokenForValue: 'tailwind' source — a class IS the proof --------
+// No var() exists to check; Tailwind utilities encode their theme key in the
+// class itself, so a class naming the token directly counts as proof.
+
+const twSet = {
+  source: 'tailwind',
+  groups: [{ name: 'colors', tokens: [{ name: 'color-text', value: '#6c6c6c' }] }]
+}
+const twCands = tokensForProp(twSet, 'color')
+const twOpts = (extra) => ({ source: 'tailwind', equals: equals('color'), ...extra })
+
+eq(
+  resolveTokenForValue(twCands, '#6c6c6c', twOpts({})),
+  null,
+  'tailwind: value equality alone is still not proof — no class, no name'
+)
+eq(
+  resolveTokenForValue(twCands, '#6c6c6c', twOpts({ classes: ['text-color-text', 'p-4'] }))?.match
+    .token.name,
+  'color-text',
+  'tailwind: a class naming the token IS the proof'
+)
+eq(
+  resolveTokenForValue(twCands, '#6c6c6c', twOpts({ sticky: 'color-text' }))?.match.token.name,
+  'color-text',
+  'tailwind: sticky bridges the same reconcile gap as css'
+)
+
+// --- resolveTokenForValue: 'manifest' — no reference mechanism exists ------
+// A manifest token is a hand-picked literal, not a live variable, so there is
+// nothing to prove against. Falls back to the pre-existing value+role
+// heuristic: rank 'other' excluded, then a class hint, then sticky, then
+// detection order. A known, disclosed gap — not a silent regression.
+
+const mfOpts = (extra) => ({ source: 'manifest', equals: equals('color'), ...extra })
+const mfColorCands = tokensForProp({ ...cssSet, source: 'manifest' }, 'color')
+
+eq(
+  resolveTokenForValue(mfColorCands, 'rgb(108, 108, 108)', mfOpts({}))?.match.token.name,
+  '--color-text',
+  'manifest: value equality alone still names (no proof mechanism exists to require)'
+)
+const mfTie = resolveTokenForValue(mfColorCands, '#212121', mfOpts({}))
+eq(mfTie?.match.token.name, '--color-title', 'manifest: an unresolved tie falls to detection order')
+eq(names(mfTie?.ties ?? []).join(','), '--color-link', 'the equal-valued sibling is reported')
+eq(
+  resolveTokenForValue(mfColorCands, '#212121', mfOpts({ classes: ['text-color-link', 'p-4'] }))
+    ?.match.token.name,
+  '--color-link',
+  'manifest: a class naming one of the tied tokens breaks the tie'
+)
+eq(
+  resolveTokenForValue(mfColorCands, '#212121', mfOpts({ sticky: '--color-link' }))?.match.token
+    .name,
+  '--color-link',
+  'manifest: the sticky previous pick breaks the tie, so the label does not flip'
+)
+
+// manifest still needs yesterday's role fix — `groupRole` is source-agnostic,
+// so the exact same radius-vs-spacing collision can recur in a manifest's own
+// hand-written groups, with no provenVar to fall back on at all.
+const mfZeroSet = {
+  source: 'manifest',
   groups: [
-    { name: 'radius', tokens: [{ name: '--radius-none', value: '0px' }] },
-    { name: 'spacing', tokens: [{ name: '--space-none', value: '0px' }] }
+    { name: 'radius', tokens: [{ name: 'radius-none', value: '0px' }] },
+    { name: 'spacing', tokens: [{ name: 'space-none', value: '0px' }] }
   ]
 }
-const padCands = tokensForProp(zeroSet, 'padding-top')
-
-// Offering stays permissive — a radius token IS a length, so the picker must
-// still list it. Only its rank changes.
-eq(names(padCands).join(','), '--space-none,--radius-none', 'both offered, spacing ranked first')
-eq(padCands.find((c) => c.token.name === '--radius-none')?.rank, 'other', 'radius ranks other')
-
 eq(
-  resolveTokenForValue(padCands, '0px', { equals: equals('padding-top') })?.match.token.name,
-  '--space-none',
-  'the same-family token names the row'
+  resolveTokenForValue(
+    tokensForProp(mfZeroSet, 'padding-top'),
+    '0px',
+    mfOpts({ equals: equals('padding-top') })
+  )?.match.token.name,
+  'space-none',
+  'manifest: the same-family token names the row'
 )
-// The bug itself: with NO spacing token to win, the radius token must not step
-// in — an honest `0px` beats a confidently wrong name.
-const radiusOnly = tokensForProp(
-  { source: 'css', groups: [{ name: 'radius', tokens: [{ name: '--radius-none', value: '0px' }] }] },
+const mfRadiusOnly = tokensForProp(
+  { source: 'manifest', groups: [{ name: 'radius', tokens: [{ name: 'radius-none', value: '0px' }] }] },
   'padding-top'
 )
-eq(radiusOnly.length, 1, 'still offered when it is the only length token')
 eq(
-  resolveTokenForValue(radiusOnly, '0px', { equals: equals('padding-top') }),
+  resolveTokenForValue(mfRadiusOnly, '0px', mfOpts({ equals: equals('padding-top') })),
   null,
-  'a foreign-family token never names the row, even unopposed'
+  'manifest: a foreign-family token never names the row, even unopposed'
 )
-// …unless the user explicitly picked it. A deliberate choice outranks a guess
-// made from the group's name.
 eq(
-  resolveTokenForValue(radiusOnly, '0px', {
-    sticky: '--radius-none',
-    equals: equals('padding-top')
-  })?.match.token.name,
-  '--radius-none',
-  'an explicit pick still names the row'
+  resolveTokenForValue(
+    mfRadiusOnly,
+    '0px',
+    mfOpts({ equals: equals('padding-top'), sticky: 'radius-none' })
+  )?.match.token.name,
+  'radius-none',
+  'manifest: an explicit pick still names the row'
 )
-// An unrecognized group constrains nothing, so it must still be able to name —
-// otherwise a manifest with hand-written keys would label nothing at all.
+
+// --- resolveTokenForValue: proof overrides an implausible role (css only) --
+// Deliberate: if the SOURCE genuinely says `padding: var(--radius-none)`,
+// that's true, however odd — showing it beats hiding real information because
+// it looks implausible. This is why the 'css' branch never applies the role
+// filter at all; only 'manifest' (no proof available) still needs it.
 eq(
   resolveTokenForValue(
     tokensForProp(
-      { source: 'css', groups: [{ name: 'rmt', tokens: [{ name: '--rmt-gutter', value: '0px' }] }] },
+      {
+        source: 'css',
+        groups: [{ name: 'radius', tokens: [{ name: '--radius-none', value: '0px' }] }]
+      },
       'padding-top'
     ),
     '0px',
-    { equals: equals('padding-top') }
+    { source: 'css', equals: equals('padding-top'), provenVar: '--radius-none' }
   )?.match.token.name,
-  '--rmt-gutter',
-  'a neutral group can still name'
-)
-// The mirror case: spacing must not name a border-radius row either.
-eq(
-  resolveTokenForValue(tokensForProp(zeroSet, 'border-radius'), '0px', {
-    equals: equals('border-radius')
-  })?.match.token.name,
   '--radius-none',
-  'border-radius names the radius token, not the spacing one'
+  'css: real proof names the row even when the role looks wrong'
 )
 
 if (failed === 0) {

@@ -13,7 +13,12 @@ import {
   webContents
 } from 'electron'
 import { join } from 'path'
-import type { MoveNodeRequest, RecentMenuEntry, SelectedElement } from '../shared/api'
+import type {
+  MoveNodeRequest,
+  RecentMenuEntry,
+  SelectedElement,
+  StyleReadResult
+} from '../shared/api'
 import { registerAgentIpc } from './agent'
 import { registerAnnotationsIpc } from './annotations'
 import { registerControlsIpc } from './control-panels'
@@ -925,21 +930,31 @@ function registerPreviewIpc(): void {
   // Fresh computed values from the selection. The preview preload is sandboxed
   // (no contextBridge; executeJavaScript can't reach its isolated world), so
   // reads are a request-id round trip over IPC: send `styles:read` {id, props},
-  // await the matching `styles:read-reply` {id, values}. A 500ms timeout guards
-  // a dead/navigating preview — null means no preview / no selection / timeout.
+  // await the matching `styles:read-reply` {id, values, declaredVars}. A 500ms
+  // timeout guards a dead/navigating preview — null means no preview / no
+  // selection / timeout. `declaredVars` is the proof half (see
+  // `preview/style-provenance.ts`) that lets the panel tell a property's value
+  // IS a token from it merely equalling one.
   let styleReadSeq = 0
-  const pendingStyleReads = new Map<number, (values: Record<string, string> | null) => void>()
+  const pendingStyleReads = new Map<number, (result: StyleReadResult | null) => void>()
   ipcMain.on(
     'styles:read-reply',
-    (e, p: { id?: unknown; values?: Record<string, string> | null }) => {
+    (
+      e,
+      p: {
+        id?: unknown
+        values?: Record<string, string> | null
+        declaredVars?: Record<string, string | null> | null
+      }
+    ) => {
       if (e.sender !== previewView?.webContents) return
       const resolve = typeof p?.id === 'number' ? pendingStyleReads.get(p.id) : undefined
-      resolve?.(p.values ?? null)
+      resolve?.(p.values ? { values: p.values, declaredVars: p.declaredVars ?? {} } : null)
     }
   )
   ipcMain.handle(
     'styles:read',
-    (e, props: string[]): Promise<Record<string, string> | null> | null => {
+    (e, props: string[]): Promise<StyleReadResult | null> | null => {
       if (!fromMainOrPanel(e) || !previewView || !Array.isArray(props)) return null
       const id = ++styleReadSeq
       return new Promise((resolve) => {
@@ -947,10 +962,10 @@ function registerPreviewIpc(): void {
           pendingStyleReads.delete(id)
           resolve(null)
         }, 500)
-        pendingStyleReads.set(id, (values) => {
+        pendingStyleReads.set(id, (result) => {
           clearTimeout(timer)
           pendingStyleReads.delete(id)
-          resolve(values)
+          resolve(result)
         })
         previewView?.webContents.send('styles:read', { id, props })
       })

@@ -277,7 +277,7 @@ export default function CustomPanel({
       reconcileRef.current.delete(id)
       window.api.styles.clearPreview(prop)
       const res = await window.api.styles.read([prop])
-      const fresh = res?.[prop]
+      const fresh = res?.values[prop]
       if (fresh === undefined) return
       if (sameCssValue(prop, fresh, committed)) return
       window.api.styles.preview(prop, committed) // not landed yet — restore it

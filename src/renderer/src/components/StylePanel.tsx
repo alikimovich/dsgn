@@ -1,7 +1,7 @@
 import { Play } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { sameCssValue, STYLE_PROP_META } from '@/lib/css-values'
+import { STYLE_PROP_META, sameCssValue } from '@/lib/css-values'
 import type { SelectedElement, Token, TokenSet } from '../../../shared/api'
 import {
   customPropertyNames,
@@ -78,6 +78,12 @@ export default function StylePanel({
    * under a dark-mode media query, and only the element knows which applies.
    */
   const [resolvedVars, setResolvedVars] = useState<Record<string, string>>({})
+  /**
+   * Per editable longhand: the exact `--name` its SPECIFIED declaration
+   * references (from the same read), or null for a literal. The PROOF a
+   * value is a token rather than merely equal to one — see `token-match.ts`.
+   */
+  const [declaredVars, setDeclaredVars] = useState<Record<string, string | null>>({})
 
   // Async flows (commit chains, reconcile timers) read through the ref so they
   // never act on a stale snapshot; every write goes through merge/setValues.
@@ -145,13 +151,15 @@ export default function StylePanel({
   const tokenValue = (token: Token): string =>
     resolvedVars[token.name]?.trim() || token.value
 
-  /** Which token the property's current value IS, if any. */
+  /** Which token the property's current value IS, if any — PROVEN, not guessed. */
   const tokenFor = (prop: string): TokenResolution | null =>
     resolveTokenForValue(tokensFor(prop), values[prop] ?? '', {
       resolved: resolvedVars,
       classes: element.classes,
       sticky: stickyRef.current[prop] ?? null,
-      equals: (a, b) => sameCssValue(prop, a, b)
+      equals: (a, b) => sameCssValue(prop, a, b),
+      source: tokens?.source ?? 'none',
+      provenVar: declaredVars[prop]
     })
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: elKey is the selection identity; element.styles/read intentionally refresh only then
@@ -162,8 +170,9 @@ export default function StylePanel({
     lastCommitRef.current = null
     stickyRef.current = {}
     setValues({ ...element.styles }) // instant paint from the pick-time snapshot…
-    // One round trip for both: the reply is a flat map, split by the `--` prefix
-    // (no editable longhand starts with one, so the split is unambiguous).
+    // One round trip for both: `values` is a flat map, split by the `--` prefix
+    // (no editable longhand starts with one, so the split is unambiguous);
+    // `declaredVars` rides alongside as the proof half (see token-match.ts).
     window.api.styles.read([...ALL_PROPS, ...varNames]).then((res) => {
       if (!alive) return
       if (!res) {
@@ -172,12 +181,13 @@ export default function StylePanel({
       }
       const fresh: Record<string, string> = {}
       const vars: Record<string, string> = {}
-      for (const [k, v] of Object.entries(res)) {
+      for (const [k, v] of Object.entries(res.values)) {
         if (k.startsWith('--')) vars[k] = v
         else fresh[k] = v
       }
       merge(fresh) // …then the fresh truth
       setResolvedVars(vars)
+      setDeclaredVars(res.declaredVars)
     })
     return () => {
       alive = false
@@ -231,10 +241,17 @@ export default function StylePanel({
       timersRef.current.delete(id)
       window.api.styles.clearPreview(prop) // lift the override for the read
       const res = await window.api.styles.read([prop])
-      const fresh = res?.[prop]
+      const fresh = res?.values[prop]
       if (fresh === undefined) return
       if (sameCssValue(prop, fresh, committed)) {
         merge({ [prop]: fresh })
+        // The write has truly landed — declaredVars is authoritative for this
+        // prop now, so the transient "trust our own recent pick" exemption
+        // (`sticky`) can retire. Without this, a pick main couldn't validate
+        // as a token (silently falls back to a plain value) would go on
+        // claiming a token name forever, since sticky never expires on its own.
+        setDeclaredVars((d) => ({ ...d, [prop]: res?.declaredVars[prop] ?? null }))
+        delete stickyRef.current[prop]
         return
       }
       window.api.styles.preview(prop, committed) // not landed yet — restore it

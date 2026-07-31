@@ -624,6 +624,20 @@ export interface StyleEdit {
   token?: { name: string; group: string }
 }
 
+/** A `styles:read` reply: fresh computed values plus proof of token usage. */
+export interface StyleReadResult {
+  values: Record<string, string>
+  /**
+   * Per editable longhand: the exact `--name` its SPECIFIED (unresolved)
+   * declaration references — inline `style=`, or a matched stylesheet /
+   * scoped-`<style>` rule (see `preview/style-provenance.ts`) — or null when
+   * it's a literal. `values`' computed style always fully resolves `var()`,
+   * so this is the only signal that tells "this value IS that token" apart
+   * from "happens to equal it".
+   */
+  declaredVars: Record<string, string | null>
+}
+
 /** Result of applying a StyleEdit (mirrors PropEditResult's shape). */
 export interface StyleEditResult {
   applied: boolean
@@ -1069,9 +1083,10 @@ export interface PraxisApi {
     /** Revert live override(s) exactly — one prop, or all when omitted. */
     clearPreview: (prop?: string) => void
     /** Fresh computed values for `props` from the current selection (pick-time
-     *  snapshots go stale). Null when the selection is gone (navigation /
-     *  element removed), there's no preview, or the read timed out. */
-    read: (props: string[]) => Promise<Record<string, string> | null>
+     *  snapshots go stale), PLUS proof of design-token usage. Null when the
+     *  selection is gone (navigation / element removed), there's no preview,
+     *  or the read timed out. */
+    read: (props: string[]) => Promise<StyleReadResult | null>
     /** Replay a transition on the selected element: jump to `from` with
      *  transitions disabled, force reflow, then set `to` so it animates. */
     replay: (prop: string, from: string, to: string) => void

@@ -129,6 +129,13 @@ src/
                     Layers panel (bulk read, panel-driven select/hover, the
                     structural MutationObserver watch) — split out of preload.ts,
                     which only wires the IPC into it
+  preview/style-provenance.ts  proves a style property's value comes from a
+                    design token instead of merely equalling one: reads the
+                    SPECIFIED (unresolved) declaration — inline `style=` or a
+                    matched stylesheet/scoped-`<style>` rule — since
+                    `getComputedStyle` always resolves `var()` away and so can
+                    never tell "is" from "coincidentally equals". Threaded
+                    through `styles:read` as `declaredVars`
   shared/api.ts     the IPC contract — single source of truth for cross-process types
   shared/token-match.ts  which design tokens may be offered for a css property
                     and which one a computed value IS. Pure + used by BOTH main

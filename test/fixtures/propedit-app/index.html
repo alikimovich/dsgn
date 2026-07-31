@@ -43,12 +43,18 @@
     <div id="inline-box" style="padding: 8px" data-praxis-source="src/Styled.tsx:9">
       Inline padded
     </div>
-    <!-- … and one whose color happens to BE a design token's value. -->
-    <div id="token-box" style="color: #6c6c6c" data-praxis-source="src/Styled.tsx:17">
+    <!-- … one whose color happens to BE a design token's value, but does NOT
+         reference it — the panel must show the raw hex, not name the token. -->
+    <div id="token-box" style="color: #6c6c6c" data-praxis-source="src/Styled.tsx:21">
       Token colored
     </div>
     <!-- … and a BARE one: no class, no style, so S2 has nothing to extend and
          the edit must fall through to the agent instead of inventing a prop. -->
-    <div id="bare-box" data-praxis-source="src/Styled.tsx:42">Bare box</div>
+    <div id="bare-box" data-praxis-source="src/Styled.tsx:46">Bare box</div>
+    <!-- … and one that DOES reference the token — `style=` preserves var()
+         unresolved (unlike getComputedStyle), so this is the proven case. -->
+    <div id="proven-token-box" style="color: var(--color-text)" data-praxis-source="src/Styled.tsx:54">
+      Proven token colored
+    </div>
   </main>
 </body>

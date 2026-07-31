@@ -17,12 +17,20 @@
  * `colors`/`spacing`/… — so they must never remove a token from the picker.
  * Value shapes are universal.
  *
- * Naming is the stricter half, and deliberately so: a group whose name clearly
- * marks a DIFFERENT property family (`radius` for a `padding` row) is barred
- * from labelling that row, because a value shared across families — `0`, above
- * all — would otherwise be labelled by whichever such token happened to be
- * detected first. An unrecognized group name constrains nothing and can still
- * name. See `groupRole` and `resolveTokenForValue`.
+ * Naming is the stricter half, and deliberately so — for two independent
+ * reasons layered on top of each other:
+ *
+ * 1. A group whose name clearly marks a DIFFERENT property family (`radius`
+ *    for a `padding` row) is barred from labelling that row: a value shared
+ *    across families — `0`, above all — would otherwise be labelled by
+ *    whichever such token happened to be detected first. An unrecognized
+ *    group name constrains nothing and can still name. See `groupRole`.
+ * 2. Even within the RIGHT family, naming requires actual evidence the
+ *    element's source references that token — not just that the value
+ *    equals it. `getComputedStyle` always resolves `var()` away, so value
+ *    equality alone can never tell "this IS `--color-text`" from "happens to
+ *    equal it"; only the property's SPECIFIED declaration can. See
+ *    `resolveTokenForValue`'s `source`/`provenVar`.
  */
 
 import type { Token, TokenSet, TokenSource } from './api'
@@ -271,14 +279,41 @@ export interface ResolveOptions {
    * here falls back to that recorded value.
    */
   resolved?: Record<string, string>
-  /** The element's classes — a tie-break only (it's a pick-time snapshot). */
+  /** The element's classes. For a `tailwind`-sourced set this IS the proof of
+   *  usage (a Tailwind class names its theme key directly); for other sources
+   *  it's a tie-break only. */
   classes?: string[]
-  /** The name last shown for this row; kept when it still ties, so the label
-   *  doesn't flip between reconciles of an unchanged value. */
+  /** The name last shown for this row. NOT a guessing tie-break — it's what
+   *  bridges the gap right after an explicit pick, before the write has landed
+   *  and reconciled: the live preview injects the RESOLVED value (never a
+   *  `var()`), so a real reference briefly looks unproven. We know the pick
+   *  happened; that's evidence too, just not source-level evidence. */
   sticky?: string | null
   /** Value comparison, injected — the renderer passes its `sameCssValue`, which
    *  normalizes color notations and units ('#ff0000' ≡ 'rgb(255, 0, 0)'). */
   equals: (a: string, b: string) => boolean
+  /**
+   * Which detection source `candidates` came from — decides how naming may be
+   * PROVEN rather than guessed:
+   *  - `css` — `provenVar` must name one of the candidates. `getComputedStyle`
+   *    always resolves `var()` away, so value equality alone can never tell
+   *    "this IS that token" from "happens to equal it"; only the property's
+   *    SPECIFIED declaration can. No proof, no name.
+   *  - `tailwind` — no `var()` exists to check; a class naming the token IS
+   *    the proof.
+   *  - `manifest` (and anything else) — no reference mechanism exists at all
+   *    (a manifest token is a hand-picked literal, not a live variable), so
+   *    this falls back to the pre-existing value+role heuristic. A known,
+   *    disclosed gap, not a silent regression.
+   */
+  source: TokenSource
+  /**
+   * The exact `--name` this property's SPECIFIED (unresolved) declaration
+   * references — from `preview/style-provenance.ts`, via `styles:read`'s
+   * `declaredVars`. Only meaningful when `source === 'css'`; null means the
+   * declaration is a literal (no token in play at all).
+   */
+  provenVar?: string | null
 }
 
 export interface TokenResolution {
@@ -288,20 +323,20 @@ export interface TokenResolution {
 }
 
 /**
- * Which token (if any) `computed` currently IS. Ties are common and real — a
- * theme may well define `--color-title` and `--color-link` as the same hex — so
- * one winner is always chosen deterministically rather than showing "2 tokens":
- * a class list that names one → the better-ranked group → the sticky previous
- * choice → detection order.
+ * Which token (if any) `computed` currently IS — PROVEN, never guessed from
+ * value coincidence alone. `0` is the value every "none" token in a theme
+ * shares, so among same-valued candidates only real evidence that the source
+ * references a token may name the row; showing the raw value beats showing a
+ * confidently wrong name.
  *
- * Naming is STRICTER than offering. A token whose group belongs to another
- * property family (`rank: 'other'`) is excluded here even though the picker
- * still lists it: `0` is shared by every "none" token in a theme, so a
- * `--radius-none` would otherwise win the label on `padding: 0` purely by
- * detection order and tell the user nothing true. Showing the raw `0px` beats
- * showing a confidently wrong name. The sticky exemption keeps an EXPLICIT pick
- * honest — if the user chose that token for this row, their choice outranks a
- * guess made from the group's name.
+ * `matches` (value equality, via the injected `equals`) is necessary but never
+ * sufficient — it's the pool proof gets applied against, not proof itself.
+ * `source` decides what counts as proof; see `ResolveOptions`. `manifest` is
+ * the one source with no reference mechanism at all, so it alone keeps the
+ * pre-existing value+role heuristic (rank `'other'` excluded, then a class
+ * hint, then sticky, then detection order) — ties there are real (a theme may
+ * define `--color-title` and `--color-link` as the same hex) and unresolvable
+ * without a stronger signal.
  */
 export function resolveTokenForValue(
   candidates: TokenCandidate[],
@@ -310,19 +345,49 @@ export function resolveTokenForValue(
 ): TokenResolution | null {
   if (!computed) return null
   const matches = candidates.filter((c) => {
-    if (c.rank === 'other' && c.token.name !== opts.sticky) return false
     const live = opts.resolved?.[c.token.name]?.trim()
     return opts.equals(computed, live || c.token.value)
   })
   if (matches.length === 0) return null
-  if (matches.length === 1) return { match: matches[0], ties: [] }
 
+  /** An explicit pick THIS session, still value-consistent — see `sticky`'s doc. */
+  const stuck = (): TokenResolution | null => {
+    const s = opts.sticky ? matches.find((c) => c.token.name === opts.sticky) : undefined
+    return s ? { match: s, ties: matches.filter((c) => c !== s) } : null
+  }
+
+  if (opts.source === 'css') {
+    const proven = opts.provenVar
+      ? matches.find((c) => bareName(c.token.name) === bareName(opts.provenVar as string))
+      : undefined
+    return proven ? { match: proven, ties: matches.filter((c) => c !== proven) } : stuck()
+  }
+
+  if (opts.source === 'tailwind') {
+    const classes = opts.classes ?? []
+    const named = matches.filter((c) => {
+      const bare = bareName(c.token.name)
+      return classes.some((cls) => cls === bare || cls.endsWith(`-${bare}`))
+    })
+    if (named.length === 0) return stuck()
+    const best =
+      named.find((c) => c.rank === 'preferred' && c.token.name === opts.sticky) ??
+      named.find((c) => c.rank === 'preferred') ??
+      named.find((c) => c.token.name === opts.sticky) ??
+      named[0]
+    return { match: best, ties: matches.filter((c) => c !== best) }
+  }
+
+  // 'manifest': no reference mechanism to prove against — the legacy heuristic.
+  const roled = matches.filter((c) => c.rank !== 'other' || c.token.name === opts.sticky)
+  if (roled.length === 0) return null
+  if (roled.length === 1) return { match: roled[0], ties: matches.filter((c) => c !== roled[0]) }
   const classes = opts.classes ?? []
-  const named = matches.filter((c) => {
+  const named = roled.filter((c) => {
     const bare = bareName(c.token.name)
     return classes.some((cls) => cls === bare || cls.endsWith(`-${bare}`))
   })
-  const pool = named.length ? named : matches
+  const pool = named.length ? named : roled
   const best =
     pool.find((c) => c.rank === 'preferred' && c.token.name === opts.sticky) ??
     pool.find((c) => c.rank === 'preferred') ??

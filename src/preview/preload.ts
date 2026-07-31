@@ -16,7 +16,8 @@
 import { ipcRenderer } from 'electron'
 import type { SelectedElement } from '../shared/api'
 import { FRAME_DATA_URI, FRAME_INSET } from '../shared/iphone-frame'
-import { buildLayersSnapshot, resolveLayerElement, type LayerFingerprint } from './layers'
+import { buildLayersSnapshot, type LayerFingerprint, resolveLayerElement } from './layers'
+import { declaredVarsFor } from './style-provenance'
 
 // Channels (preview ⇄ main). Kept local — main mirrors these strings.
 const SET_MODE = 'praxis:preview:set-select-mode'
@@ -40,7 +41,7 @@ const TOGGLE_SELECT = 'praxis:preview:toggle-select' // preload → renderer (S 
 const STYLES_PREVIEW = 'styles:preview' // renderer → preload {prop, value}
 const STYLES_CLEAR_PREVIEW = 'styles:clear-preview' // renderer → preload {prop?}
 const STYLES_READ = 'styles:read' // renderer → preload {id, props}
-const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null}
+const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null, declaredVars|null}
 const STYLES_REPLAY = 'styles:replay' // renderer → preload {prop, from, to}
 // Layers panel: bulk DOM-tree read (request-id round trip, like styles:read),
 // panel-driven select/hover by child-index path, and a watch toggle that arms
@@ -844,11 +845,19 @@ function clearStylePreview(prop?: string): void {
  * THIS ELEMENT. That's what makes token naming correct under a
  * `@media (prefers-color-scheme: dark)` override or a `var()` alias chain,
  * where the value recorded in the token file is not.
+ *
+ * `declaredVars` is the proof half: for each EDITABLE longhand (never the
+ * `--var` names above — those are read for their own value, not to prove some
+ * other property references them), the exact `--name` its SPECIFIED
+ * declaration references, via `style-provenance.ts`, or null when it's a
+ * literal. `computed`'s value-equality was always a guess (`var()` never
+ * survives `getComputedStyle`); this is what lets the panel tell "IS this
+ * token" from "happens to equal it" instead.
  */
 function readStyles(id: unknown, props: string[]): void {
   const el = resolveStyleTarget()
   if (!el) {
-    ipcRenderer.send(STYLES_READ_REPLY, { id, values: null })
+    ipcRenderer.send(STYLES_READ_REPLY, { id, values: null, declaredVars: null })
     return
   }
   const cs = getComputedStyle(el)
@@ -856,12 +865,18 @@ function readStyles(id: unknown, props: string[]): void {
   // Same cap discipline as describe(): the page is only semi-trusted, so bound
   // every string that crosses the IPC boundary. Generous enough for the ~20
   // editable longhands plus a real project's token set.
+  const bounded: string[] = []
   for (const prop of props.slice(0, 240)) {
     if (typeof prop !== 'string') continue
     const p = prop.slice(0, 64)
+    bounded.push(p)
     values[p] = cs.getPropertyValue(p).trim().slice(0, 256)
   }
-  ipcRenderer.send(STYLES_READ_REPLY, { id, values })
+  const declaredVars = declaredVarsFor(
+    el,
+    bounded.filter((p) => !p.startsWith('--'))
+  )
+  ipcRenderer.send(STYLES_READ_REPLY, { id, values, declaredVars })
 }
 
 // One pending replay at a time (there's only one selection); starting another

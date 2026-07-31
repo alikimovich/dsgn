@@ -17,8 +17,8 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(TEST_DIR);
@@ -122,7 +122,14 @@ const ELECTRON = [
 ];
 
 // live = the tests present in `verify` but not in `test`.
-const LIVE = ['agent-e2e', 'codex-e2e', 'controls-agent', 'tool-invocation', 'sim-e2e'];
+const LIVE = [
+  'agent-e2e',
+  'codex-e2e',
+  'controls-agent',
+  'tool-invocation',
+  'sim-e2e',
+  'style-provenance',
+];
 
 const TIERS = {
   unit: { runner: 'bun', build: false, tests: UNIT },

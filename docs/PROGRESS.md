@@ -2,6 +2,91 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-31 — Token naming requires PROOF, not value coincidence
+
+"I really don't want this panel to hallucinate variables and tokens if the
+element doesn't use them." Yesterday's radius/spacing fix turned out to be a
+mitigation, not the fix: it made the GUESS more disciplined, but the whole
+naming mechanism was still a guess. `readStyles()` (`preview/preload.ts`) gets
+every value from `getComputedStyle`, which always fully resolves `var()` —
+there was never a way to tell "this element's color IS `var(--color-text)`"
+apart from "happens to equal it." Confirmed against a real project: every
+token was named `--rmt-<category>-<value>`, so `cssGroupOf`'s first-segment
+grouping bucketed all of them under one meaningless group (`rmt`, the vendor
+prefix) — an unrecognized group is unconstrained by design, so yesterday's fix
+didn't even apply, and padding/margin/font-size/line-height/opacity all showed
+whichever same-valued `--rmt-*` token was detected first.
+
+The real fix: prove usage from the SPECIFIED (unresolved) declaration instead
+of the resolved one. New `src/preview/style-provenance.ts` (pure, DOM-only, no
+`ipcRenderer` — same split as `layers.ts`) reads `el.style.getPropertyValue`
+(inline preserves `var()` literally) and walks `document.styleSheets` for a
+matching rule's own declaration (covers external stylesheets AND Svelte's
+compiled scoped `<style>` — both are just real CSS rules at runtime). Threaded
+through: `readStyles` → `styles:read-reply` → main's `pendingStyleReads` →
+`window.api.styles.read()` now returns `{ values, declaredVars }`
+(`shared/api.ts`'s new `StyleReadResult`) → `StylePanel` stores `declaredVars`
+→ `resolveTokenForValue` gets a new `source`/`provenVar` pair.
+
+`resolveTokenForValue` now branches by `TokenSet.source`, since each has a
+different (or no) proof mechanism:
+- `css` — `provenVar` must name one of the value-matching candidates. No var()
+  in the specified declaration, no name — full stop, regardless of role/rank.
+  Deliberately: if the source genuinely says `padding: var(--radius-none)`,
+  that's true however odd, and proof beats a role plausibility check.
+- `tailwind` — no `var()` exists to check; a class naming the token directly
+  IS the proof (Tailwind encodes its theme key in the class itself).
+- `manifest` — no reference mechanism exists at all (a hand-picked literal,
+  not a live variable) — keeps yesterday's value+role heuristic. A disclosed,
+  accepted gap, not a silent regression.
+
+One real wrinkle: the live preview injects the RESOLVED value on a scrub/pick
+(`el.style.setProperty(prop, value)`, never a reference), so for a few hundred
+ms after an explicit pick — before the write lands and HMR reconciles —
+`provenVar` looks unproven even for a pick that WILL land as `var()`. `sticky`
+(already existed, previously a guessing tie-break) is repurposed as the bridge:
+we know the pick happened, that's evidence too, just not source-level evidence.
+It's retired the moment reconcile confirms the real write (`scheduleReconcile`
+now also refreshes `declaredVars` and clears `stickyRef` for that prop) — so a
+pick main couldn't validate as a token (silently falls back to a plain value)
+doesn't go on claiming a token name forever.
+
+Verification, in order of how much I trust it:
+1. `test/token-match.mjs` — pure logic, rewritten around the new `source`/
+   `provenVar` contract for all three sources, plus the exact reported bug
+   reproduced against the OLD code (confirmed 6 assertions fail there) and
+   fixed against the new.
+2. `test/style-provenance.mjs` (new) — the DOM/CSSOM walk is NOT reasoned
+   about from afar: bundled with esbuild to a browser global and driven
+   against a REAL headless Chromium page (inline var(), a matched stylesheet
+   rule, a declaration inside `@media`, a var() with a fallback, inline
+   overriding a matched rule, an unrelated prop on the same element).
+   Confirmed it catches a real regression (disabled the `@media`/`@supports`
+   recursion by hand, the test failed correctly, restored). LIVE tier, not
+   unit — needs `npx playwright install chromium`, a real environment
+   dependency CI doesn't provision; SKIPs (exit 0) when that binary is
+   missing, same convention as agent-e2e/sim-e2e for missing creds/display.
+3. `test/style-edit.mjs` — updated the fixture and assertions (the ORIGINAL
+   `TokenCard` literal-hex case now asserts the OPPOSITE of what it used to:
+   raw hex shown, no chip; new `ProvenTokenCard` with a real
+   `style={{ color: 'var(--color-text)' }}` asserts the chip DOES show).
+   Written and typechecked, but unrun — the Electron tier can't launch a
+   window on this machine (`.empty__open` timeout, confirmed identical at
+   HEAD before any of this).
+
+Mid-session process note: this branch got checked out to `main` outside this
+session (reflog: a manual `checkout: moving from candidate to main`) partway
+through the work — `main` predates the entire design-tokens feature, so if
+`bun run dev` was running at the time, its file watcher would have hot-reloaded
+the OLDER code straight into the running app. That's almost certainly why the
+reported screenshot still showed the pre-fix names after the previous fix had
+already shipped. Switched back to `candidate` before starting this fix; nothing
+was lost (`origin/candidate` was already up to date).
+
+Not done, deliberately: `manifest`-sourced tokens keep the old heuristic —
+there's no reference mechanism to prove usage against at all, since a manifest
+token is main re-rendering a hand-picked literal, not a live variable.
+
 ## 2026-07-30 — A radius token no longer labels `padding: 0`
 
 Reported from a real theme: the Styles panel showed `--rmt-radius-none` on the

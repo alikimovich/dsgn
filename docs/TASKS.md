@@ -3,20 +3,38 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
-## Design-token naming accuracy (2026-07-30, user-reported)
+## Design-token naming accuracy (2026-07-30/31, user-reported)
 
 - [x] **A token from another property family can't name a row.** ✅ 2026-07-30 —
       `--rmt-radius-none` was labelling `padding: 0`. `groupAffinity` (a coarse
-      `TokenKind`) became `groupRole` (a semantic `TokenRole`), and naming is now
-      stricter than offering: a radius token stays in the picker for padding but
-      can't label it. Neutral groups and explicit picks are exempt.
+      `TokenKind`) became `groupRole` (a semantic `TokenRole`). Superseded the
+      next day by the proof requirement below for `css`/`tailwind` sources
+      (role-based ranking is no longer how naming is decided for them — proof
+      is); still load-bearing for `manifest`, which has no proof mechanism.
       `src/shared/token-match.ts`, `test/token-match.mjs`. See PROGRESS 2026-07-30.
-- [ ] **`sameCssValue` doesn't equate bare `0` with `0px`.** Found while writing
-      the above. A theme declaring `--space-0: 0` (unitless — legal CSS, and
-      `tokenValueKind` already accepts it as a length) can never match a computed
-      `0px`, so that token is offered but never names anything. Fix belongs in
-      the renderer's `css-values.ts` comparator; it shifts matching for every
-      property, so it wants its own pass.
+- [x] **Naming requires PROOF a value comes from a token, not just equals one.**
+      ✅ 2026-07-31 — `getComputedStyle` always resolves `var()` away, so value
+      equality alone can never distinguish "IS this token" from "coincidentally
+      equals it." New `src/preview/style-provenance.ts` reads the SPECIFIED
+      (unresolved) declaration — inline `style=` or a matched stylesheet/scoped-
+      `<style>` rule — threaded through `styles:read` as `declaredVars`.
+      `resolveTokenForValue` now requires it for `css`/`tailwind` sources;
+      `manifest` (no reference mechanism exists) keeps the value+role heuristic
+      above. `test/token-match.mjs`, `test/style-provenance.mjs` (new, real
+      headless-Chromium DOM/CSSOM test), `test/style-edit.mjs`. See PROGRESS
+      2026-07-31.
+- [ ] **`sameCssValue` doesn't equate bare `0` with `0px`.** Found 2026-07-30
+      while writing the above. A theme declaring `--space-0: 0` (unitless —
+      legal CSS, and `tokenValueKind` already accepts it as a length) can never
+      match a computed `0px`, so that token is offered but never names anything.
+      Fix belongs in the renderer's `css-values.ts` comparator; it shifts
+      matching for every property, so it wants its own pass.
+- [ ] **`test/style-edit.mjs`'s token assertions are written but unrun.** The
+      Electron tier can't launch a window on this machine (`.empty__open`
+      timeout, confirmed identical at HEAD) — the new `ProvenTokenCard`/raw-hex
+      assertions haven't been visually confirmed. Same gap as the styles-ladder
+      fix (2026-07-30); worth a real run wherever the Electron window can
+      reliably take focus.
 
 ## Styles ladder — respect the project's styling convention (2026-07-30, user-requested)
 

@@ -18,12 +18,16 @@
  *   from adding the prop either → ONE `edits.undo` restores the pre-burst
  *   file → island screenshots.
  *
- * Design tokens: select the element whose color IS `--color-text`'s value →
- * the Styles tab's header names the token source, the color row shows a
- * `--color-text` CHIP instead of the hex (proving the live custom-property read
- * through the sandboxed preload + the normalizing comparator), the inline
- * picker offers ONLY the color tokens (the value-shape gate, through real UI) →
- * clicking `--color-title` writes `var(--color-title)` — the REFERENCE, not
+ * Design tokens: select the element whose color happens to EQUAL
+ * `--color-text`'s value but never references it → the Styles tab's header
+ * names the token source, but the color row shows the raw hex, NOT a chip —
+ * value coincidence alone is no longer proof (2026-07-31: this test used to
+ * assert the opposite; that was the hallucination). Re-select an element
+ * whose inline style IS literally `var(--color-text)` → NOW the chip names it
+ * (the specified-declaration read through the sandboxed preload proving real
+ * usage, not the resolved computed value). The inline picker still offers
+ * ONLY the color tokens (the value-shape gate, through real UI) → clicking
+ * `--color-title` still writes `var(--color-title)` — the REFERENCE, not
  * `#212121` — and one undo restores it.
  *
  * v10 phase 4 — transitions: re-select the Tailwind element →
@@ -38,19 +42,21 @@
  *
  * Run with: bun run test:style-edit
  */
-import { _electron as electron } from 'playwright'
-import electronPath from 'electron'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import electronPath from 'electron'
+import { _electron as electron } from 'playwright'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = join(root, 'test', 'fixtures', 'propedit-app')
 const styled = join(fixture, 'src', 'Styled.tsx')
 const TW_SRC = 'src/Styled.tsx:5' // <div className="p-4 rounded-md"> in TwCard
 const INLINE_SRC = 'src/Styled.tsx:9' // <div style={{ padding: '8px' }}> in InlineCard
-const TOKEN_SRC = 'src/Styled.tsx:17' // <div style={{ color: '#6c6c6c' }}> in TokenCard
-const BARE_SRC = 'src/Styled.tsx:42' // <div> in BareCard — no class, no style attr
+const TOKEN_SRC = 'src/Styled.tsx:21' // <div style={{ color: '#6c6c6c' }}> in TokenCard — coincidence, unproven
+const BARE_SRC = 'src/Styled.tsx:46' // <div> in BareCard — no class, no style attr
+const PROVEN_TOKEN_SRC = 'src/Styled.tsx:54' // <div style={{ color: 'var(--color-text)' }}> in ProvenTokenCard
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
 
@@ -365,14 +371,17 @@ try {
     throw new Error('one undo did not restore the pre-burst source (burst not coalesced?)')
   }
 
-  // --- Design tokens: the element's color IS --color-text's value, so the row
-  // must NAME the token instead of showing #6c6c6c; picking a different token
-  // must write a `var()` REFERENCE into source, not the value it resolves to. ---
+  // --- Design tokens: the element's color EQUALS --color-text's value but
+  // never REFERENCES it (a plain literal hex) — the row must show the raw
+  // value, NOT a chip. `getComputedStyle` can't distinguish the two; only the
+  // specified-declaration read (`declaredVars`, via style-provenance.ts) can,
+  // and it correctly reports null here (no var() in play). ---
   await pickElement('token-box', TOKEN_SRC)
   await openStylesTab()
 
   // The header line proves the TokenSet reached the island at all (it travels
-  // main renderer → panel:state → island, a seam nothing else covers).
+  // main renderer → panel:state → island, a seam nothing else covers) —
+  // unaffected by the naming fix, which only governs a specific row's chip.
   const tokenSource = await waitPanel(
     "document.querySelector('.stylepanel__tokensource')?.textContent ?? ''"
   )
@@ -386,14 +395,29 @@ try {
     (r) => r.querySelector('.stylepanel__name')?.title === 'color'
   )`
 
-  // The chip names the token. This only works via the LIVE custom-property read
-  // (styles.read(['--color-text', …]) through the sandboxed preload) plus the
-  // injected sameCssValue comparator — the browser reports rgb(108, 108, 108)
-  // while the token file says #6c6c6c.
+  // No chip: a coincidentally-equal literal must not be named. The row falls
+  // through to ColorControl (the raw hex input), not TokenChip.
+  const noChip = await waitPanel(`${COLOR_ROW}?.querySelector('.stylepanel__token') ? 'chip' : 'raw'`)
+  if (noChip !== 'raw') {
+    throw new Error(`an unproven coincidence must not be named with a chip, got: ${noChip}`)
+  }
+  const rawShown = await panelEval(`${COLOR_ROW}?.querySelector('.colorctl__hex')?.value ?? ''`)
+  if (!/6c6c6c/i.test(rawShown)) {
+    throw new Error(`the raw hex should still be shown plainly, got: ${JSON.stringify(rawShown)}`)
+  }
+
+  // --- Re-select the PROVEN element: its inline style IS `var(--color-text)`
+  // literally. `el.style.getPropertyValue('color')` preserves that unresolved
+  // (unlike getComputedStyle), so THIS is what should show the chip. ---
+  await pickElement('proven-token-box', PROVEN_TOKEN_SRC)
+  await openStylesTab()
+
   const chip = await waitPanel(
     `${COLOR_ROW}?.querySelector('.stylepanel__token')?.textContent?.trim() ?? ''`
   )
-  if (chip !== '--color-text') throw new Error(`token chip should name --color-text, got ${chip}`)
+  if (chip !== '--color-text') {
+    throw new Error(`a real var() reference should name the row --color-text, got ${chip}`)
+  }
 
   // Expand the color row's token picker. Click-only-until-rendered: a second
   // click would collapse it again.
@@ -553,8 +577,9 @@ try {
   console.log(
     'STYLE-EDIT OK — Styles tab groups + fresh read, S1 tailwind rewrite (pt-[13px]), ' +
       'live preview inject/clear, UI-driven ScrubInput commit (rounded-[13px]), ' +
-      'S2 inline merge burst, one-undo coalescing, design tokens (chip names ' +
-      '--color-text, picker offers only colors, pick writes var(--color-title)), ' +
+      'S2 inline merge burst, one-undo coalescing, bare-element S2 refusal, ' +
+      'design tokens (an unproven coincidence shows raw, a real var() reference ' +
+      'names --color-text, picker offers only colors, pick writes var(--color-title)), ' +
       'transitions (duration-150, ease-[cubic-bezier(…)] no-spaces, BezierEditor ' +
       'nudge → ease keyword snap), full undo chain'
   )
