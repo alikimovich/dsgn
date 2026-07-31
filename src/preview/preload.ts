@@ -872,10 +872,18 @@ function readStyles(id: unknown, props: string[]): void {
     bounded.push(p)
     values[p] = cs.getPropertyValue(p).trim().slice(0, 256)
   }
-  const declaredVars = declaredVarsFor(
-    el,
-    bounded.filter((p) => !p.startsWith('--'))
-  )
+  // Same boundary cap as `values`: the var NAMES come from page-controlled CSS.
+  // A real token name never approaches 128 chars, and one that somehow did
+  // would just fail the proof match — fails safe to the raw value.
+  const declaredVars: Record<string, string | null> = {}
+  for (const [p, name] of Object.entries(
+    declaredVarsFor(
+      el,
+      bounded.filter((b) => !b.startsWith('--'))
+    )
+  )) {
+    declaredVars[p] = name ? name.slice(0, 128) : null
+  }
   ipcRenderer.send(STYLES_READ_REPLY, { id, values, declaredVars })
 }
 

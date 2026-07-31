@@ -49,6 +49,15 @@ export function specifiedValues(el: Element, props: string[]): Record<string, st
           const v = rule.style.getPropertyValue(p)
           if (v) out[p] = v
         }
+      } else if (rule instanceof CSSImportRule) {
+        // An @import's nested sheet hangs off `.styleSheet`, NOT `.cssRules` —
+        // the grouping-rule branch below would silently skip it. Same
+        // cross-origin caveat as the top-level loop, hence its own try.
+        try {
+          walk(rule.styleSheet?.cssRules)
+        } catch {
+          /* cross-origin import — not the previewed app's own CSS */
+        }
       } else if ('cssRules' in rule) {
         walk((rule as CSSGroupingRule).cssRules) // @media / @supports / @layer
       }

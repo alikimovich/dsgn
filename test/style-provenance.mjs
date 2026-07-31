@@ -140,6 +140,45 @@ try {
     null,
     'varRefName: a literal is not a reference'
   )
+
+  // --- @import: the nested sheet hangs off CSSImportRule.styleSheet, NOT
+  // .cssRules, so a naive grouping-rule walk skips it entirely. Needs a real
+  // same-origin URL (about:blank can't resolve @import, and a cross-origin
+  // import's cssRules throws) — fake the origin with route interception.
+  const imp = await browser.newPage()
+  await imp.route('http://praxis-prov.test/**', (route) => {
+    const url = route.request().url()
+    if (url.endsWith('imported.css')) {
+      return route.fulfill({
+        contentType: 'text/css',
+        body: '.imp { color: var(--color-imported); }'
+      })
+    }
+    return route.fulfill({
+      contentType: 'text/html',
+      body: `<!doctype html><style>@import url('imported.css');</style><div id="imp" class="imp">imported</div>`
+    })
+  })
+  await imp.goto('http://praxis-prov.test/page.html')
+  await imp.addScriptTag({ path: bundlePath })
+  // The imported sheet loads async — wait until its rules are actually reachable.
+  await imp.waitForFunction(() => {
+    try {
+      return [...document.styleSheets].some((s) =>
+        [...s.cssRules].some((r) => r.styleSheet && r.styleSheet.cssRules.length > 0)
+      )
+    } catch {
+      return false
+    }
+  })
+  eq(
+    await imp.evaluate(() =>
+      window.StyleProvenance.declaredVarsFor(document.getElementById('imp'), ['color'])
+    ),
+    { color: '--color-imported' },
+    'a rule inside an @import-ed sheet counts as proof'
+  )
+  await imp.close()
 } finally {
   await browser.close()
   rmSync(bundleDir, { recursive: true, force: true })

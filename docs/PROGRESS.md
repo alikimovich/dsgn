@@ -87,6 +87,17 @@ Not done, deliberately: `manifest`-sourced tokens keep the old heuristic —
 there's no reference mechanism to prove usage against at all, since a manifest
 token is main re-rendering a hand-picked literal, not a live variable.
 
+Post-review hardening (same day, before the main merge): (1) `@import`-ed
+sheets were silently skipped — a `CSSImportRule`'s nested sheet hangs off
+`.styleSheet`, not `.cssRules`, so the grouping-rule walk never descended;
+fixed + a real routed-origin @import case in the provenance test
+(mutation-checked). (2) One `styles.read` consumer was missed in the envelope
+migration — `style-edit.mjs`'s live-override read-back still indexed the old
+flat map; would have failed on the first real Electron-tier run. (3) The
+declared var NAMES now get the same IPC boundary cap as every other
+page-controlled string (128 chars; an absurd name just fails the proof match,
+which fails safe to the raw value).
+
 ## 2026-07-30 — A radius token no longer labels `padding: 0`
 
 Reported from a real theme: the Styles panel showed `--rmt-radius-none` on the

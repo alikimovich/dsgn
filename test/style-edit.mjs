@@ -255,7 +255,7 @@ try {
   if (padNow !== '33px') throw new Error(`live preview did not inject padding-top 33px, computed: ${padNow}`)
   // …and the panel's fresh-read seam sees the override too.
   const readBack = await panelEval("window.api.styles.read(['padding-top'])")
-  if (readBack?.['padding-top'] !== '33px') {
+  if (readBack?.values?.['padding-top'] !== '33px') {
     throw new Error(`styles.read should see the live override: ${JSON.stringify(readBack)}`)
   }
   await panelEval('window.api.styles.clearPreview(); true')
