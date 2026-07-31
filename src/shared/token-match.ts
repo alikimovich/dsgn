@@ -11,10 +11,18 @@
  * is `test/token-match.mjs`, which imports it under plain bun.
  *
  * The load-bearing rule: **a token's VALUE SHAPE decides whether it may be
- * offered; its GROUP NAME only decides where it ranks.** Group names are
- * unconstrained — a manifest may call a group `brand`, a CSS-var scan derives
- * groups from the first name segment, Tailwind uses `colors`/`spacing`/… — so
- * they can rank but must never exclude. Value shapes are universal.
+ * OFFERED; its GROUP NAME decides where it ranks and whether it may NAME a
+ * row.** Group names are unconstrained — a manifest may call a group `brand`, a
+ * CSS-var scan derives groups from the first name segment, Tailwind uses
+ * `colors`/`spacing`/… — so they must never remove a token from the picker.
+ * Value shapes are universal.
+ *
+ * Naming is the stricter half, and deliberately so: a group whose name clearly
+ * marks a DIFFERENT property family (`radius` for a `padding` row) is barred
+ * from labelling that row, because a value shared across families — `0`, above
+ * all — would otherwise be labelled by whichever such token happened to be
+ * detected first. An unrecognized group name constrains nothing and can still
+ * name. See `groupRole` and `resolveTokenForValue`.
  */
 
 import type { Token, TokenSet, TokenSource } from './api'
@@ -88,29 +96,58 @@ export function tokenValueKind(value: string): TokenKind {
 }
 
 /**
- * The kind a group NAME suggests, or null when it suggests nothing. Used only
- * to rank — never to exclude. One table covers all three detection sources:
- * Tailwind's theme categories (`colors`, `spacing`, `fontSize`, …), a
- * manifest's hand-written keys, and `cssGroupOf`'s first-name-segment groups
- * (`--color-text` → `color`, `--space-md` → `space`).
+ * What a group is FOR, as distinct from what shape its values happen to have.
+ * `radius` and `spacing` both hold lengths, so `TokenKind` cannot tell them
+ * apart — which is exactly the collision this exists to resolve.
  */
-export function groupAffinity(groupName: string): TokenKind | null {
+export type TokenRole =
+  | 'color'
+  | 'spacing'
+  | 'radius'
+  | 'font-size'
+  | 'font-weight'
+  | 'line-height'
+  | 'tracking'
+  | 'font-family'
+  | 'shadow'
+  | 'opacity'
+
+/**
+ * The role a group NAME suggests, or null when it suggests nothing. One table
+ * covers all three detection sources: Tailwind's theme categories (`colors`,
+ * `spacing`, `fontSize`, …), a manifest's hand-written keys, and `cssGroupOf`'s
+ * first-name-segment groups (`--color-text` → `color`, `--space-md` → `space`).
+ *
+ * Order is load-bearing: `fontSize`/`fontWeight` must be tested before the bare
+ * `font` catch-all, and `sizing|size` before nothing (it would swallow
+ * `fontsize` if it ran first).
+ */
+export function groupRole(groupName: string): TokenRole | null {
   const g = groupName.toLowerCase().replace(/[^a-z]/g, '')
   if (/colou?r|palette|swatch/.test(g)) return 'color'
-  if (/fontsize|textsize/.test(g)) return 'length'
-  if (/fontweight|weight/.test(g)) return 'number'
-  if (/lineheight|leading/.test(g)) return 'number'
-  if (/letterspacing|tracking/.test(g)) return 'length'
-  if (/font|typeface/.test(g)) return 'font'
-  if (/radius|radii|rounded|corner/.test(g)) return 'length'
-  if (/spacing|space|gap|padding|margin|sizing|size|inset/.test(g)) return 'length'
+  if (/fontsize|textsize/.test(g)) return 'font-size'
+  if (/fontweight|weight/.test(g)) return 'font-weight'
+  if (/lineheight|leading/.test(g)) return 'line-height'
+  if (/letterspacing|tracking/.test(g)) return 'tracking'
+  if (/font|typeface/.test(g)) return 'font-family'
+  if (/radius|radii|rounded|corner/.test(g)) return 'radius'
+  if (/spacing|space|gap|padding|margin|sizing|size|inset/.test(g)) return 'spacing'
   if (/shadow|elevation/.test(g)) return 'shadow'
-  if (/opacity|alpha/.test(g)) return 'number'
+  if (/opacity|alpha/.test(g)) return 'opacity'
   return null
 }
 
 interface PropRule {
+  /** Value shapes this property accepts — the offering gate. */
   kinds: TokenKind[]
+  /**
+   * Group roles whose tokens may NAME this property. A token from any other
+   * *recognized* role is still offered (its value shape vouched for it) but
+   * ranks last and won't be used as the row's label — that's what stopped a
+   * `--radius-none` from labelling `padding: 0`. A group with no recognized
+   * role (`brand`, `rmt`) is unconstrained, so it can still name.
+   */
+  roles: TokenRole[]
   /** Extra numeric sanity check — the property's real domain. */
   inRange?: (value: string) => boolean
 }
@@ -123,24 +160,28 @@ const num = (v: string): number => Number(v.trim())
  * easings aren't design tokens in any of the three sources we read).
  */
 export const PROP_TOKEN_RULES: Record<string, PropRule> = {
-  color: { kinds: ['color'] },
-  'background-color': { kinds: ['color'] },
-  'padding-top': { kinds: ['length'] },
-  'padding-right': { kinds: ['length'] },
-  'padding-bottom': { kinds: ['length'] },
-  'padding-left': { kinds: ['length'] },
-  'margin-top': { kinds: ['length'] },
-  'margin-right': { kinds: ['length'] },
-  'margin-bottom': { kinds: ['length'] },
-  'margin-left': { kinds: ['length'] },
-  gap: { kinds: ['length'] },
-  'border-radius': { kinds: ['length'] },
-  'font-size': { kinds: ['length'] },
-  'letter-spacing': { kinds: ['length'] },
+  color: { kinds: ['color'], roles: ['color'] },
+  'background-color': { kinds: ['color'], roles: ['color'] },
+  'padding-top': { kinds: ['length'], roles: ['spacing'] },
+  'padding-right': { kinds: ['length'], roles: ['spacing'] },
+  'padding-bottom': { kinds: ['length'], roles: ['spacing'] },
+  'padding-left': { kinds: ['length'], roles: ['spacing'] },
+  'margin-top': { kinds: ['length'], roles: ['spacing'] },
+  'margin-right': { kinds: ['length'], roles: ['spacing'] },
+  'margin-bottom': { kinds: ['length'], roles: ['spacing'] },
+  'margin-left': { kinds: ['length'], roles: ['spacing'] },
+  gap: { kinds: ['length'], roles: ['spacing'] },
+  'border-radius': { kinds: ['length'], roles: ['radius'] },
+  'font-size': { kinds: ['length'], roles: ['font-size'] },
+  'letter-spacing': { kinds: ['length'], roles: ['tracking'] },
   // A unitless line-height (1.5) is idiomatic; bound it so a z-index or a
   // duration-ish token can't pose as one.
+  // Spacing stays welcome here (unlike radius on padding): line-height is the
+  // one property taking both lengths and unitless numbers, and systems really
+  // do drive leading off the spacing scale. Predates roles; kept deliberately.
   'line-height': {
     kinds: ['length', 'number'],
+    roles: ['line-height', 'spacing'],
     inRange: (v) => !BARE_NUM_RE.test(v.trim()) || (num(v) >= 0.5 && num(v) <= 4)
   },
   // A z-index of 100 or 700 is a legal font weight, so value shape alone can't
@@ -148,9 +189,10 @@ export const PROP_TOKEN_RULES: Record<string, PropRule> = {
   // weight scale in the picker rather than being hidden.
   'font-weight': {
     kinds: ['number'],
+    roles: ['font-weight'],
     inRange: (v) => num(v) >= 100 && num(v) <= 900 && num(v) % 100 === 0
   },
-  opacity: { kinds: ['number'], inRange: (v) => num(v) >= 0 && num(v) <= 1 }
+  opacity: { kinds: ['number'], roles: ['opacity'], inRange: (v) => num(v) >= 0 && num(v) <= 1 }
 }
 
 export interface TokenCandidate {
@@ -158,10 +200,11 @@ export interface TokenCandidate {
   /** The group the token came from (its name, verbatim). */
   group: string
   /**
-   * `preferred` — the group name agrees with the property's kind.
-   * `neutral`   — the group name says nothing (a `brand` group, say).
-   * `other`     — the group name suggests a different kind; still offered
-   *               (the value shape already vouched for it), just ranked last.
+   * `preferred` — the group's role is one the property accepts.
+   * `neutral`   — the group name suggests no role at all (a `brand` group, say).
+   * `other`     — the group's role belongs to a DIFFERENT property family; still
+   *               offered (the value shape already vouched for it), but ranked
+   *               last AND barred from naming the row — see resolveTokenForValue.
    */
   rank: 'preferred' | 'neutral' | 'other'
 }
@@ -178,9 +221,8 @@ export function tokensForProp(set: TokenSet | null, prop: string): TokenCandidat
   if (!set || !rule || set.source === 'none') return []
   const out: TokenCandidate[] = []
   for (const group of set.groups) {
-    const affinity = groupAffinity(group.name)
-    const rank =
-      affinity === null ? 'neutral' : rule.kinds.includes(affinity) ? 'preferred' : 'other'
+    const role = groupRole(group.name)
+    const rank = role === null ? 'neutral' : rule.roles.includes(role) ? 'preferred' : 'other'
     for (const token of group.tokens) {
       if (!rule.kinds.includes(tokenValueKind(token.value))) continue
       if (rule.inRange && !rule.inRange(token.value)) continue
@@ -251,6 +293,15 @@ export interface TokenResolution {
  * one winner is always chosen deterministically rather than showing "2 tokens":
  * a class list that names one → the better-ranked group → the sticky previous
  * choice → detection order.
+ *
+ * Naming is STRICTER than offering. A token whose group belongs to another
+ * property family (`rank: 'other'`) is excluded here even though the picker
+ * still lists it: `0` is shared by every "none" token in a theme, so a
+ * `--radius-none` would otherwise win the label on `padding: 0` purely by
+ * detection order and tell the user nothing true. Showing the raw `0px` beats
+ * showing a confidently wrong name. The sticky exemption keeps an EXPLICIT pick
+ * honest — if the user chose that token for this row, their choice outranks a
+ * guess made from the group's name.
  */
 export function resolveTokenForValue(
   candidates: TokenCandidate[],
@@ -259,6 +310,7 @@ export function resolveTokenForValue(
 ): TokenResolution | null {
   if (!computed) return null
   const matches = candidates.filter((c) => {
+    if (c.rank === 'other' && c.token.name !== opts.sticky) return false
     const live = opts.resolved?.[c.token.name]?.trim()
     return opts.equals(computed, live || c.token.value)
   })

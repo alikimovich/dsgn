@@ -2,6 +2,59 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-30 — A radius token no longer labels `padding: 0`
+
+Reported from a real theme: the Styles panel showed `--rmt-radius-none` on the
+`padding` row and three `margin` sides. The VALUE was right — padding really was
+`0` — but the name was a different property family's token.
+
+Cause: `groupAffinity` returned a `TokenKind`, and `radius` and `spacing` both
+map to `length` (as do `fontSize` and `letterSpacing`). So for a `padding-*`
+row, whose rule accepts `length`, a radius token ranked `preferred` — exactly as
+preferred as a spacing token. `resolveTokenForValue` then picked by value
+equality, and with ranks tied it fell through to detection order. Worse,
+`matches.length === 1` short-circuits before rank is consulted at all, so when a
+theme has no zero-valued spacing token the radius one wins unopposed. `0` is the
+value that collides hardest: every "none" token in a system is `0`.
+
+The rank machinery was the right idea, just blind. Replaced `groupAffinity` with
+`groupRole` returning a semantic `TokenRole` (`spacing` | `radius` | `font-size`
+| `tracking` | …) — a notion the coarse value kind structurally cannot express —
+and gave each `PROP_TOKEN_RULES` entry the roles that may NAME it.
+
+The real split is offering vs naming, and they now have different strictness.
+Offering stays permissive per the file's founding rule: group names are
+unconstrained across the three detection sources, so they must never remove a
+token from the picker — a radius token IS a length and remains offerable for
+padding, just ranked last. Naming is strict: a token whose group marks a
+different family can't label the row, so an unopposed `--radius-none` yields to
+an honest `0px`. Two escape hatches keep that from over-reaching: an
+unrecognized group (`brand`, `rmt`) constrains nothing and can still name, and
+an explicit user pick (via `sticky`, set on pick at `StylePanel.tsx:306`) beats
+a guess made from a group's name — otherwise picking a radius token for padding
+would leave the row refusing to show what the user just chose.
+
+One deliberate non-change: `line-height` keeps `spacing` as an accepted role.
+An existing test asserts that, with a reasoned comment — it's the one property
+taking both lengths and unitless numbers, and systems really do drive leading
+off the spacing scale. Overturning it would have been scope creep hiding inside
+a refactor.
+
+Only `StylePanel` consumes `tokensForProp`/`resolveTokenForValue`, so this is
+display-side only; `main/style-tokens.ts` re-validates picks by name+group and
+is untouched, meaning no pick can start being rejected.
+
+Found in passing, NOT fixed (logged in TASKS): `sameCssValue` does not treat a
+bare `0` as `0px`, so a `--space-0: 0` token can never match a computed `0px`.
+The reported theme wrote `0px`, which is why it matched at all. Separate
+concern — it's the comparator, and changing it moves matching for every
+property.
+
+`test/token-match.mjs` covers the bug directly: both tokens offered with radius
+ranked `other`, spacing names the row, radius names nothing when unopposed, a
+neutral group still names, an explicit pick still names, and the mirror case
+(spacing must not name `border-radius`).
+
 ## 2026-07-30 — The Styles ladder stops inventing inline styles (user feedback)
 
 "I'm not sure if I'm fine with creating inline style unless it's project's

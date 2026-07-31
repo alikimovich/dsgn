@@ -1,13 +1,14 @@
 /**
  * token-match unit test (pure — no Electron, no DOM). The design-token ⇄ css
  * property matcher behind the Styles panel's token chips and picker:
- * value-shape classification, group-name affinity, the per-property gate,
- * reference forms per detection source, and value→token resolution incl. the
- * two-tokens-same-value tie. Run with: bun test/token-match.mjs
+ * value-shape classification, group ROLES, the per-property gate, reference
+ * forms per detection source, and value→token resolution incl. the
+ * two-tokens-same-value tie and the cross-family naming bar (a `--radius-none`
+ * must never label a `padding: 0`). Run with: bun test/token-match.mjs
  */
 import {
   customPropertyNames,
-  groupAffinity,
+  groupRole,
   resolveTokenForValue,
   tokenReference,
   tokenValueKind,
@@ -53,22 +54,27 @@ eq(tokenValueKind('Menlo, Monaco, monospace'), 'font', 'an unquoted stack is a f
 eq(tokenValueKind(''), 'unknown', 'empty → unknown')
 eq(tokenValueKind('ease-in-out'), 'unknown', 'a keyword we do not model → unknown')
 
-// --- groupAffinity ----------------------------------------------------------
+// --- groupRole --------------------------------------------------------------
 
-eq(groupAffinity('colors'), 'color', 'tailwind colors')
-eq(groupAffinity('color'), 'color', 'css-var first-segment group')
-eq(groupAffinity('colour'), 'color', 'british spelling')
-eq(groupAffinity('spacing'), 'length', 'tailwind spacing')
-eq(groupAffinity('space'), 'length', 'css-var space group')
-eq(groupAffinity('borderRadius'), 'length', 'tailwind borderRadius')
-eq(groupAffinity('radius'), 'length', 'manifest radius')
-eq(groupAffinity('fontSize'), 'length', 'tailwind fontSize')
-eq(groupAffinity('fontWeight'), 'number', 'fontWeight ranks as a number')
-eq(groupAffinity('boxShadow'), 'shadow', 'tailwind boxShadow')
+eq(groupRole('colors'), 'color', 'tailwind colors')
+eq(groupRole('color'), 'color', 'css-var first-segment group')
+eq(groupRole('colour'), 'color', 'british spelling')
+eq(groupRole('spacing'), 'spacing', 'tailwind spacing')
+eq(groupRole('space'), 'spacing', 'css-var space group')
+// The whole point of roles: radius and spacing are BOTH lengths, so the coarse
+// value kind cannot separate them — the group name is the only signal there is.
+eq(groupRole('borderRadius'), 'radius', 'tailwind borderRadius')
+eq(groupRole('radius'), 'radius', 'manifest radius')
+ok(groupRole('radius') !== groupRole('spacing'), 'radius and spacing are distinct roles')
+eq(groupRole('fontSize'), 'font-size', 'tailwind fontSize')
+eq(groupRole('fontWeight'), 'font-weight', 'fontWeight before the bare font catch-all')
+eq(groupRole('fontFamily'), 'font-family', 'fontFamily falls to the font catch-all')
+eq(groupRole('tracking'), 'tracking', 'tracking is letter-spacing')
+eq(groupRole('boxShadow'), 'shadow', 'tailwind boxShadow')
 // Group names are unconstrained — an unrecognized one must stay NEUTRAL, never
 // exclude, or a manifest with hand-written keys would surface nothing.
-eq(groupAffinity('brand'), null, 'an unrecognized group name says nothing')
-eq(groupAffinity('z'), null, 'a z-index group says nothing')
+eq(groupRole('brand'), null, 'an unrecognized group name says nothing')
+eq(groupRole('z'), null, 'a z-index group says nothing')
 
 // --- tokensForProp: value shape GATES, group name only RANKS ----------------
 
@@ -144,7 +150,7 @@ eq(tokensForProp(cssSet, 'transition-duration').length, 0, 'transition props tak
 eq(tokensForProp(null, 'color').length, 0, 'no token set → nothing offered')
 eq(tokensForProp({ source: 'none', groups: [] }, 'color').length, 0, 'source none → nothing')
 
-// Ranking: a matching-affinity group comes before a neutral one, and a
+// Ranking: a matching-role group comes before a neutral one, and a
 // contradicting one comes last — but all of them are still offered.
 const mixed = {
   source: 'manifest',
@@ -263,8 +269,79 @@ eq(
   'the sticky previous pick breaks the tie, so the label does not flip'
 )
 
+// --- naming across property families (the `--radius-none` on padding bug) ---
+// Reported from a real theme: `padding` and three `margin` sides all showed
+// `--rmt-radius-none`. The value was right (padding really was 0) but the NAME
+// was a different property family's token, winning purely on detection order
+// because every "none" token in a theme is 0 and the coarse value kind can't
+// tell a radius from a spacing.
+
+const zeroSet = {
+  source: 'css',
+  groups: [
+    { name: 'radius', tokens: [{ name: '--radius-none', value: '0px' }] },
+    { name: 'spacing', tokens: [{ name: '--space-none', value: '0px' }] }
+  ]
+}
+const padCands = tokensForProp(zeroSet, 'padding-top')
+
+// Offering stays permissive — a radius token IS a length, so the picker must
+// still list it. Only its rank changes.
+eq(names(padCands).join(','), '--space-none,--radius-none', 'both offered, spacing ranked first')
+eq(padCands.find((c) => c.token.name === '--radius-none')?.rank, 'other', 'radius ranks other')
+
+eq(
+  resolveTokenForValue(padCands, '0px', { equals: equals('padding-top') })?.match.token.name,
+  '--space-none',
+  'the same-family token names the row'
+)
+// The bug itself: with NO spacing token to win, the radius token must not step
+// in — an honest `0px` beats a confidently wrong name.
+const radiusOnly = tokensForProp(
+  { source: 'css', groups: [{ name: 'radius', tokens: [{ name: '--radius-none', value: '0px' }] }] },
+  'padding-top'
+)
+eq(radiusOnly.length, 1, 'still offered when it is the only length token')
+eq(
+  resolveTokenForValue(radiusOnly, '0px', { equals: equals('padding-top') }),
+  null,
+  'a foreign-family token never names the row, even unopposed'
+)
+// …unless the user explicitly picked it. A deliberate choice outranks a guess
+// made from the group's name.
+eq(
+  resolveTokenForValue(radiusOnly, '0px', {
+    sticky: '--radius-none',
+    equals: equals('padding-top')
+  })?.match.token.name,
+  '--radius-none',
+  'an explicit pick still names the row'
+)
+// An unrecognized group constrains nothing, so it must still be able to name —
+// otherwise a manifest with hand-written keys would label nothing at all.
+eq(
+  resolveTokenForValue(
+    tokensForProp(
+      { source: 'css', groups: [{ name: 'rmt', tokens: [{ name: '--rmt-gutter', value: '0px' }] }] },
+      'padding-top'
+    ),
+    '0px',
+    { equals: equals('padding-top') }
+  )?.match.token.name,
+  '--rmt-gutter',
+  'a neutral group can still name'
+)
+// The mirror case: spacing must not name a border-radius row either.
+eq(
+  resolveTokenForValue(tokensForProp(zeroSet, 'border-radius'), '0px', {
+    equals: equals('border-radius')
+  })?.match.token.name,
+  '--radius-none',
+  'border-radius names the radius token, not the spacing one'
+)
+
 if (failed === 0) {
-  console.log('TOKEN-MATCH OK — value kinds, affinity, per-prop gate, references, resolution')
+  console.log('TOKEN-MATCH OK — value kinds, roles, per-prop gate, references, resolution')
 } else {
   console.error(`TOKEN-MATCH: ${failed} assertion(s) failed`)
 }

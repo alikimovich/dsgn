@@ -3,6 +3,21 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Design-token naming accuracy (2026-07-30, user-reported)
+
+- [x] **A token from another property family can't name a row.** ✅ 2026-07-30 —
+      `--rmt-radius-none` was labelling `padding: 0`. `groupAffinity` (a coarse
+      `TokenKind`) became `groupRole` (a semantic `TokenRole`), and naming is now
+      stricter than offering: a radius token stays in the picker for padding but
+      can't label it. Neutral groups and explicit picks are exempt.
+      `src/shared/token-match.ts`, `test/token-match.mjs`. See PROGRESS 2026-07-30.
+- [ ] **`sameCssValue` doesn't equate bare `0` with `0px`.** Found while writing
+      the above. A theme declaring `--space-0: 0` (unitless — legal CSS, and
+      `tokenValueKind` already accepts it as a length) can never match a computed
+      `0px`, so that token is offered but never names anything. Fix belongs in
+      the renderer's `css-values.ts` comparator; it shifts matching for every
+      property, so it wants its own pass.
+
 ## Styles ladder — respect the project's styling convention (2026-07-30, user-requested)
 
 - [x] **Never INTRODUCE an inline style.** ✅ 2026-07-30 — S2 now only extends a
