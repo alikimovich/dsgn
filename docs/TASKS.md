@@ -12,13 +12,12 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       `<h1>` in a CSS-variable project. `src/main/styles.ts`,
       `styles-svelte.ts`; contrast case + `BareCard` fixture in
       `test/style-edit.mjs`. See PROGRESS 2026-07-30.
-- [ ] **Let S1 CREATE a class attribute for Tailwind projects.** The mirror-image
-      gap: S1 can only rewrite an existing class string, so a Tailwind project's
-      unclassed element pays an agent turn it shouldn't. Blocked on reliable
-      project-level Tailwind detection — v4 is CSS-first and often ships no
-      `tailwind.config.*` for `tokens.ts`'s `TAILWIND_CONFIGS` probe to find, and
-      `looksTailwind` only inspects the element's live classes. Probably wants an
-      `@import "tailwindcss"` scan of the project's CSS entry.
+      Deliberately NOT planned (dropped 2026-07-30, user call): teaching S1 to
+      CREATE a class attribute for Tailwind projects. The mirror-image gap is
+      real — an unclassed element in a Tailwind project pays an agent turn it
+      shouldn't — but reliable project-level Tailwind detection is the blocker
+      (v4 is CSS-first and often ships no `tailwind.config.*`), and agent-routing
+      it is correct, just slower.
 - [ ] **A runnable tier for the styles ladder.** `style-edit.mjs` is electron-only
       and can't launch a window on the current dev machine (dies at
       `.empty__open`, at HEAD too), so the S2-refusal assertion is written but
