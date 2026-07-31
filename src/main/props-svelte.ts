@@ -38,7 +38,7 @@ type SvelteCompiler = typeof import('svelte/compiler')
 let sveltePromise: Promise<SvelteCompiler> | null = null
 const loadSvelte = (): Promise<SvelteCompiler> => (sveltePromise ??= import('svelte/compiler'))
 
-interface Node {
+export interface Node {
   type?: string
   start?: number
   end?: number
@@ -340,7 +340,7 @@ function isRouteFile(file: string): boolean {
   return basename(file).startsWith('+')
 }
 
-async function parseSvelte(code: string): Promise<Node | null> {
+export async function parseSvelte(code: string): Promise<Node | null> {
   try {
     const { parse } = await loadSvelte()
     return parse(code, { modern: true }) as unknown as Node

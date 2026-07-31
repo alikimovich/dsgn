@@ -12,8 +12,23 @@
  *   Enter runs the real ScrubInput → StylePanel.commit → styles.apply wiring
  *   (`rounded-[13px]` lands) → select the inline-styled element → a two-apply
  *   same-prop BURST merges `paddingTop` into its `style={{…}}` literal (S2)
- *   and coalesces in edit-history → ONE `edits.undo` restores the pre-burst
+ *   and coalesces in edit-history → a BARE element (no class, no style attr)
+ *   refuses instead: S2 only ever EXTENDS an existing inline style, so this
+ *   falls to S3 with the file untouched and a prompt that forbids the agent
+ *   from adding the prop either → ONE `edits.undo` restores the pre-burst
  *   file → island screenshots.
+ *
+ * Design tokens: select the element whose color happens to EQUAL
+ * `--color-text`'s value but never references it → the Styles tab's header
+ * names the token source, but the color row shows the raw hex, NOT a chip —
+ * value coincidence alone is no longer proof (2026-07-31: this test used to
+ * assert the opposite; that was the hallucination). Re-select an element
+ * whose inline style IS literally `var(--color-text)` → NOW the chip names it
+ * (the specified-declaration read through the sandboxed preload proving real
+ * usage, not the resolved computed value). The inline picker still offers
+ * ONLY the color tokens (the value-shape gate, through real UI) → clicking
+ * `--color-title` still writes `var(--color-title)` — the REFERENCE, not
+ * `#212121` — and one undo restores it.
  *
  * v10 phase 4 — transitions: re-select the Tailwind element →
  * `transition-duration: 150ms` snaps to the named time scale (`duration-150`)
@@ -27,17 +42,21 @@
  *
  * Run with: bun run test:style-edit
  */
-import { _electron as electron } from 'playwright'
-import electronPath from 'electron'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import electronPath from 'electron'
+import { _electron as electron } from 'playwright'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = join(root, 'test', 'fixtures', 'propedit-app')
 const styled = join(fixture, 'src', 'Styled.tsx')
 const TW_SRC = 'src/Styled.tsx:5' // <div className="p-4 rounded-md"> in TwCard
 const INLINE_SRC = 'src/Styled.tsx:9' // <div style={{ padding: '8px' }}> in InlineCard
+const TOKEN_SRC = 'src/Styled.tsx:21' // <div style={{ color: '#6c6c6c' }}> in TokenCard — coincidence, unproven
+const BARE_SRC = 'src/Styled.tsx:46' // <div> in BareCard — no class, no style attr
+const PROVEN_TOKEN_SRC = 'src/Styled.tsx:54' // <div style={{ color: 'var(--color-text)' }}> in ProvenTokenCard
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
 
@@ -236,7 +255,7 @@ try {
   if (padNow !== '33px') throw new Error(`live preview did not inject padding-top 33px, computed: ${padNow}`)
   // …and the panel's fresh-read seam sees the override too.
   const readBack = await panelEval("window.api.styles.read(['padding-top'])")
-  if (readBack?.['padding-top'] !== '33px') {
+  if (readBack?.values?.['padding-top'] !== '33px') {
     throw new Error(`styles.read should see the live override: ${JSON.stringify(readBack)}`)
   }
   await panelEval('window.api.styles.clearPreview(); true')
@@ -317,6 +336,32 @@ try {
     throw new Error(`S2 style-object merge not on disk; style line: ${afterInline.match(/style=\{\{[^}]*\}\}/)?.[0]}`)
   }
 
+  // --- The S2 REFUSAL (the contrast case): a bare <div> — no className, no
+  // style attr — has nothing for the ladder to extend. Writing `style={{…}}`
+  // would impose an inline-style convention the project never showed, so this
+  // must fall to S3 with the file left byte-identical. The prompt assertion
+  // matters as much as the refusal: without that sentence the agent just adds
+  // the inline prop itself and the whole gate buys nothing. Inert w.r.t. the
+  // undo chain below — it makes no edit-history entry. ---
+  const beforeBare = readFileSync(styled, 'utf8')
+  const bareRes = await panelEval(
+    `window.api.styles.apply(${JSON.stringify(fixture)}, ${JSON.stringify({
+      source: BARE_SRC,
+      prop: 'padding-top',
+      value: '12px',
+      classes: []
+    })})`
+  )
+  if (bareRes?.applied || !bareRes?.needsAgent) {
+    throw new Error(`bare element must route to the agent, got: ${JSON.stringify(bareRes)}`)
+  }
+  if (!/do NOT add an inline `style` prop/.test(bareRes.agentPrompt ?? '')) {
+    throw new Error(`agent prompt must forbid the inline prop, got: ${bareRes.agentPrompt}`)
+  }
+  if (readFileSync(styled, 'utf8') !== beforeBare) {
+    throw new Error('a refused style edit still wrote to disk')
+  }
+
   // --- Undo (real IPC): ONE step reverts the whole coalesced burst exactly —
   // if the two applies made separate entries, this restores the 11px
   // intermediate state instead and the byte comparison fails. ---
@@ -324,6 +369,103 @@ try {
   if (!undid.ok) throw new Error(`undo not ok: ${JSON.stringify(undid)}`)
   if (readFileSync(styled, 'utf8') !== beforeInline) {
     throw new Error('one undo did not restore the pre-burst source (burst not coalesced?)')
+  }
+
+  // --- Design tokens: the element's color EQUALS --color-text's value but
+  // never REFERENCES it (a plain literal hex) — the row must show the raw
+  // value, NOT a chip. `getComputedStyle` can't distinguish the two; only the
+  // specified-declaration read (`declaredVars`, via style-provenance.ts) can,
+  // and it correctly reports null here (no var() in play). ---
+  await pickElement('token-box', TOKEN_SRC)
+  await openStylesTab()
+
+  // The header line proves the TokenSet reached the island at all (it travels
+  // main renderer → panel:state → island, a seam nothing else covers) —
+  // unaffected by the naming fix, which only governs a specific row's chip.
+  const tokenSource = await waitPanel(
+    "document.querySelector('.stylepanel__tokensource')?.textContent ?? ''"
+  )
+  if (!/tokens/.test(tokenSource) || !tokenSource.includes('CSS file')) {
+    throw new Error(`token source line missing or wrong: ${JSON.stringify(tokenSource)}`)
+  }
+  // EVERY token-able row gets a toggle (padding offers --space-md), so scope
+  // every query to the `color` row — a bare document-wide selector picks up the
+  // Layout group's rows first.
+  const COLOR_ROW = `[...document.querySelectorAll('.stylepanel__tokenrow')].find(
+    (r) => r.querySelector('.stylepanel__name')?.title === 'color'
+  )`
+
+  // No chip: a coincidentally-equal literal must not be named. The row falls
+  // through to ColorControl (the raw hex input), not TokenChip.
+  const noChip = await waitPanel(`${COLOR_ROW}?.querySelector('.stylepanel__token') ? 'chip' : 'raw'`)
+  if (noChip !== 'raw') {
+    throw new Error(`an unproven coincidence must not be named with a chip, got: ${noChip}`)
+  }
+  const rawShown = await panelEval(`${COLOR_ROW}?.querySelector('.colorctl__hex')?.value ?? ''`)
+  if (!/6c6c6c/i.test(rawShown)) {
+    throw new Error(`the raw hex should still be shown plainly, got: ${JSON.stringify(rawShown)}`)
+  }
+
+  // --- Re-select the PROVEN element: its inline style IS `var(--color-text)`
+  // literally. `el.style.getPropertyValue('color')` preserves that unresolved
+  // (unlike getComputedStyle), so THIS is what should show the chip. ---
+  await pickElement('proven-token-box', PROVEN_TOKEN_SRC)
+  await openStylesTab()
+
+  const chip = await waitPanel(
+    `${COLOR_ROW}?.querySelector('.stylepanel__token')?.textContent?.trim() ?? ''`
+  )
+  if (chip !== '--color-text') {
+    throw new Error(`a real var() reference should name the row --color-text, got ${chip}`)
+  }
+
+  // Expand the color row's token picker. Click-only-until-rendered: a second
+  // click would collapse it again.
+  await waitPanel(`(() => {
+    const row = ${COLOR_ROW}
+    if (!row) return false
+    if (row.querySelector('.stylepanel__tokens')) return true
+    row.querySelector('.stylepanel__token-toggle')?.click()
+    return false
+  })()`)
+  // Only color tokens are offered — --space-md and --z-modal must be absent,
+  // which is the value-shape gate doing its job through the real UI.
+  const offered = await panelEval(
+    `[...${COLOR_ROW}.querySelectorAll('.stylepanel__tokens [data-token]')].map((e) => e.dataset.token)`
+  )
+  const expectOffered = ['--color-text', '--color-title', '--color-link']
+  if (JSON.stringify(offered) !== JSON.stringify(expectOffered)) {
+    throw new Error(`picker should offer exactly the color tokens, got ${JSON.stringify(offered)}`)
+  }
+  await shotIsland('style-edit-tokens.png')
+
+  const beforeToken = readFileSync(styled, 'utf8')
+  const picked = await panelEval(`(() => {
+    const b = ${COLOR_ROW}?.querySelector('[data-token="--color-title"]')
+    if (!b) return false
+    b.click()
+    return true
+  })()`)
+  if (picked !== true) throw new Error('the --color-title swatch was not clickable')
+  let afterToken = ''
+  for (let i = 0; i < 40; i++) {
+    afterToken = readFileSync(styled, 'utf8')
+    if (afterToken.includes('var(--color-title)')) break
+    await new Promise((r) => setTimeout(r, 150))
+  }
+  // The REFERENCE, never the resolved value — writing #212121 here would defeat
+  // the whole feature.
+  if (!afterToken.includes(`color: "var(--color-title)"`)) {
+    throw new Error(
+      `token pick did not write a var() reference; style line: ${afterToken.match(/style=\{\{ color[^}]*\}\}/)?.[0]}`
+    )
+  }
+  if (afterToken.includes('#212121')) throw new Error('the resolved value was written, not the reference')
+
+  const undoToken = await win.evaluate((a) => window.api.edits.undo(a.fixture), { fixture })
+  if (!undoToken.ok) throw new Error(`undo (token) not ok: ${JSON.stringify(undoToken)}`)
+  if (readFileSync(styled, 'utf8') !== beforeToken) {
+    throw new Error('undo did not restore the pre-token source exactly')
   }
 
   // --- Transitions (phase 4): back to the Tailwind element. ---
@@ -435,8 +577,11 @@ try {
   console.log(
     'STYLE-EDIT OK — Styles tab groups + fresh read, S1 tailwind rewrite (pt-[13px]), ' +
       'live preview inject/clear, UI-driven ScrubInput commit (rounded-[13px]), ' +
-      'S2 inline merge burst, one-undo coalescing, transitions (duration-150, ' +
-      'ease-[cubic-bezier(…)] no-spaces, BezierEditor nudge → ease keyword snap), full undo chain'
+      'S2 inline merge burst, one-undo coalescing, bare-element S2 refusal, ' +
+      'design tokens (an unproven coincidence shows raw, a real var() reference ' +
+      'names --color-text, picker offers only colors, pick writes var(--color-title)), ' +
+      'transitions (duration-150, ease-[cubic-bezier(…)] no-spaces, BezierEditor ' +
+      'nudge → ease keyword snap), full undo chain'
   )
 } catch (err) {
   console.error('STYLE-EDIT FAILED:', err?.message ?? err)

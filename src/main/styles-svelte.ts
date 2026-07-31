@@ -3,16 +3,23 @@ import type { StyleEdit, StyleEditResult } from '../shared/api'
 import { mergeStyleString } from './inline-style'
 import { commitEdit, type ResolvedSource } from './props'
 import { findElement } from './props-svelte'
-import { looksTailwind, rewriteClassList } from './tw-styles'
+import { type ResolvedTokenRef, tokenClassRewrite } from './style-tokens'
+import { looksTailwind } from './tw-styles'
 
 /**
  * Svelte adapter for the Styles engine — the `.svelte` counterpart of styles.ts,
  * mirroring the props.ts / props-svelte.ts pairing. Same S1/S2/S3 contract:
- * S1 rewrite a Tailwind utility in a literal `class="…"`, S2 merge into a
- * literal `style="…"` (inserting the attribute when absent), S3 hand anything
- * dynamic (class:/style: directives, spreads, expression attributes) to the
- * agent. Commits go through the shared commitEdit seam with the same
- * `${source}:style:${prop}` key, so scrub bursts coalesce into one undo step.
+ * S1 rewrite a Tailwind utility in a literal `class="…"`, S2 merge into an
+ * EXISTING literal `style="…"`, S3 hand anything dynamic (class:/style:
+ * directives, spreads, expression attributes) — or any element with no
+ * `style` attribute to extend — to the agent. Commits go through the shared
+ * commitEdit seam with the same `${source}:style:${prop}` key, so scrub bursts
+ * coalesce into one undo step.
+ *
+ * S2 deliberately never CREATES the attribute. A Svelte component almost always
+ * styles its elements from its own scoped `<style>` block, so inserting
+ * `style="…"` would both impose a foreign convention and outrank the block it
+ * belongs in — silently winning on specificity forever after.
  *
  * svelte/compiler is ESM-only, so it's loaded via dynamic import() like the
  * other ESM engines (Agent SDK, babel, react-docgen).
@@ -81,24 +88,40 @@ const hasTransitionShorthand = (styleValue: string): boolean =>
     return (colon === -1 ? decl : decl.slice(0, colon)).trim().toLowerCase() === 'transition'
   })
 
-const styleAgentPrompt = (edit: StyleEdit): string =>
-  `Set the CSS property \`${edit.prop}\` to \`${edit.value}\` on the element at ${edit.source} ` +
-  `(rewrite its classes or styles however fits the component best).`
+/**
+ * The S3 seed. The scoped-`<style>` sentence is load-bearing: a Svelte
+ * component usually styles its elements from its own `<style>` block, which
+ * neither S1 nor S2 can reach — without saying so, the agent hunts for a class
+ * or style attribute that isn't there.
+ */
+const styleAgentPrompt = (edit: StyleEdit, token: ResolvedTokenRef | null): string => {
+  const what = token
+    ? `to the design token \`${token.name}\` (\`${token.ref}\`, currently \`${edit.value}\`), ` +
+      'using the token reference rather than the literal value,'
+    : `to \`${edit.value}\``
+  return (
+    `Set the CSS property \`${edit.prop}\` ${what} on the element at ${edit.source}. ` +
+    "Its styles may live in this component's own `<style>` block rather than a " +
+    'class or style attribute — edit whichever the component already uses, and do ' +
+    'NOT add an inline `style` attribute where there is none.'
+  )
+}
 
 /**
  * Apply a StyleEdit to a `.svelte` file. `resolved` is the stamp's location
  * (from resolveSource); the caller (styles.ts) has already validated the
- * prop/value against the v1 allowlist.
+ * prop/value against the v1 allowlist and re-resolved any design-token pick.
  */
 export async function applyStyleEditSvelte(
   root: string,
   edit: StyleEdit,
-  resolved: ResolvedSource
+  resolved: ResolvedSource,
+  token: ResolvedTokenRef | null = null
 ): Promise<StyleEditResult> {
   const toAgent = (): StyleEditResult => ({
     applied: false,
     needsAgent: true,
-    agentPrompt: styleAgentPrompt(edit)
+    agentPrompt: styleAgentPrompt(edit, token)
   })
   let code: string
   try {
@@ -109,7 +132,7 @@ export async function applyStyleEditSvelte(
   const ast = await parseSvelte(code)
   if (!ast) return toAgent()
   const el = findElement(ast, code, resolved.line, resolved.column)
-  if (!el || typeof el.name !== 'string' || typeof el.start !== 'number') return toAgent()
+  if (!el) return toAgent()
 
   // A spread could carry class/style — the element's final attributes are unknowable.
   if (hasAttrOfType(el, 'SpreadAttribute')) return toAgent()
@@ -117,7 +140,9 @@ export async function applyStyleEditSvelte(
   const commit = async (next: string, strategy: 'tailwind' | 'inline'): Promise<StyleEditResult> => {
     const key = `${edit.source}:style:${edit.prop}`
     const res = await commitEdit(root, resolved.file, code, next, key, edit.group)
-    return res.applied ? { applied: true, strategy } : { applied: false, error: res.error }
+    return res.applied
+      ? { applied: true, strategy, wroteToken: token != null }
+      : { applied: false, error: res.error }
   }
 
   // S1 — Tailwind class rewrite on a literal `class="…"`. A class: directive
@@ -125,7 +150,7 @@ export async function applyStyleEditSvelte(
   // the rewrite (the inline path below still works — it wins on specificity).
   const classAttr = findAttr(el, 'class')
   if (looksTailwind(edit.classes) && classAttr?.literal != null && !hasAttrOfType(el, 'ClassDirective')) {
-    const rewritten = rewriteClassList(classAttr.literal, edit.prop, edit.value)
+    const rewritten = tokenClassRewrite(classAttr.literal, edit, token)
     if (rewritten != null && SPLICE_SAFE_RE.test(rewritten)) {
       // findAttr spans the WHOLE attribute (`class="…"`) — rewrite it.
       const next = `${code.slice(0, classAttr.start)}class="${rewritten}"${code.slice(classAttr.end)}`
@@ -133,27 +158,24 @@ export async function applyStyleEditSvelte(
     }
   }
 
-  // S2 — merge into `style="…"`. A style: directive overrides the attribute
-  // per-property at runtime, so merging under one would silently not apply.
+  // S2 — merge into an EXISTING `style="…"`. A style: directive overrides the
+  // attribute per-property at runtime, so merging under one would silently not apply.
   if (hasAttrOfType(el, 'StyleDirective')) return toAgent()
   const styleAttr = findAttr(el, 'style')
-  if (styleAttr && styleAttr.literal == null) return toAgent() // style={expr} / concat
+  // No attribute to extend → the agent (see the header note: creating one here
+  // would impose a convention AND outrank the scoped <style> block it belongs in).
+  if (!styleAttr) return toAgent()
+  if (styleAttr.literal == null) return toAgent() // style={expr} / concat
   // Editing a transition longhand while the literal carries the `transition`
   // SHORTHAND: mergeStyleString replaces an existing longhand IN PLACE, so a
   // later shorthand would silently reset it by cascade order — untangling that
   // is the agent's job (same guard as the JSX path in styles.ts).
-  if (edit.prop.startsWith('transition-') && hasTransitionShorthand(styleAttr?.literal ?? '')) {
+  if (edit.prop.startsWith('transition-') && hasTransitionShorthand(styleAttr.literal)) {
     return toAgent()
   }
-  const merged = mergeStyleString(styleAttr?.literal ?? '', edit.prop, edit.value)
+  // With a resolved token this writes the REFERENCE, not what it resolves to.
+  const merged = mergeStyleString(styleAttr.literal, edit.prop, token?.ref ?? edit.value)
   if (!SPLICE_SAFE_RE.test(merged)) return toAgent()
-  if (styleAttr) {
-    const next = `${code.slice(0, styleAttr.start)}style="${merged}"${code.slice(styleAttr.end)}`
-    return commit(next, 'inline')
-  }
-  // Absent — insert right after the tag name (mirrors applySvelteEdit's insertion).
-  const insertAt = el.start + 1 + el.name.length
-  if (code.slice(el.start + 1, insertAt) !== el.name) return toAgent()
-  const next = `${code.slice(0, insertAt)} style="${merged}"${code.slice(insertAt)}`
+  const next = `${code.slice(0, styleAttr.start)}style="${merged}"${code.slice(styleAttr.end)}`
   return commit(next, 'inline')
 }

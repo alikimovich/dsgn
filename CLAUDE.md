@@ -82,9 +82,21 @@ src/
     props.ts / props-svelte.ts   prop editing engines (React via react-docgen /
                     Svelte 5); they mirror each other's splice/apply contract
     styles.ts / styles-svelte.ts  CSS editing for the island's Styles tab: one
-                    edit → Tailwind class rewrite, else inline-style splice,
-                    else hand to the agent; tw-styles.ts + inline-style.ts are
-                    the pure mapping/splicing halves
+                    edit → Tailwind class rewrite, else merge into an EXISTING
+                    inline style, else hand to the agent; tw-styles.ts +
+                    inline-style.ts are the pure mapping/splicing halves
+    style-tokens.ts re-resolves a design-token pick from the island (name+group
+                    only) against the project's own tokens and decides what to
+                    write — a `var(--name)` reference or a Tailwind token class
+    move-node.ts / move-node-svelte.ts / move-node-html.ts   the Layers panel's
+                    drag-to-reorder engines (React/Svelte/static HTML): same-
+                    parent sibling reorder writes real source; anything
+                    ambiguous (shared stamp, cross-file, templated by a
+                    .map()/{#each}) → needsAgent. move-node-splice.ts is the
+                    shared, dependency-free rebuild-from-scratch splice all
+                    three call; ast-walk.ts is the shared parent/ancestor walk
+                    (React + Svelte; static HTML uses its own, to dodge parse5's
+                    parentNode back-references)
     control-manifest.ts / control-panels.ts   AI-surfaced control panels:
                     validate + anchor-lex + render literals (pure) and the
                     main-owned .dsgn/control-panels.json store + controls:* IPC
@@ -113,9 +125,26 @@ src/
   preview/preload.ts  SECOND preload, injected into the PREVIEWED app's
                     WebContentsView: element select/hover, comments, annotations.
                     Own tsconfig (tsconfig.preview.json)
+  preview/layers.ts DOM tree walk + child-index-path node resolution for the
+                    Layers panel (bulk read, panel-driven select/hover, the
+                    structural MutationObserver watch) — split out of preload.ts,
+                    which only wires the IPC into it
+  preview/style-provenance.ts  proves a style property's value comes from a
+                    design token instead of merely equalling one: reads the
+                    SPECIFIED (unresolved) declaration — inline `style=` or a
+                    matched stylesheet/scoped-`<style>` rule — since
+                    `getComputedStyle` always resolves `var()` away and so can
+                    never tell "is" from "coincidentally equals". Threaded
+                    through `styles:read` as `declaredVars`
   shared/api.ts     the IPC contract — single source of truth for cross-process types
+  shared/token-match.ts  which design tokens may be offered for a css property
+                    and which one a computed value IS. Pure + used by BOTH main
+                    (re-validating a pick) and the island (chips + picker)
   renderer/src/     React 18 UI: App.tsx, components/ (ChatPanel, PreviewPane,
-                    PropPanel, CodeDrawer, Rail, …), zustand store.ts, shadcn ui/
+                    PropPanel, CodeDrawer, Rail, LayersPanel + LayersTree, …),
+                    zustand store.ts, shadcn ui/
+                    components/styles/  the Styles tab's rows + controls
+                    (ScrubInput, ColorControl, BezierEditor, TokenPicker)
   ../bin/praxis.mjs the `praxis` CLI (launch + `--update`); owns the update
                     sequence (git pull + bun install + build). ../install.sh boots it.
 test/             hand-rolled .mjs tests + fixtures/ + artifacts/ (PNGs, gitignored)
@@ -150,6 +179,17 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   plain-CSS on 2026-06-26). Legacy custom-property CSS still lives in
   `renderer/src/styles.css`; prefer Tailwind utilities + shadcn primitives for
   new UI, and migrate legacy rules out of styles.css when you touch them.
+- **Never invent a new font-size or line-height** — reuse one already in use,
+  unless the user explicitly asks for a new one. There's no formal type-scale
+  token (no `--text-sm`/`--text-base` CSS vars); the de facto scale is
+  whichever `text-[Npx]` values already recur across `components/` — as of
+  this writing: `9px, 10px, 10.5px, 11px, 11.5px, 12px, 12.5px, 13px` (plus
+  the standard Tailwind `text-sm`/`text-base`/etc. for normal body text).
+  Before adding a small/muted label, grep for the closest existing sibling
+  (e.g. `.proppanel__source`, `.notes__where`) and match its exact class
+  string rather than picking a new number. Line-height is simpler: always
+  Tailwind's named scale (`leading-none`, `leading-snug`, `leading-5`, …),
+  never an arbitrary `leading-[Npx]` — grep confirms no component uses one.
 - The Claude Agent SDK is **ESM-only** — `main` is CJS, so it's loaded via
   dynamic `import()` in `agent.ts`/`backends/` (never static/`require`).
 - All cross-process types go in `src/shared/api.ts`; keep `PraxisApi`, the
@@ -165,6 +205,17 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
 
 ## Gotchas (hard-won — read before debugging these areas)
 
+- **Native menu accelerators beat renderer keydown — and tests can't see it.**
+  A menu item's accelerator (incl. every `role:` item's built-in one)
+  intercepts the PHYSICAL keystroke in the main process; a renderer
+  `window.addEventListener('keydown')` for the same combo never fires. But
+  synthetic/CDP-injected key events (Playwright, `sendInputEvent`) BYPASS menu
+  accelerators, so a test of that keydown handler passes while a real keyboard
+  is broken. This shipped a dead Cmd+Z source-undo behind `role: 'editMenu'`
+  for weeks. Rule: any app shortcut that a menu (or a role) also claims must be
+  handled via the menu item's `click` → `menu:action`, not a renderer keydown;
+  and Edit→Undo/Redo route by focus (`buildAppMenu`'s `editCommand` +
+  App.tsx's menu-action handler + `menu:native-edit` for focused text fields).
 - **ESM/CJS**: the Agent SDK is ESM-only, `main` is CJS → dynamic `import()`
   only, never static/`require`.
 - **The preview `WebContentsView` is a separate CDP target** — not in renderer
@@ -182,6 +233,15 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
 - **Prop editing is gated** on `PropInspection.hasSchema` (a resolved
   react-docgen/svelte schema). Unready components are prompt-only; the on-open
   setup offer instruments them.
+- **The Styles ladder never INTRODUCES a styling convention.** S2 merges into a
+  `style` attribute that already exists; it will not create one, and the S3
+  prompt explicitly forbids the agent from creating one either. Re-adding an
+  insert-when-absent branch to make edits feel snappier would push inline styles
+  into projects that style from a stylesheet or a Svelte scoped `<style>` block
+  — where the inserted attribute also silently outranks that block forever after.
+  An element with no class and no `style` is SUPPOSED to cost an agent turn.
+  (Note S1 has the mirror-image gap: it can only rewrite an existing class
+  string, never add one, so Tailwind projects pay that turn too.)
 - **Dev CDP**: `bun run dev` opens `--remote-debugging-port` 9222 (override
   `PRAXIS_DEBUG_PORT`; dev-only). Inspect either target via Chrome
   `chrome://inspect#devices`; Playwright's `_electron` still can't reach the

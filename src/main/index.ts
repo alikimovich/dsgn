@@ -1,35 +1,42 @@
 import {
   app,
   BrowserWindow,
-  WebContentsView,
-  Menu,
-  ipcMain,
   dialog,
-  shell,
+  ipcMain,
+  Menu,
+  type MenuItemConstructorOptions,
   nativeImage,
   nativeTheme,
   powerMonitor,
-  type MenuItemConstructorOptions
+  shell,
+  WebContentsView,
+  webContents
 } from 'electron'
 import { join } from 'path'
-import type { RecentMenuEntry, SelectedElement } from '../shared/api'
-import { registerDevServerIpc } from './devserver'
-import { registerSimulatorIpc } from './simulator'
+import type {
+  MoveNodeRequest,
+  RecentMenuEntry,
+  SelectedElement,
+  StyleReadResult
+} from '../shared/api'
 import { registerAgentIpc } from './agent'
-import { registerPropsIpc } from './props'
-import { registerStylesIpc } from './styles'
-import { registerControlsIpc } from './control-panels'
 import { registerAnnotationsIpc } from './annotations'
-import { registerTokensIpc } from './tokens'
-import { registerSetupIpc } from './setup'
-import { ensureBranch, switchBranch, listBranches, checkoutBranch } from './git'
-import { listProjectFiles } from './file-tree'
-import { createProject } from './scaffold'
+import { registerControlsIpc } from './control-panels'
+import { registerDevServerIpc } from './devserver'
 import { registerDiagnoseIpc } from './diagnose'
-import { registerUpdateIpc } from './update-ipc'
 import { registerFeedbackIpc } from './feedback'
+import { listProjectFiles } from './file-tree'
+import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
 import { registerGithubIpc } from './github'
+import { applyMoveNode } from './move-node'
 import { registerPreviewSource } from './preview-state'
+import { registerPropsIpc } from './props'
+import { createProject } from './scaffold'
+import { registerSetupIpc } from './setup'
+import { registerSimulatorIpc } from './simulator'
+import { registerStylesIpc } from './styles'
+import { registerTokensIpc } from './tokens'
+import { registerUpdateIpc } from './update-ipc'
 
 // Product name — drives the macOS app menu label and the About panel. Set at
 // module load (before app is ready) so the menu bar reads "Praxis", not "Electron".
@@ -119,6 +126,10 @@ let commentModeActive: 'comment' | 'annotate' | null = null
 // Mobile viewport: draw the iPhone bezel INSIDE the preview page (pointer-events
 // none) so it overlays the app's screen corners yet passes clicks/selection through.
 let frameModeActive = false
+// Layers panel: whether the renderer wants the preload's MutationObserver armed.
+// Same lifecycle as the flags above — preload-local state that dies on every
+// fresh injection, re-armed on did-finish-load below.
+let layersWatchActive = false
 // Channels mirrored in src/preview/preload.ts (the injected preview preload).
 const PREVIEW_SET_MODE = 'praxis:preview:set-select-mode'
 const PREVIEW_PICKED = 'praxis:preview:element-picked'
@@ -135,6 +146,12 @@ const PREVIEW_TOOLBAR_ACTION = 'praxis:preview:toolbar-action'
 const PREVIEW_CLEAR_SELECTED = 'praxis:preview:clear-selected'
 const PREVIEW_SET_STATUS = 'praxis:preview:set-status'
 const PREVIEW_TOGGLE_SELECT = 'praxis:preview:toggle-select'
+const LAYERS_READ = 'layers:read'
+const LAYERS_READ_REPLY = 'layers:read-reply'
+const LAYERS_CHANGED = 'layers:changed'
+const LAYERS_SELECT = 'layers:select'
+const LAYERS_HOVER = 'layers:hover'
+const LAYERS_SET_WATCH = 'layers:set-watch'
 
 // Launch-status pill text (shown inside the preview); re-pushed after loads.
 let previewStatusText: string | null = null
@@ -260,6 +277,30 @@ function buildAppMenu(): void {
   const send = (action: string): void => sendToMain('menu:action', action)
   const openRecent = (root: string): void => sendToMain('menu:open-recent', root)
 
+  /**
+   * Edit → Undo/Redo. NOT `role: 'editMenu'`: the role's Undo item owns the
+   * Cmd+Z accelerator at the NATIVE menu level, which intercepts the keystroke
+   * in the main process and routes it to text-editing undo — the renderer's
+   * keydown listener (App.tsx, the praxis source-edit undo) never fires for a
+   * physical keyboard. (Tests never caught this: synthetic/CDP key events
+   * bypass native menu accelerators, so the renderer handler DID fire there.)
+   *
+   * Routing: a non-main focused webContents (the preview, the props island,
+   * the pop-out editor) gets plain text-editing undo — exactly what the role
+   * did, incl. CodeMirror, which maps the native historyUndo beforeinput to
+   * its own history. The MAIN renderer decides for itself (menu:action):
+   * a focused text field keeps native undo; anything else runs the praxis
+   * source-edit undo stack.
+   */
+  const editCommand = (cmd: 'undo' | 'redo'): void => {
+    const focused = webContents.getFocusedWebContents()
+    if (focused && focused !== mainWindow?.webContents) {
+      focused[cmd]()
+      return
+    }
+    send(cmd)
+  }
+
   const recentItems: MenuItemConstructorOptions[] = recentProjects.length
     ? [
         ...recentProjects.slice(0, 8).map((r) => ({
@@ -291,7 +332,20 @@ function buildAppMenu(): void {
         { label: 'Open Recent', submenu: recentItems }
       ]
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: () => editCommand('undo') },
+        { label: 'Redo', accelerator: 'Shift+CmdOrCtrl+Z', click: () => editCommand('redo') },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'delete' },
+        { role: 'selectAll' }
+      ]
+    },
     {
       label: 'Actions',
       submenu: [
@@ -458,6 +512,7 @@ function ensurePreviewView(): WebContentsView {
       if (selectModeActive) wc.send(PREVIEW_SET_MODE, true)
       if (commentModeActive) wc.send(PREVIEW_SET_COMMENT_MODE, commentModeActive)
       if (frameModeActive) wc.send(PREVIEW_SET_FRAME, true)
+      if (layersWatchActive) wc.send(LAYERS_SET_WATCH, true)
       // Only re-send pins when there are some — an empty push would make the
       // preload build (and inject) the overlay host for nothing.
       if (annotationPins.length) wc.send(PREVIEW_SET_PINS, annotationPins)
@@ -504,6 +559,7 @@ function resetStalePreview(): void {
   selectModeActive = false
   commentModeActive = null
   frameModeActive = false
+  layersWatchActive = false
   annotationPins = []
 }
 
@@ -754,6 +810,7 @@ function registerPreviewIpc(): void {
     selectModeActive = false
     commentModeActive = null
     frameModeActive = false
+    layersWatchActive = false
     annotationPins = []
     ensurePreviewView().webContents.loadURL(PLACEHOLDER_HTML)
   })
@@ -873,21 +930,31 @@ function registerPreviewIpc(): void {
   // Fresh computed values from the selection. The preview preload is sandboxed
   // (no contextBridge; executeJavaScript can't reach its isolated world), so
   // reads are a request-id round trip over IPC: send `styles:read` {id, props},
-  // await the matching `styles:read-reply` {id, values}. A 500ms timeout guards
-  // a dead/navigating preview — null means no preview / no selection / timeout.
+  // await the matching `styles:read-reply` {id, values, declaredVars}. A 500ms
+  // timeout guards a dead/navigating preview — null means no preview / no
+  // selection / timeout. `declaredVars` is the proof half (see
+  // `preview/style-provenance.ts`) that lets the panel tell a property's value
+  // IS a token from it merely equalling one.
   let styleReadSeq = 0
-  const pendingStyleReads = new Map<number, (values: Record<string, string> | null) => void>()
+  const pendingStyleReads = new Map<number, (result: StyleReadResult | null) => void>()
   ipcMain.on(
     'styles:read-reply',
-    (e, p: { id?: unknown; values?: Record<string, string> | null }) => {
+    (
+      e,
+      p: {
+        id?: unknown
+        values?: Record<string, string> | null
+        declaredVars?: Record<string, string | null> | null
+      }
+    ) => {
       if (e.sender !== previewView?.webContents) return
       const resolve = typeof p?.id === 'number' ? pendingStyleReads.get(p.id) : undefined
-      resolve?.(p.values ?? null)
+      resolve?.(p.values ? { values: p.values, declaredVars: p.declaredVars ?? {} } : null)
     }
   )
   ipcMain.handle(
     'styles:read',
-    (e, props: string[]): Promise<Record<string, string> | null> | null => {
+    (e, props: string[]): Promise<StyleReadResult | null> | null => {
       if (!fromMainOrPanel(e) || !previewView || !Array.isArray(props)) return null
       const id = ++styleReadSeq
       return new Promise((resolve) => {
@@ -895,10 +962,10 @@ function registerPreviewIpc(): void {
           pendingStyleReads.delete(id)
           resolve(null)
         }, 500)
-        pendingStyleReads.set(id, (values) => {
+        pendingStyleReads.set(id, (result) => {
           clearTimeout(timer)
           pendingStyleReads.delete(id)
-          resolve(values)
+          resolve(result)
         })
         previewView?.webContents.send('styles:read', { id, props })
       })
@@ -954,6 +1021,62 @@ function registerPreviewIpc(): void {
       sendToMain('preview:comment', payload)
     }
   )
+
+  // ── Layers panel ─────────────────────────────────────────────────────────
+  const fromMainForLayers = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
+    e.sender === mainWindow?.webContents
+
+  // Bulk DOM-tree read: request-id round trip, same shape as styles:read — the
+  // preview preload is sandboxed, so a bulk read of its isolated world can only
+  // ever be this kind of message-passing round trip, never executeJavaScript.
+  let layersReadSeq = 0
+  const pendingLayersReads = new Map<number, (snapshot: unknown) => void>()
+  ipcMain.on(LAYERS_READ_REPLY, (e, p: { id?: unknown; snapshot?: unknown }) => {
+    if (e.sender !== previewView?.webContents) return
+    const resolve = typeof p?.id === 'number' ? pendingLayersReads.get(p.id) : undefined
+    resolve?.(p?.snapshot ?? null)
+  })
+  ipcMain.handle('layers:read', (e): Promise<unknown> | null => {
+    if (!fromMainForLayers(e) || !previewView) return null
+    const id = ++layersReadSeq
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingLayersReads.delete(id)
+        resolve(null)
+      }, 800)
+      pendingLayersReads.set(id, (snapshot) => {
+        clearTimeout(timer)
+        pendingLayersReads.delete(id)
+        resolve(snapshot)
+      })
+      previewView?.webContents.send(LAYERS_READ, { id })
+    })
+  })
+  ipcMain.on('layers:select', (e, p: { path: number[]; fingerprint: unknown }) => {
+    if (!fromMainForLayers(e)) return
+    previewView?.webContents.send(LAYERS_SELECT, p)
+  })
+  ipcMain.on('layers:hover', (e, p: { path: number[]; fingerprint: unknown } | null) => {
+    if (!fromMainForLayers(e)) return
+    previewView?.webContents.send(LAYERS_HOVER, p)
+  })
+  ipcMain.on('layers:set-watch', (e, on: boolean) => {
+    if (!fromMainForLayers(e)) return
+    layersWatchActive = !!on
+    previewView?.webContents.send(LAYERS_SET_WATCH, layersWatchActive)
+  })
+  // Debounced structural-change ping from the preload → renderer (the renderer
+  // decides whether/when to re-`layers:read`).
+  ipcMain.on(LAYERS_CHANGED, (e) => {
+    if (e.sender !== previewView?.webContents) return
+    sendToMain('layers:changed')
+  })
+  // Drag-to-reorder: writes real source for a same-parent sibling move;
+  // anything ambiguous reports `needsAgent` instead (see move-node.ts).
+  ipcMain.handle('layers:move', (e, root: string, req: MoveNodeRequest) => {
+    if (!fromMainForLayers(e)) return null
+    return applyMoveNode(root, req)
+  })
 
   ipcMain.handle('project:pick', async (): Promise<string | null> => {
     if (!mainWindow) return null
@@ -1016,6 +1139,15 @@ app.whenReady().then(() => {
           .slice(0, 8)
       : []
     buildAppMenu()
+  })
+  // Edit → Undo/Redo bounced back from the main renderer: it received the
+  // menu:action, saw a text field focused, and wants the NATIVE text-editing
+  // command it would have gotten by default — which the custom menu item's
+  // accelerator swallowed (see buildAppMenu's editCommand).
+  ipcMain.on('menu:native-edit', (e, cmd: 'undo' | 'redo') => {
+    if (e.sender !== mainWindow?.webContents) return
+    if (cmd === 'undo') mainWindow.webContents.undo()
+    else if (cmd === 'redo') mainWindow.webContents.redo()
   })
   registerPreviewIpc()
   registerEditorIpc()

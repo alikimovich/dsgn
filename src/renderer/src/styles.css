@@ -1453,18 +1453,26 @@ body.is-resizing {
 .msg--user .msg__text {
     box-shadow: 0 1px 6px rgba(0, 0, 0, 0.05);
 }
-/* z-index above the status fade (5) so the pinned ask stays crisp over it; the
-   row itself is click-through so it never blocks the scroll-to-bottom button
-   or content underneath — only the bubble re-enables pointer events.
-   padding-bottom + the fading background give the pinned bubble its own
-   buffer: without it, whatever scrolls up from beneath butts flush against
-   the bubble the moment it's stuck (the flex `gap` between them is a one-time
-   static-flow spacing that scrolls away with the rest of the turn, not a
-   persistent buffer) — this reserves and fades that space every time. */
+/* z-index:1 — just enough to win over the turn's own scrolling content (so
+   the sticky pin still visually stays put above whatever scrolls past
+   beneath it), but BELOW the top fade (.pane--chat::before, z-index 5) so a
+   pinned ask dissolves under the gradient like every other message instead
+   of punching through it crisp. (Previously z-index:6, on purpose — reversed
+   on user feedback: the class applies to every collapsed ask the whole time
+   it's collapsed, not only while genuinely stuck, so during the sticky
+   hand-off between two turns the outgoing bubble kept rendering above the
+   fade too.) The row itself is click-through so it never blocks the
+   scroll-to-bottom button or content underneath — only the bubble re-enables
+   pointer events. padding-bottom + the fading background give the pinned
+   bubble its own buffer: without it, whatever scrolls up from beneath butts
+   flush against the bubble the moment it's stuck (the flex `gap` between
+   them is a one-time static-flow spacing that scrolls away with the rest of
+   the turn, not a persistent buffer) — this reserves and fades that space
+   every time. */
 .msg--user-pinned {
     position: sticky;
     top: 44px;
-    z-index: 6;
+    z-index: 1;
     pointer-events: none;
     padding-bottom: 20px;
 }

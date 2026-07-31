@@ -2,8 +2,9 @@ import { ipcMain } from 'electron'
 import { readFile } from 'fs/promises'
 import type { PropEditResult, StyleEdit, StyleEditResult } from '../shared/api'
 import { classNameStringNode, commitEdit, findElementAtLine, resolveSource } from './props'
-import { looksTailwind, rewriteClassList } from './tw-styles'
-import { cssPropToJsKey, mergeStyleObjectSource } from './inline-style'
+import { type ResolvedTokenRef, resolveTokenRef, tokenClassRewrite } from './style-tokens'
+import { looksTailwind } from './tw-styles'
+import { mergeStyleObjectSource } from './inline-style'
 import { applyStyleEditSvelte } from './styles-svelte'
 
 /**
@@ -14,12 +15,16 @@ import { applyStyleEditSvelte } from './styles-svelte'
  *  - S1 tailwind — the element's live classes look like utilities AND its
  *    `className` is a literal string → rewrite the single family-matching class
  *    (`p-4` → `p-[13px]`) and splice the new string.
- *  - S2 inline — no/ambiguous utility path → merge into the JSX `style={{…}}`
- *    literal (insert the attribute when absent).
- *  - S3 agent — anything we can't prove safe (no element at the stamp, dynamic
- *    className with no inline path, `style={expr}`, spread, existing inline
- *    `transition` shorthand when editing a `transition-*` longhand) → hand back
- *    `needsAgent` + a ready prompt, like prop editing.
+ *  - S2 inline — no/ambiguous utility path → merge into an EXISTING JSX
+ *    `style={{…}}` literal. Praxis never ADDS a style attribute that wasn't
+ *    there: a project styling from a stylesheet/CSS module shouldn't silently
+ *    grow inline styles because someone scrubbed a value, so an absent
+ *    attribute is S3's problem, not something to invent a convention for.
+ *  - S3 agent — anything we can't prove safe OR in-convention (no element at
+ *    the stamp, dynamic className with no inline path, no `style` attribute to
+ *    extend, `style={expr}`, spread, existing inline `transition` shorthand
+ *    when editing a `transition-*` longhand) → hand back `needsAgent` + a ready
+ *    prompt, like prop editing.
  *
  * `.svelte` stamps dispatch to the Svelte adapter (styles-svelte.ts), same as
  * props.ts does. Every write goes through `commitEdit`, so HMR + undo are free;
@@ -69,14 +74,38 @@ export function isSafeStyleValue(value: string): boolean {
   return depth === 0
 }
 
-export function styleAgentPrompt(edit: StyleEdit, element?: string): string {
+/**
+ * The S3 seed. The closing convention sentence is load-bearing: S2 now refuses
+ * to CREATE a `style` attribute, so most of what lands here is "this element
+ * has nowhere obvious to put a declaration." Without being told, the agent
+ * reaches for the inline prop anyway — re-introducing exactly what the ladder
+ * just declined to write.
+ */
+export function styleAgentPrompt(
+  edit: StyleEdit,
+  element?: string,
+  token?: ResolvedTokenRef | null
+): string {
   const el = element ? `<${element}> element` : 'selected element'
-  return `In ${edit.source}, set the css property \`${edit.prop}\` of the ${el} to \`${edit.value}\`.`
+  const what = token
+    ? `the design token \`${token.name}\` (\`${token.ref}\`, currently \`${edit.value}\`), ` +
+      `using the project's token reference rather than the literal value`
+    : `\`${edit.value}\``
+  return (
+    `In ${edit.source}, set the css property \`${edit.prop}\` of the ${el} to ${what}. ` +
+    'Style it the way this project already styles things — a stylesheet, CSS module, ' +
+    'styled-component or utility class — and do NOT add an inline `style` prop unless ' +
+    'the element already has one.'
+  )
 }
 
 /** Map a commitEdit result into a StyleEditResult carrying the strategy used. */
-function committed(res: PropEditResult, strategy: 'tailwind' | 'inline'): StyleEditResult {
-  return res.applied ? { applied: true, strategy } : { applied: false, error: res.error }
+function committed(
+  res: PropEditResult,
+  strategy: 'tailwind' | 'inline',
+  wroteToken = false
+): StyleEditResult {
+  return res.applied ? { applied: true, strategy, wroteToken } : { applied: false, error: res.error }
 }
 
 /** The static key name of a style object entry (null for computed/spread/etc). */
@@ -111,7 +140,13 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
     classes: Array.isArray(edit.classes) ? edit.classes : [],
     group: typeof edit.group === 'string' && edit.group ? edit.group.slice(0, 120) : undefined
   }
-  if (loc.file.endsWith('.svelte')) return applyStyleEditSvelte(root, edit, loc)
+  // Resolve a token pick BEFORE the framework dispatch, so both engines get the
+  // same already-validated reference. The token's value comes from the repo's
+  // own (semi-trusted) theme file, so the reference goes through the same
+  // splice guard as any other value; failing it drops back to a plain edit.
+  let token: ResolvedTokenRef | null = await resolveTokenRef(root, edit)
+  if (token && !isSafeStyleValue(token.ref)) token = null
+  if (loc.file.endsWith('.svelte')) return applyStyleEditSvelte(root, edit, loc, token)
   let code: string
   try {
     code = await readFile(loc.file, 'utf8')
@@ -122,7 +157,7 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
   const toAgent = (): StyleEditResult => ({
     applied: false,
     needsAgent: true,
-    agentPrompt: styleAgentPrompt(edit, found?.name)
+    agentPrompt: styleAgentPrompt(edit, found?.name, token)
   })
   if (!found) return toAgent() // stale stamp — the agent can still find it
   // An element-level spread could carry className/style at runtime — the final
@@ -144,26 +179,30 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
     const strNode = classNameStringNode(classAttr?.value ?? null)
     if (strNode) {
       const current = String((strNode as unknown as { value: string }).value)
-      const rewritten = rewriteClassList(current, edit.prop, edit.value)
+      const rewritten = tokenClassRewrite(current, edit, token)
       if (rewritten != null) {
         const next =
           code.slice(0, strNode.start) + JSON.stringify(rewritten) + code.slice(strNode.end)
-        return committed(await commitEdit(root, loc.file, code, next, key, edit.group), 'tailwind')
+        return committed(
+          await commitEdit(root, loc.file, code, next, key, edit.group),
+          'tailwind',
+          token != null
+        )
       }
     }
   }
 
-  // S2 — inline style splice.
+  // S2 — merge into an EXISTING inline style object. With a resolved token this
+  // writes the REFERENCE (`var(--color-text)`) rather than what it resolves to.
+  const written = token?.ref ?? edit.value
   const styleAttr = (found.opening.attributes ?? []).find(
     (a) => a.type === 'JSXAttribute' && (a.name as { name?: string })?.name === 'style'
   )
-  if (!styleAttr) {
-    // No style attribute — insert one right after the tag name (props.ts pattern).
-    const insertAt = (found.opening.name as { end: number }).end
-    const attrText = ` style={{ ${cssPropToJsKey(edit.prop)}: ${JSON.stringify(edit.value)} }}`
-    const next = code.slice(0, insertAt) + attrText + code.slice(insertAt)
-    return committed(await commitEdit(root, loc.file, code, next, key, edit.group), 'inline')
-  }
+  // Nothing to extend. Adding `style={{…}}` here would be Praxis choosing a
+  // styling convention on the project's behalf — the one thing a design tool
+  // editing someone else's repo must not do. The agent gets it instead, and its
+  // prompt explicitly forbids reaching for the inline prop.
+  if (!styleAttr) return toAgent()
   const attrVal = styleAttr.value
   const expr = attrVal?.type === 'JSXExpressionContainer' ? attrVal.expression : undefined
   if (expr?.type === 'ObjectExpression') {
@@ -178,10 +217,14 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
     ) {
       return toAgent()
     }
-    const merged = mergeStyleObjectSource(code.slice(expr.start, expr.end), edit.prop, edit.value)
+    const merged = mergeStyleObjectSource(code.slice(expr.start, expr.end), edit.prop, written)
     if (merged != null) {
       const next = code.slice(0, expr.start) + merged + code.slice(expr.end)
-      return committed(await commitEdit(root, loc.file, code, next, key, edit.group), 'inline')
+      return committed(
+        await commitEdit(root, loc.file, code, next, key, edit.group),
+        'inline',
+        token != null
+      )
     }
   }
 

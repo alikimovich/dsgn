@@ -3,6 +3,91 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Design-token naming accuracy (2026-07-30/31, user-reported)
+
+- [x] **A token from another property family can't name a row.** ✅ 2026-07-30 —
+      `--rmt-radius-none` was labelling `padding: 0`. `groupAffinity` (a coarse
+      `TokenKind`) became `groupRole` (a semantic `TokenRole`). Superseded the
+      next day by the proof requirement below for `css`/`tailwind` sources
+      (role-based ranking is no longer how naming is decided for them — proof
+      is); still load-bearing for `manifest`, which has no proof mechanism.
+      `src/shared/token-match.ts`, `test/token-match.mjs`. See PROGRESS 2026-07-30.
+- [x] **Naming requires PROOF a value comes from a token, not just equals one.**
+      ✅ 2026-07-31 — `getComputedStyle` always resolves `var()` away, so value
+      equality alone can never distinguish "IS this token" from "coincidentally
+      equals it." New `src/preview/style-provenance.ts` reads the SPECIFIED
+      (unresolved) declaration — inline `style=` or a matched stylesheet/scoped-
+      `<style>` rule — threaded through `styles:read` as `declaredVars`.
+      `resolveTokenForValue` now requires it for `css`/`tailwind` sources;
+      `manifest` (no reference mechanism exists) keeps the value+role heuristic
+      above. `test/token-match.mjs`, `test/style-provenance.mjs` (new, real
+      headless-Chromium DOM/CSSOM test), `test/style-edit.mjs`. See PROGRESS
+      2026-07-31.
+- [ ] **`sameCssValue` doesn't equate bare `0` with `0px`.** Found 2026-07-30
+      while writing the above. A theme declaring `--space-0: 0` (unitless —
+      legal CSS, and `tokenValueKind` already accepts it as a length) can never
+      match a computed `0px`, so that token is offered but never names anything.
+      Fix belongs in the renderer's `css-values.ts` comparator; it shifts
+      matching for every property, so it wants its own pass.
+- [ ] **`test/style-edit.mjs`'s token assertions are written but unrun.** The
+      Electron tier can't launch a window on this machine (`.empty__open`
+      timeout, confirmed identical at HEAD) — the new `ProvenTokenCard`/raw-hex
+      assertions haven't been visually confirmed. Same gap as the styles-ladder
+      fix (2026-07-30); worth a real run wherever the Electron window can
+      reliably take focus.
+
+## Styles ladder — respect the project's styling convention (2026-07-30, user-requested)
+
+- [x] **Never INTRODUCE an inline style.** ✅ 2026-07-30 — S2 now only extends a
+      `style` attribute that already exists; absent → S3, whose prompt names the
+      project's own approaches and forbids the agent from adding one either.
+      Fixes a token pick writing `style="color: var(--color-title)"` onto a bare
+      `<h1>` in a CSS-variable project. `src/main/styles.ts`,
+      `styles-svelte.ts`; contrast case + `BareCard` fixture in
+      `test/style-edit.mjs`. See PROGRESS 2026-07-30.
+      Deliberately NOT planned (dropped 2026-07-30, user call): teaching S1 to
+      CREATE a class attribute for Tailwind projects. The mirror-image gap is
+      real — an unclassed element in a Tailwind project pays an agent turn it
+      shouldn't — but reliable project-level Tailwind detection is the blocker
+      (v4 is CSS-first and often ships no `tailwind.config.*`), and agent-routing
+      it is correct, just slower.
+- [ ] **A runnable tier for the styles ladder.** `style-edit.mjs` is electron-only
+      and can't launch a window on the current dev machine (dies at
+      `.empty__open`, at HEAD too), so the S2-refusal assertion is written but
+      unrun. Verified instead with a throwaway esbuild-bundled harness driving
+      the real `applyStyleEdit` in node (PROGRESS 2026-07-30 has the details).
+      Worth making permanent if the Electron tier stays unrunnable.
+
+## Layers panel (2026-07-29, user-requested) — SHIPPED
+
+- [x] **DOM tree + click-select + drag-to-reorder.** ✅ 2026-07-29 — a tree of
+      the previewed page above the chat, toggled from the composer. Selecting
+      a row reuses the real in-page click path; dragging writes a real source
+      edit for a same-parent sibling reorder (React/Svelte/static HTML), and
+      seeds a chat prompt for anything ambiguous (list items, reparenting,
+      cross-file). New `src/preview/layers.ts`, `src/main/move-node*.ts`,
+      `src/main/ast-walk.ts`, `LayersPanel.tsx`/`LayersTree.tsx`.
+      `test/layers-move.mjs` (unit), `test/layers-panel.mjs` (electron, new
+      `test/fixtures/layers-app/`). See PROGRESS 2026-07-29.
+      Deliberately NOT planned (dropped 2026-07-30, user call): reparenting /
+      cross-parent / cross-file moves stay agent-routed; label live-refresh
+      and tree virtualization only if real use demands them.
+
+## Design tokens in the Styles panel (2026-07-28, user-requested) — SHIPPED
+
+- [x] **Name the token instead of the value, and offer a picker.** ✅ 2026-07-28
+      — every token-able row (colors, padding/margin/gap, radius, font-size /
+      -weight, line-height, letter-spacing, opacity) shows the matching token's
+      name and expands an inline `TokenPicker`; picking one writes a *reference*
+      (`var(--name)` / a Tailwind token class), never the resolved value.
+      New `src/shared/token-match.ts` + `src/main/style-tokens.ts`,
+      `TokenSet` on `PanelState`, `.less`/`.sass` detection. `test/token-match.mjs`,
+      extended `tw-styles.mjs` / `tokens.mjs` / `style-edit.mjs`. See PROGRESS 2026-07-28.
+      Deliberately NOT planned (dropped 2026-07-30, user call): Svelte
+      scoped-`<style>` editing (token picks there keep seeding the agent),
+      "save this value as a token", and deleting the dead `props:applyToken`
+      path (dead-but-harmless; only `test/prop-edit*.mjs` exercise it).
+
 ## Vanilla HTML / static sites (2026-07-09, user-requested) — SHIPPED
 
 - [x] **Open plain HTML/CSS/JS projects.** ✅ 2026-07-09 — `detect()` falls back

@@ -16,6 +16,8 @@
 import { ipcRenderer } from 'electron'
 import type { SelectedElement } from '../shared/api'
 import { FRAME_DATA_URI, FRAME_INSET } from '../shared/iphone-frame'
+import { buildLayersSnapshot, type LayerFingerprint, resolveLayerElement } from './layers'
+import { declaredVarsFor } from './style-provenance'
 
 // Channels (preview ⇄ main). Kept local — main mirrors these strings.
 const SET_MODE = 'praxis:preview:set-select-mode'
@@ -39,8 +41,17 @@ const TOGGLE_SELECT = 'praxis:preview:toggle-select' // preload → renderer (S 
 const STYLES_PREVIEW = 'styles:preview' // renderer → preload {prop, value}
 const STYLES_CLEAR_PREVIEW = 'styles:clear-preview' // renderer → preload {prop?}
 const STYLES_READ = 'styles:read' // renderer → preload {id, props}
-const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null}
+const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null, declaredVars|null}
 const STYLES_REPLAY = 'styles:replay' // renderer → preload {prop, from, to}
+// Layers panel: bulk DOM-tree read (request-id round trip, like styles:read),
+// panel-driven select/hover by child-index path, and a watch toggle that arms
+// a MutationObserver only while the panel is open.
+const LAYERS_READ = 'layers:read' // renderer → preload {id}
+const LAYERS_READ_REPLY = 'layers:read-reply' // preload → renderer {id, snapshot}
+const LAYERS_CHANGED = 'layers:changed' // preload → renderer (debounced DOM-mutation ping)
+const LAYERS_SELECT = 'layers:select' // renderer → preload {path, fingerprint}
+const LAYERS_HOVER = 'layers:hover' // renderer → preload {path, fingerprint} | null
+const LAYERS_SET_WATCH = 'layers:set-watch' // renderer → preload boolean
 
 type CommentMode = 'comment' | 'annotate' | null
 
@@ -658,6 +669,94 @@ function describe(el: Element): SelectedElement {
   }
 }
 
+// ---- Layers panel: bulk tree read, panel-driven select/hover, DOM watch -----
+
+function isValidFingerprint(fp: unknown): fp is LayerFingerprint {
+  const f = fp as LayerFingerprint | null | undefined
+  return !!f && typeof f.tag === 'string' && (f.source === null || typeof f.source === 'string')
+}
+
+/**
+ * A Layers row click. Reuses the exact same functions the real in-page click
+ * handler uses (`describe`/`showToolbar`/`setSelectionHighlight`), so the
+ * resulting SelectedElement carries a real rect/styles/selector and the normal
+ * persistent outline draws — no separate selection path to keep in sync.
+ * Ignored while an inline edit/comment composer is open, same guard `onMove`
+ * uses for HMR self-healing, so a Layers pick can't step on it.
+ */
+function layersSelect(path: number[], fingerprint: LayerFingerprint): void {
+  if (editing || commenting) return
+  const el = resolveLayerElement(path, fingerprint)
+  if (!el) return
+  ipcRenderer.send(PICKED, describe(el))
+  resetInput()
+  showToolbar(el)
+  setSelectionHighlight(el)
+}
+
+/** A Layers row hover — the transient hover box, not the persistent selection. */
+function layersHover(path: number[] | null, fingerprint: LayerFingerprint | null): void {
+  if (!path || !fingerprint) {
+    hideOverlay()
+    return
+  }
+  const el = resolveLayerElement(path, fingerprint)
+  if (el) drawOverlay(el)
+  else hideOverlay()
+}
+
+let layersObserver: MutationObserver | null = null
+let layersDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let layersFirstMutationAt = 0
+const LAYERS_DEBOUNCE_MS = 400
+// Hard ceiling so a page that never stops mutating can't starve the debounce
+// indefinitely — force-emit once this much time has passed since the first
+// unflushed mutation in the current burst.
+const LAYERS_MAX_WAIT_MS = 2000
+
+function emitLayersChanged(): void {
+  if (layersDebounceTimer) {
+    clearTimeout(layersDebounceTimer)
+    layersDebounceTimer = null
+  }
+  layersFirstMutationAt = 0
+  ipcRenderer.send(LAYERS_CHANGED)
+}
+
+function onLayersMutation(): void {
+  const now = Date.now()
+  if (!layersFirstMutationAt) layersFirstMutationAt = now
+  if (now - layersFirstMutationAt >= LAYERS_MAX_WAIT_MS) {
+    emitLayersChanged()
+    return
+  }
+  if (layersDebounceTimer) clearTimeout(layersDebounceTimer)
+  layersDebounceTimer = setTimeout(emitLayersChanged, LAYERS_DEBOUNCE_MS)
+}
+
+/**
+ * Arm/disarm a debounced structural watch, gated to "panel open" so it costs
+ * nothing otherwise. `childList`-only, no `attributes`/`characterData`: class
+ * or text churn doesn't invalidate a child-index PATH, only a row's cosmetic
+ * label (a manual refresh covers that) — watching them would multiply
+ * mutation-callback volume on a busy page for nothing structural.
+ */
+function setLayersWatch(on: boolean): void {
+  if (on) {
+    if (layersObserver || !document.body) return
+    layersObserver = new MutationObserver(onLayersMutation)
+    layersObserver.observe(document.body, { childList: true, subtree: true })
+  } else {
+    layersObserver?.disconnect()
+    layersObserver = null
+    if (layersDebounceTimer) {
+      clearTimeout(layersDebounceTimer)
+      layersDebounceTimer = null
+    }
+    layersFirstMutationAt = 0
+  }
+}
+
 // ---- Styles panel: live injection, exact revert, reads, transition replay ---
 
 // Original inline values, stashed on FIRST touch per property so clear-preview
@@ -738,23 +837,54 @@ function clearStylePreview(prop?: string): void {
   else for (const p of Array.from(styleOriginals.keys())) restoreOriginal(p)
 }
 
-/** Fresh computed values for the panel (pick-time snapshots go stale). */
+/**
+ * Fresh computed values for the panel (pick-time snapshots go stale).
+ *
+ * `props` may include CUSTOM properties (`--color-text`): the Styles panel asks
+ * for the project's design tokens by name so it can resolve each one AGAINST
+ * THIS ELEMENT. That's what makes token naming correct under a
+ * `@media (prefers-color-scheme: dark)` override or a `var()` alias chain,
+ * where the value recorded in the token file is not.
+ *
+ * `declaredVars` is the proof half: for each EDITABLE longhand (never the
+ * `--var` names above — those are read for their own value, not to prove some
+ * other property references them), the exact `--name` its SPECIFIED
+ * declaration references, via `style-provenance.ts`, or null when it's a
+ * literal. `computed`'s value-equality was always a guess (`var()` never
+ * survives `getComputedStyle`); this is what lets the panel tell "IS this
+ * token" from "happens to equal it" instead.
+ */
 function readStyles(id: unknown, props: string[]): void {
   const el = resolveStyleTarget()
   if (!el) {
-    ipcRenderer.send(STYLES_READ_REPLY, { id, values: null })
+    ipcRenderer.send(STYLES_READ_REPLY, { id, values: null, declaredVars: null })
     return
   }
   const cs = getComputedStyle(el)
   const values: Record<string, string> = {}
   // Same cap discipline as describe(): the page is only semi-trusted, so bound
-  // every string that crosses the IPC boundary.
-  for (const prop of props.slice(0, 64)) {
+  // every string that crosses the IPC boundary. Generous enough for the ~20
+  // editable longhands plus a real project's token set.
+  const bounded: string[] = []
+  for (const prop of props.slice(0, 240)) {
     if (typeof prop !== 'string') continue
     const p = prop.slice(0, 64)
+    bounded.push(p)
     values[p] = cs.getPropertyValue(p).trim().slice(0, 256)
   }
-  ipcRenderer.send(STYLES_READ_REPLY, { id, values })
+  // Same boundary cap as `values`: the var NAMES come from page-controlled CSS.
+  // A real token name never approaches 128 chars, and one that somehow did
+  // would just fail the proof match — fails safe to the raw value.
+  const declaredVars: Record<string, string | null> = {}
+  for (const [p, name] of Object.entries(
+    declaredVarsFor(
+      el,
+      bounded.filter((b) => !b.startsWith('--'))
+    )
+  )) {
+    declaredVars[p] = name ? name.slice(0, 128) : null
+  }
+  ipcRenderer.send(STYLES_READ_REPLY, { id, values, declaredVars })
 }
 
 // One pending replay at a time (there's only one selection); starting another
@@ -1382,4 +1512,20 @@ window.addEventListener('load', () => {
     if (typeof p?.prop === 'string' && typeof p?.from === 'string' && typeof p?.to === 'string')
       replayStyle(p.prop, p.from, p.to)
   })
+  ipcRenderer.on(LAYERS_READ, (_e, p: { id?: unknown }) => {
+    if (typeof p?.id !== 'number') return
+    ipcRenderer.send(LAYERS_READ_REPLY, { id: p.id, snapshot: buildLayersSnapshot() })
+  })
+  ipcRenderer.on(LAYERS_SELECT, (_e, p: { path?: unknown; fingerprint?: unknown }) => {
+    if (!Array.isArray(p?.path) || !isValidFingerprint(p?.fingerprint)) return
+    layersSelect(p.path as number[], p.fingerprint)
+  })
+  ipcRenderer.on(LAYERS_HOVER, (_e, p: { path?: unknown; fingerprint?: unknown } | null) => {
+    if (!p || !Array.isArray(p.path) || !isValidFingerprint(p.fingerprint)) {
+      layersHover(null, null)
+      return
+    }
+    layersHover(p.path as number[], p.fingerprint)
+  })
+  ipcRenderer.on(LAYERS_SET_WATCH, (_e, on: boolean) => setLayersWatch(!!on))
 }

@@ -11,6 +11,7 @@ import {
   useChat,
   useComposer,
   useHistory,
+  useLayersPanel,
   usePermissions,
   useQuestions,
   useCodeDrawer,
@@ -33,6 +34,7 @@ import type {
 import { rankSlashMatches } from "../../../shared/slash-menu";
 import ConflictCard from "./ConflictCard";
 import Inspector from "./Inspector";
+import LayersPanel from "./LayersPanel";
 import Markdown from "./Markdown";
 import NotesPanel from "./NotesPanel";
 import PermissionCards from "./PermissionCards";
@@ -54,6 +56,7 @@ import {
   ChevronRight,
   Copy,
   FileText,
+  Layers,
   MousePointer2,
   Undo2,
 } from "lucide-react";
@@ -401,6 +404,8 @@ export default function ChatPanel(): React.JSX.Element {
   const codexAuthNeeded = useSession((s) => s.codexAuthNeeded);
   const { selected, setSelected } = useSelection();
   const selectMode = useSelection((s) => s.selectMode);
+  const layersOpen = useLayersPanel((s) => s.open);
+  const setLayersOpen = useLayersPanel((s) => s.setOpen);
   const inspection = useSelection((s) => s.inspection);
   const inspecting = useSelection((s) => s.inspecting);
   const { mode: permissionMode, pending, removeRequest, setMode } = usePermissions();
@@ -1140,6 +1145,11 @@ export default function ChatPanel(): React.JSX.Element {
 
   return (
     <div className="chat flex h-full flex-col" ref={chatRootRef}>
+      {/* A tree of the previewed page's DOM, toggled from the composer. A
+          flex-none sibling ABOVE Conversation — its own bounded/resizable
+          height, so Conversation keeps flex-1 and use-stick-to-bottom's own
+          scroll logic (which only cares about its own container) is untouched. */}
+      {projectRoot && <LayersPanel />}
       {/* AI Elements Conversation = stick-to-bottom scroller (auto-follows the
           stream, with a scroll-to-bottom affordance). Replaces the old manual
           listRef scroll effect. */}
@@ -1448,6 +1458,18 @@ export default function ChatPanel(): React.JSX.Element {
                   title="Select an element to edit (S)"
                 >
                   <MousePointer2 className="size-3.5" aria-hidden="true" />
+                </button>
+              )}
+              {projectRoot && (
+                <button
+                  type="button"
+                  className={`iconbtn iconbtn--sm ${layersOpen ? "is-active" : ""}`}
+                  onClick={() => setLayersOpen(!layersOpen)}
+                  aria-pressed={layersOpen}
+                  aria-label="Layers"
+                  title="Show the page's layer tree"
+                >
+                  <Layers className="size-3.5" aria-hidden="true" />
                 </button>
               )}
               <select

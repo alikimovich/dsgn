@@ -499,10 +499,16 @@ export default function App(): React.JSX.Element {
   }, [recents])
 
   // v8 F3b: Cmd+Z / Cmd+Shift+Z (or Cmd+Y) undo/redo over ALL direct praxis source
-  // edits (props, text, token swaps). Skipped while typing in the composer or any
-  // field — there the OS/browser native undo for that input should win. After a
-  // revert we re-inspect the selected element so the panel reflects the new source,
-  // and surface a conflict (the file changed under us) instead of silently failing.
+  // edits (props, text, token swaps, layer moves). A REAL keystroke arrives via
+  // the Edit menu's accelerator (`menu:action` 'undo'/'redo' — native menu
+  // accelerators intercept the key in main before any renderer keydown fires);
+  // the keydown listener below only ever sees synthetic events (tests) and the
+  // menu-less Cmd+Y redo, and is kept as a harmless backup. Either way: a
+  // focused text field keeps its native undo (the menu path has to ask main to
+  // replay it, since the accelerator swallowed the field's default); anything
+  // else runs the source-edit stack. After a revert we re-inspect the selected
+  // element so the panel reflects the new source, and surface a conflict (the
+  // file changed under us) instead of silently failing.
   useEffect(() => {
     const reinspect = (): void => {
       const sel = useSelection.getState()
@@ -513,18 +519,13 @@ export default function App(): React.JSX.Element {
         if (useSelection.getState().selected?.source === src) sel.setInspection(res)
       })
     }
-    const onKey = (e: KeyboardEvent): void => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
-      const k = e.key.toLowerCase()
-      const isUndo = k === 'z' && !e.shiftKey
-      const isRedo = (k === 'z' && e.shiftKey) || k === 'y'
-      if (!isUndo && !isRedo) return
-      const t = e.target as HTMLElement | null
+    const isTextTarget = (t: HTMLElement | null): boolean => {
       const tag = t?.tagName?.toLowerCase()
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || t?.isContentEditable) return
+      return tag === 'input' || tag === 'textarea' || tag === 'select' || !!t?.isContentEditable
+    }
+    const runSourceEdit = (isUndo: boolean): void => {
       const root = useSession.getState().projectRoot
       if (!root) return
-      e.preventDefault()
       void (isUndo ? window.api.edits.undo(root) : window.api.edits.redo(root)).then((r) => {
         if (r.empty) return
         if (r.conflict) {
@@ -537,8 +538,31 @@ export default function App(): React.JSX.Element {
         reinspect()
       })
     }
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      const k = e.key.toLowerCase()
+      const isUndo = k === 'z' && !e.shiftKey
+      const isRedo = (k === 'z' && e.shiftKey) || k === 'y'
+      if (!isUndo && !isRedo) return
+      if (isTextTarget(e.target as HTMLElement | null)) return // native undo wins
+      e.preventDefault()
+      runSourceEdit(isUndo)
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    const offMenu = window.api.onMenuAction((action) => {
+      if (action !== 'undo' && action !== 'redo') return
+      if (isTextTarget(document.activeElement as HTMLElement | null)) {
+        // The accelerator swallowed the keystroke the field would have gotten —
+        // ask main to run the native text-editing command in this window.
+        window.api.menu.nativeEdit(action)
+        return
+      }
+      runSourceEdit(action === 'undo')
+    })
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      offMenu()
+    }
   }, [])
 
   // Inspect the selected element's props (decides panel vs prompt-only). Guarded
@@ -627,6 +651,12 @@ export default function App(): React.JSX.Element {
       }),
     []
   )
+
+  // Subscribed (not getState()) on purpose: detection resolves asynchronously
+  // after a project opens, and the island's Styles tab needs the result pushed
+  // to it — a getState() read here would never re-render, so the tokens would
+  // silently never arrive.
+  const tokenSet = useTokens((s) => s.set)
 
   // The setup turn finished → restart the dev server + reload the preview so the
   // freshly-wired config applies (one-shot: consume the signal, then restart).
@@ -2020,6 +2050,7 @@ export default function App(): React.JSX.Element {
           inspecting={inspecting}
           controls={islandControls}
           canInstrument={canInstrument}
+          tokens={tokenSet}
         />
       )}
 

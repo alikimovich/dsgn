@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
+import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import type {
   AgentEvent,
   AgentOptions,
@@ -8,27 +8,30 @@ import type {
   BranchResult,
   CommentMode,
   ControlPanelManifest,
-  Diagnosis,
   DetectedProject,
   DevServerInfo,
-  PanelAction,
-  PanelState,
-  PraxisApi,
+  Diagnosis,
   FeedbackInput,
   FeedbackResult,
   Framework,
-  GithubStatus,
   GithubConnectOptions,
   GithubConnectResult,
+  GithubStatus,
   ImageAttachment,
+  LayerFingerprint,
+  LayersSnapshot,
+  MoveNodeRequest,
+  MoveNodeResult,
+  PanelAction,
+  PanelState,
   PermissionMode,
+  PraxisApi,
   PreviewComment,
   PropEdit,
   PropEditResult,
-  QuestionAnswers,
-  TokenEdit,
   PropInspection,
   PublishResult,
+  QuestionAnswers,
   RecentMenuEntry,
   ResolvedControlPanel,
   RunningDevServer,
@@ -37,11 +40,13 @@ import type {
   SessionRecord,
   SetupProbe,
   SetupResult,
+  SimPreflight,
   SourceView,
   SourceWriteResult,
-  SimPreflight,
   StyleEdit,
   StyleEditResult,
+  StyleReadResult,
+  TokenEdit,
   TokenScaffoldResult,
   TokenSet,
   UndoResult,
@@ -74,7 +79,8 @@ const api: PraxisApi = {
       const listener = (_e: IpcRendererEvent, root: string): void => cb(root)
       ipcRenderer.on('menu:open-recent', listener)
       return () => ipcRenderer.removeListener('menu:open-recent', listener)
-    }
+    },
+    nativeEdit: (cmd: 'undo' | 'redo'): void => ipcRenderer.send('menu:native-edit', cmd)
   },
   preview: {
     setBounds: (bounds: Bounds): void => ipcRenderer.send('preview:set-bounds', bounds),
@@ -248,10 +254,25 @@ const api: PraxisApi = {
     preview: (prop: string, value: string): void =>
       ipcRenderer.send('styles:preview', { prop, value }),
     clearPreview: (prop?: string): void => ipcRenderer.send('styles:clear-preview', { prop }),
-    read: (props: string[]): Promise<Record<string, string> | null> =>
+    read: (props: string[]): Promise<StyleReadResult | null> =>
       ipcRenderer.invoke('styles:read', props),
     replay: (prop: string, from: string, to: string): void =>
       ipcRenderer.send('styles:replay', { prop, from, to })
+  },
+  layers: {
+    read: (): Promise<LayersSnapshot | null> => ipcRenderer.invoke('layers:read'),
+    onChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => cb()
+      ipcRenderer.on('layers:changed', listener)
+      return () => ipcRenderer.removeListener('layers:changed', listener)
+    },
+    select: (path: number[], fingerprint: LayerFingerprint): void =>
+      ipcRenderer.send('layers:select', { path, fingerprint }),
+    hover: (path: number[] | null, fingerprint: LayerFingerprint | null): void =>
+      ipcRenderer.send('layers:hover', path && fingerprint ? { path, fingerprint } : null),
+    setWatch: (on: boolean): void => ipcRenderer.send('layers:set-watch', on),
+    move: (root: string, req: MoveNodeRequest): Promise<MoveNodeResult> =>
+      ipcRenderer.invoke('layers:move', root, req)
   },
   controls: {
     get: (root: string, q: { files: string[]; component?: string }): Promise<ResolvedControlPanel[]> =>

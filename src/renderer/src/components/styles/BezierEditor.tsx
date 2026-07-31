@@ -3,15 +3,19 @@ import { useCallback, useEffect, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import {
   BEZIER_PRESETS,
-  BEZIER_SNAP_TOLERANCE,
   type Bezier,
   clampBezier,
   clampBezierX,
   clampBezierY,
-  formatBezier,
-  snapBezierPreset
+  displayBezierPreset,
+  formatBezier
 } from '@/lib/css-values'
 import { cn } from '@/lib/utils'
+
+// Both now live in `lib/css-values.ts` (they're value math, and `sameCssValue`
+// needs TW_EASE_EQUIV — a lib→component import). Re-exported here so existing
+// importers of the editor keep working.
+export { displayBezierPreset, TW_EASE_EQUIV } from '@/lib/css-values'
 
 /**
  * BezierEditor — draggable cubic-bezier curve editor for
@@ -71,39 +75,6 @@ const KEY_DIRS: Record<string, readonly [number, number]> = {
   ArrowRight: [1, 0],
   ArrowUp: [0, 1],
   ArrowDown: [0, -1]
-}
-
-/**
- * Tailwind's ease-* classes carry slightly DIFFERENT curves than the CSS
- * keywords S1 maps them from (the `ease-out` class is cubic-bezier(0,0,0.2,1);
- * CSS `ease-out` is (0,0,0.58,1)). Mirrors the EASE_KEYWORDS table in
- * main/tw-styles.ts (`linear`/`ease` need no entry — they land as the keyword
- * itself). Consumed two ways: StylePanel's reconcile treats a committed
- * keyword and its Tailwind curve as the same value, and displayBezierPreset
- * below names the Tailwind curve for readout/chip display — without it, a
- * keyword commit on a Tailwind element would visually "drift" to raw coords
- * when reconcile merges the computed Tailwind curve back in.
- */
-export const TW_EASE_EQUIV: Record<string, Bezier> = {
-  'ease-in': { x1: 0.4, y1: 0, x2: 1, y2: 1 },
-  'ease-out': { x1: 0, y1: 0, x2: 0.2, y2: 1 },
-  'ease-in-out': { x1: 0.4, y1: 0, x2: 0.2, y2: 1 }
-}
-
-/**
- * DISPLAY-ONLY preset name: the CSS keyword snap first, else a Tailwind
- * ease-* curve read back from a committed keyword. Commits must keep using
- * snapBezierPreset — writing a keyword for the Tailwind coords would be
- * wrong everywhere but Tailwind.
- */
-export function displayBezierPreset(b: Bezier): string | null {
-  const snap = snapBezierPreset(b)
-  if (snap) return snap
-  for (const [name, p] of Object.entries(TW_EASE_EQUIV)) {
-    const ds = [b.x1 - p.x1, b.y1 - p.y1, b.x2 - p.x2, b.y2 - p.y2].map(Math.abs)
-    if (ds.every((d) => d <= BEZIER_SNAP_TOLERANCE)) return name
-  }
-  return null
 }
 
 export default function BezierEditor({

@@ -17,6 +17,14 @@ export interface ScrubInputProps {
   disabled?: boolean
   /** Custom readout for the track (full text, unit included — replaces the default). */
   formatValue?: (value: number) => string
+  /**
+   * Rendered at the track's right edge, inside its border — the design-token
+   * dropdown chevron (see TokenRow). Anything here must stop its own pointer/
+   * key events from reaching the track, which would otherwise start a scrub or
+   * open the exact-value editor. Absent while the inline editor is open (the
+   * track isn't rendered then).
+   */
+  trailing?: React.ReactNode
   /** Per movement while scrubbing — the caller throttles the live preview. */
   onScrub: (value: number) => void
   /** Exactly once per interaction: pointer release, pointer-lock exit, or Enter. */
@@ -70,6 +78,7 @@ export default function ScrubInput({
   unit = '',
   disabled,
   formatValue,
+  trailing,
   onScrub,
   onCommit,
   onInput,
@@ -283,21 +292,27 @@ export default function ScrubInput({
           aria-disabled={disabled || undefined}
           tabIndex={disabled ? -1 : 0}
           className={cn(
-            'scrubinput__track flex h-7 w-[128px] select-none items-center justify-end rounded-md border border-input bg-transparent px-2 text-xs tabular-nums justify-self-end',
+            'scrubinput__track flex h-7 w-[128px] select-none items-center justify-end gap-1 rounded-md border border-input bg-transparent px-2 text-xs tabular-nums justify-self-end',
             'focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none',
             disabled ? 'pointer-events-none opacity-50' : 'cursor-ew-resize hover:border-ring'
           )}
           onPointerDown={beginScrub}
           onKeyDown={onTrackKeyDown}
         >
-          {formatValue ? (
-            formatValue(shown)
-          ) : (
-            <>
-              {String(round(shown))}
-              {unit && <span className="ml-0.5 text-muted-foreground">{unit}</span>}
-            </>
-          )}
+          {/* min-w-0 + truncate: a long token name (the readout `formatValue`
+              returns when the value IS a token) must shrink rather than push
+              the trailing chevron out of the fixed-width track. */}
+          <span className="min-w-0 truncate">
+            {formatValue ? (
+              formatValue(shown)
+            ) : (
+              <>
+                {String(round(shown))}
+                {unit && <span className="ml-0.5 text-muted-foreground">{unit}</span>}
+              </>
+            )}
+          </span>
+          {trailing}
         </div>
       )}
     </div>

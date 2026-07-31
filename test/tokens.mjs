@@ -61,8 +61,22 @@ try {
   if (tok(css, 'color', '--color-bg')?.value !== '#ffffff') throw new Error('css var missing')
   if (tok(css, 'space', '--space-md')?.value !== '8px') throw new Error('css space missing')
   if (tok(css, 'color', '--color-surface')) throw new Error('css alias should be skipped')
+  // Preprocessor stylesheets carry plain CSS custom properties, and real themes
+  // live several directories down — `src/deep/nested/palette.less` covers both.
+  if (tok(css, 'color', '--color-brand')?.value !== '@brand') {
+    throw new Error('custom property in a .less file not detected')
+  }
+  // A LESS variable (`@brand: …`) is deliberately NOT a token: it has no
+  // runtime form, so it could never be committed back as a reference.
+  if (css.groups.some((g) => g.tokens.some((t) => t.name.replace(/^--/, '') === 'brand'))) {
+    throw new Error('a LESS variable leaked into the token set')
+  }
+  // First definition wins — the dark-mode redefinition must not overwrite it.
+  if (tok(css, 'color', '--color-accent')?.value !== '#f59e0b') {
+    throw new Error('a media-query redefinition overwrote the base value')
+  }
 
-  console.log('TOKENS OK — manifest/tailwind/css detected')
+  console.log('TOKENS OK — manifest/tailwind/css(+less, nested) detected')
 } catch (err) {
   console.error('TOKENS FAILED:', err?.message ?? err)
   process.exitCode = 1

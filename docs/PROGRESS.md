@@ -2,6 +2,604 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-31 — Token naming requires PROOF, not value coincidence
+
+"I really don't want this panel to hallucinate variables and tokens if the
+element doesn't use them." Yesterday's radius/spacing fix turned out to be a
+mitigation, not the fix: it made the GUESS more disciplined, but the whole
+naming mechanism was still a guess. `readStyles()` (`preview/preload.ts`) gets
+every value from `getComputedStyle`, which always fully resolves `var()` —
+there was never a way to tell "this element's color IS `var(--color-text)`"
+apart from "happens to equal it." Confirmed against a real project: every
+token was named `--rmt-<category>-<value>`, so `cssGroupOf`'s first-segment
+grouping bucketed all of them under one meaningless group (`rmt`, the vendor
+prefix) — an unrecognized group is unconstrained by design, so yesterday's fix
+didn't even apply, and padding/margin/font-size/line-height/opacity all showed
+whichever same-valued `--rmt-*` token was detected first.
+
+The real fix: prove usage from the SPECIFIED (unresolved) declaration instead
+of the resolved one. New `src/preview/style-provenance.ts` (pure, DOM-only, no
+`ipcRenderer` — same split as `layers.ts`) reads `el.style.getPropertyValue`
+(inline preserves `var()` literally) and walks `document.styleSheets` for a
+matching rule's own declaration (covers external stylesheets AND Svelte's
+compiled scoped `<style>` — both are just real CSS rules at runtime). Threaded
+through: `readStyles` → `styles:read-reply` → main's `pendingStyleReads` →
+`window.api.styles.read()` now returns `{ values, declaredVars }`
+(`shared/api.ts`'s new `StyleReadResult`) → `StylePanel` stores `declaredVars`
+→ `resolveTokenForValue` gets a new `source`/`provenVar` pair.
+
+`resolveTokenForValue` now branches by `TokenSet.source`, since each has a
+different (or no) proof mechanism:
+- `css` — `provenVar` must name one of the value-matching candidates. No var()
+  in the specified declaration, no name — full stop, regardless of role/rank.
+  Deliberately: if the source genuinely says `padding: var(--radius-none)`,
+  that's true however odd, and proof beats a role plausibility check.
+- `tailwind` — no `var()` exists to check; a class naming the token directly
+  IS the proof (Tailwind encodes its theme key in the class itself).
+- `manifest` — no reference mechanism exists at all (a hand-picked literal,
+  not a live variable) — keeps yesterday's value+role heuristic. A disclosed,
+  accepted gap, not a silent regression.
+
+One real wrinkle: the live preview injects the RESOLVED value on a scrub/pick
+(`el.style.setProperty(prop, value)`, never a reference), so for a few hundred
+ms after an explicit pick — before the write lands and HMR reconciles —
+`provenVar` looks unproven even for a pick that WILL land as `var()`. `sticky`
+(already existed, previously a guessing tie-break) is repurposed as the bridge:
+we know the pick happened, that's evidence too, just not source-level evidence.
+It's retired the moment reconcile confirms the real write (`scheduleReconcile`
+now also refreshes `declaredVars` and clears `stickyRef` for that prop) — so a
+pick main couldn't validate as a token (silently falls back to a plain value)
+doesn't go on claiming a token name forever.
+
+Verification, in order of how much I trust it:
+1. `test/token-match.mjs` — pure logic, rewritten around the new `source`/
+   `provenVar` contract for all three sources, plus the exact reported bug
+   reproduced against the OLD code (confirmed 6 assertions fail there) and
+   fixed against the new.
+2. `test/style-provenance.mjs` (new) — the DOM/CSSOM walk is NOT reasoned
+   about from afar: bundled with esbuild to a browser global and driven
+   against a REAL headless Chromium page (inline var(), a matched stylesheet
+   rule, a declaration inside `@media`, a var() with a fallback, inline
+   overriding a matched rule, an unrelated prop on the same element).
+   Confirmed it catches a real regression (disabled the `@media`/`@supports`
+   recursion by hand, the test failed correctly, restored). LIVE tier, not
+   unit — needs `npx playwright install chromium`, a real environment
+   dependency CI doesn't provision; SKIPs (exit 0) when that binary is
+   missing, same convention as agent-e2e/sim-e2e for missing creds/display.
+3. `test/style-edit.mjs` — updated the fixture and assertions (the ORIGINAL
+   `TokenCard` literal-hex case now asserts the OPPOSITE of what it used to:
+   raw hex shown, no chip; new `ProvenTokenCard` with a real
+   `style={{ color: 'var(--color-text)' }}` asserts the chip DOES show).
+   Written and typechecked, but unrun — the Electron tier can't launch a
+   window on this machine (`.empty__open` timeout, confirmed identical at
+   HEAD before any of this).
+
+Mid-session process note: this branch got checked out to `main` outside this
+session (reflog: a manual `checkout: moving from candidate to main`) partway
+through the work — `main` predates the entire design-tokens feature, so if
+`bun run dev` was running at the time, its file watcher would have hot-reloaded
+the OLDER code straight into the running app. That's almost certainly why the
+reported screenshot still showed the pre-fix names after the previous fix had
+already shipped. Switched back to `candidate` before starting this fix; nothing
+was lost (`origin/candidate` was already up to date).
+
+Not done, deliberately: `manifest`-sourced tokens keep the old heuristic —
+there's no reference mechanism to prove usage against at all, since a manifest
+token is main re-rendering a hand-picked literal, not a live variable.
+
+Post-review hardening (same day, before the main merge): (1) `@import`-ed
+sheets were silently skipped — a `CSSImportRule`'s nested sheet hangs off
+`.styleSheet`, not `.cssRules`, so the grouping-rule walk never descended;
+fixed + a real routed-origin @import case in the provenance test
+(mutation-checked). (2) One `styles.read` consumer was missed in the envelope
+migration — `style-edit.mjs`'s live-override read-back still indexed the old
+flat map; would have failed on the first real Electron-tier run. (3) The
+declared var NAMES now get the same IPC boundary cap as every other
+page-controlled string (128 chars; an absurd name just fails the proof match,
+which fails safe to the raw value).
+
+## 2026-07-30 — A radius token no longer labels `padding: 0`
+
+Reported from a real theme: the Styles panel showed `--rmt-radius-none` on the
+`padding` row and three `margin` sides. The VALUE was right — padding really was
+`0` — but the name was a different property family's token.
+
+Cause: `groupAffinity` returned a `TokenKind`, and `radius` and `spacing` both
+map to `length` (as do `fontSize` and `letterSpacing`). So for a `padding-*`
+row, whose rule accepts `length`, a radius token ranked `preferred` — exactly as
+preferred as a spacing token. `resolveTokenForValue` then picked by value
+equality, and with ranks tied it fell through to detection order. Worse,
+`matches.length === 1` short-circuits before rank is consulted at all, so when a
+theme has no zero-valued spacing token the radius one wins unopposed. `0` is the
+value that collides hardest: every "none" token in a system is `0`.
+
+The rank machinery was the right idea, just blind. Replaced `groupAffinity` with
+`groupRole` returning a semantic `TokenRole` (`spacing` | `radius` | `font-size`
+| `tracking` | …) — a notion the coarse value kind structurally cannot express —
+and gave each `PROP_TOKEN_RULES` entry the roles that may NAME it.
+
+The real split is offering vs naming, and they now have different strictness.
+Offering stays permissive per the file's founding rule: group names are
+unconstrained across the three detection sources, so they must never remove a
+token from the picker — a radius token IS a length and remains offerable for
+padding, just ranked last. Naming is strict: a token whose group marks a
+different family can't label the row, so an unopposed `--radius-none` yields to
+an honest `0px`. Two escape hatches keep that from over-reaching: an
+unrecognized group (`brand`, `rmt`) constrains nothing and can still name, and
+an explicit user pick (via `sticky`, set on pick at `StylePanel.tsx:306`) beats
+a guess made from a group's name — otherwise picking a radius token for padding
+would leave the row refusing to show what the user just chose.
+
+One deliberate non-change: `line-height` keeps `spacing` as an accepted role.
+An existing test asserts that, with a reasoned comment — it's the one property
+taking both lengths and unitless numbers, and systems really do drive leading
+off the spacing scale. Overturning it would have been scope creep hiding inside
+a refactor.
+
+Only `StylePanel` consumes `tokensForProp`/`resolveTokenForValue`, so this is
+display-side only; `main/style-tokens.ts` re-validates picks by name+group and
+is untouched, meaning no pick can start being rejected.
+
+Found in passing, NOT fixed (logged in TASKS): `sameCssValue` does not treat a
+bare `0` as `0px`, so a `--space-0: 0` token can never match a computed `0px`.
+The reported theme wrote `0px`, which is why it matched at all. Separate
+concern — it's the comparator, and changing it moves matching for every
+property.
+
+`test/token-match.mjs` covers the bug directly: both tokens offered with radius
+ranked `other`, spacing names the row, radius names nothing when unopposed, a
+neutral group still names, an explicit pick still names, and the mirror case
+(spacing must not name `border-radius`).
+
+## 2026-07-30 — The Styles ladder stops inventing inline styles (user feedback)
+
+"I'm not sure if I'm fine with creating inline style unless it's project's
+approach." The user picked a color token on a bare `<h1>` and got:
+
+```
+-<h1>{greeting}, I'm Andrei</h1>
++<h1 style="color: var(--color-title)">{greeting}, I'm Andrei</h1>
+```
+
+Two gaps conspired. S1 (Tailwind) can only REWRITE an existing class string —
+neither adapter can create a `class`/`className` attribute (`styles.ts`'s
+`classNameStringNode` gate, `styles-svelte.ts`'s `classAttr?.literal != null`) —
+so an unclassed element skips it outright. And `tokenClassRewrite` returns null
+for any token whose source isn't Tailwind, so a CSS-variable token can never
+take the class path regardless. That dropped straight into S2, which had **no
+gate at all**: inline was the unconditional fallback, its only checks being
+splice-correctness (spreads, `style={expr}`). Nothing anywhere in main had any
+notion of a project's styling convention.
+
+S2 now only ever EXTENDS a `style` attribute that already exists. Absent → S3.
+Praxis writing `style="…"` into a file that never had one is Praxis choosing a
+convention on the project's behalf — the one thing a design tool editing
+someone else's repo must not do. It's worse in Svelte, where the component
+almost certainly styles from its own scoped `<style>` block: the inserted
+attribute both imposes the convention and outranks that block on specificity
+forever after. (The Svelte S3 prompt already said "may live in this component's
+own `<style>` block" — but S2 ran first, so that sentence was unreachable.)
+
+The agent prompt change is load-bearing, not cosmetic. Most of what now lands
+in S3 is "this element has nowhere obvious to put a declaration," and left to
+itself the agent reaches for the inline prop — re-introducing exactly what the
+ladder just declined to write. Both prompts now name the project's own
+approaches and explicitly forbid adding an inline `style` where there is none.
+The JSX prompt also picked up the token/literal split the Svelte one had.
+
+Cost, accepted knowingly: an element with no class and no `style` is now an
+agent turn instead of an instant edit. That includes CSS-module/BEM projects
+(`class="hero-title"` isn't Tailwind-shaped, so S1 declines it too).
+
+Verification is the uncomfortable part. `test/style-edit.mjs` gained the
+contrast case — a bare `<div>` fixture (`BareCard`, appended LAST so it can't
+shift the line numbers the other stamps pin to) asserting needsAgent + a
+byte-identical file + the prompt's forbidding sentence. But the Electron tier
+cannot launch a window on this machine: `style-edit` dies at `.empty__open`,
+and it dies identically at HEAD with these changes stashed, so that assertion
+is written but unrun. What actually proved the change was a throwaway harness
+that esbuild-bundled `styles.ts` with electron marked external (the only
+electron use is `registerStylesIpc`, never called) and drove the real
+`applyStyleEdit` in plain node across both engines. At HEAD it reproduced the
+reported bug exactly (`applied: true, strategy: 'inline'` on a bare element);
+with the fix all 14 checks pass, and the 8 non-bare checks — inline merge and
+Tailwind rewrite, both frameworks — pass in BOTH, so the working paths are
+untouched. The harness was deleted rather than kept: it duplicates assertions
+already encoded in `style-edit.mjs`, and making bundle-based tests a permanent
+tier is a bigger call than this fix warrants. Worth revisiting if the Electron
+tier stays unrunnable.
+
+Not done, deliberately: teaching S1 to CREATE a class attribute for Tailwind
+projects. Detecting "is this a Tailwind project" is genuinely unreliable now
+that v4 is CSS-first and often ships no `tailwind.config.*` for `tokens.ts`'s
+existing probe to find, and it wouldn't have helped this user (CSS-variable
+tokens). Left in TASKS.
+
+## 2026-07-30 — Token chevron moves inside the value field (user feedback)
+
+"I find the way we now invoke tokens confusing. I would expect the chevron
+down being directed down and being placed within input field, on the right of
+it, instead of to the left from label." Fair: the v1 affordance was a
+`ChevronRight`/`ChevronDown` button sitting OUTSIDE the row, left of the
+property label — it read as an unrelated expander (and sat right next to
+SideRows' own expand-sides chevron, a different action entirely) rather than
+as "this field is a picker."
+
+Now the chevron lives inside the value field at its right edge, always
+pointing down and rotating 180° when open — i.e. the shape of the native
+`<select>` the transition-property row already uses a few rows below, so the
+panel reads consistently.
+
+`TokenRow` no longer wraps the row with its own chevron. It still owns the
+open/close state and renders the picker underneath, but hands the toggle to
+`children` as a NODE via a render prop, so each control places it inside its
+own field. A render prop (not context, not cloneElement) because there are
+exactly three call sites and each needs a visibly different placement —
+explicit beats clever. `ScrubInput` and `ColorControl` gained an optional
+`trailing` slot; both are also used by `CustomPanel`, which passes nothing
+and is unaffected.
+
+Three details the move forced:
+- The toggle now sits inside fields that own pointer/key behavior, so it
+  stops propagation on pointerdown/click/keydown — otherwise clicking it
+  would also start `ScrubInput`'s pointer-lock scrub, and Enter would also
+  open its exact-value editor.
+- `ScrubInput`'s readout is wrapped in `min-w-0 truncate` so a long token
+  name shrinks instead of shoving the chevron out of the fixed-width track.
+- Color fields went 96px → 112px (`w-28`). The trailing icon eats ~16px and
+  real design-system token names are long — at 96px `--color-text` truncated
+  to `--color…`. `ColorControl`'s hex box and `ColorRow`'s `TokenChip` stay
+  the same width as each other so the row doesn't jump when a value flips
+  between token and raw hex. `ColorControl`'s hex `<Input>` became a
+  borderless `<input>` inside a bordered flex wrapper (with a `focus-within`
+  ring), since the chevron has to sit inside that border.
+
+Verified with a driven probe: all six token-able rows reported the chevron
+geometrically inside its field (`insideField: true`, 5px from the right edge)
+and a captured island screenshot confirmed it visually. The final 96→112px
+nudge was NOT re-confirmed visually — the island `WebContentsView` stopped
+rendering partway through (the known environment flakiness; an untouched
+`prop-edit` fails identically right now), and it's a pure width constant with
+no logic. `bun run typecheck` clean, unit tier 40/40.
+
+## 2026-07-29 — Real Cmd+Z was dead: the editMenu role was eating it
+
+User: "Cmd+Z / Cmd+Shift+Z didn't work for me" — right after the previous
+entry claimed a live Cmd+Z check passed. Both are true, and the gap between
+them IS the bug: the menu template had `{ role: 'editMenu' }`, whose built-in
+Undo/Redo items own the Cmd+Z / Shift+Cmd+Z accelerators at the NATIVE menu
+level. A physical keystroke is intercepted in the main process and routed to
+`webContents.undo()` (text-editing undo) — the renderer's keydown listener
+(App.tsx, the v8 F3b source-edit undo) never fires. Synthetic/CDP key events
+(what every test uses, including the previous entry's probe) BYPASS menu
+accelerators, so the keydown handler fired in tests and the feature looked
+alive. Real-keyboard source undo has therefore been broken since the role was
+added — for props/text/token edits too, not just layer moves.
+
+Fix, three routing layers (menu template + App.tsx + a new tiny IPC):
+- `role: 'editMenu'` → explicit Edit submenu. Undo/Redo are custom items
+  whose click handlers route: a non-main focused webContents (preview, props
+  island, pop-out editor) gets plain `webContents.undo()`/`redo()` — exactly
+  what the role did, incl. CodeMirror, which maps the native historyUndo
+  beforeinput to its own history — while the MAIN renderer gets a
+  `menu:action 'undo'/'redo'` and decides for itself. Clipboard items stay
+  roles.
+- App.tsx: the undo logic is shared between the (kept, now mostly-backup)
+  keydown listener and the new menu-action branch. Focused text field → ask
+  main to replay the NATIVE editing command (`menu:native-edit` →
+  `mainWindow.webContents.undo()`), because the custom accelerator swallowed
+  the keystroke the field would have received; anything else → the source-edit
+  stack.
+- LayersTree: the drag's `preventDefault()` on pointerdown also suppressed the
+  default focus move, stranding focus in the composer textarea — so even with
+  the menu fixed, Cmd+Z after a drag would have hit the field's native undo.
+  `beginDrag` now focuses the row explicitly (rows are tabIndex=0).
+
+`test/layers-panel.mjs` now drives undo through the REAL path — main sending
+`menu:action 'undo'` (which is precisely what a physical Cmd+Z produces) —
+and pins BOTH routing branches: row-focused → the move reverts; composer-
+focused → source files must NOT change, and after blur the same action
+reverts. New CLAUDE.md gotcha: menu accelerators beat renderer keydown, and
+synthetic test events bypass menu accelerators — a keydown-handler test can
+stay green while every real keyboard is broken.
+
+## 2026-07-29 — Pinned-ask fade fix + confirmed Cmd+Z covers Layers drags
+
+User report: "when I scroll and one message starts pushing another one, the
+top message goes over, not behind gradient line on the top." Root cause,
+confirmed by two independent code investigations: `.msg--user-pinned`
+(styles.css, the collapsed/sticky user-ask bubble) had `z-index: 6`, a
+DELIBERATE prior choice ("so the pinned ask stays crisp over it") — but it's
+applied to every collapsed ask for the whole time it's collapsed, not only
+while genuinely stuck at `top: 44px`, so during the sticky hand-off between
+two turns the outgoing bubble also rendered above `.pane--chat::before`'s
+`z-index: 5` top fade instead of dissolving under it. No intervening
+stacking context exists anywhere in the chain (`.pane--chat` → `.chat__messages`
+→ `.chat__scroll` → `.turn` → `.msg`), so the two z-indexes compete directly —
+confirmed live via computed-style check (`getComputedStyle` reported the
+bubble's z-index as the raw `6`/`5` numbers, no scoping).
+
+User confirmed they want it to fade like everything else. Fixed:
+`z-index: 6` → `z-index: 1` on `.msg--user-pinned` — low enough to sit below
+the gradient (5), but still an explicit positive value so the pinned bubble
+keeps winning over its own turn's z-index:auto content scrolling beneath it
+(removing the z-index entirely would have silently broken the sticky visual
+effect itself, not just its relationship to the fade). Verified live:
+`getComputedStyle` now reports `1` for the bubble vs `5` for the gradient.
+
+Also verified, no code needed: dragging a Layers-panel row and pressing a
+REAL Cmd+Z keystroke (not just calling `window.api.edits.undo()` directly)
+correctly reverts the move. Layer-panel moves already go through the same
+`commitEdit`/`edit-history.ts` stack as every other direct source edit, and
+`App.tsx`'s global Cmd+Z handler already operates over that same per-root
+stack — so this "just worked" once the move engine (2026-07-29, Layers panel)
+landed.
+
+## 2026-07-29 — Rules v9: trigger-first line_height section (found by a new live test)
+
+New live-tier test `test/tool-invocation.mjs` asks the opposite question from
+every other tool test: not "does the tool work when called" but "do the rules
+make the agent CALL it at all", from natural design prompts that never name a
+tool. First run caught a real miss: `check_contrast` fired spontaneously,
+`line_height` never did — the agent hand-wrote the CSS instead.
+
+The difference was rule *shape*, not tool quality: `check_contrast` opens its
+own section with a trigger condition ("Whenever you pick, change, or review a
+text/UI color pair…"), while `line_height` was the fourth bullet in the shared
+calculators list, phrased as value substitution ("not a hardcoded 1.5").
+Adding body copy doesn't pattern-match "exact math you should not eyeball", so
+the push never landed — even though the SDK tool description already said
+"Call this WHENEVER you set a font-size or line-height". Lesson: the always-on
+rules steer tool *reach*; descriptions only matter once the model is already
+looking. Fix (v9): `line_height` got its own "Type metrics" section with the
+same trigger-first phrasing, covering new text content (headings/body/captions)
+explicitly. Both probes now pass live; `test/rules.mjs` pins the new section.
+
+A v0.app-style Layers panel — a tree of the previewed page's DOM at the top of
+the chat column, click a row to select, drag a row to reorder in real source.
+
+**The decisive constraint, found before writing anything:** a
+`data-praxis-source` stamp identifies a JSX/element node in *source*, not a
+rendered *instance*. A `.map()` over N items puts the identical stamp on N DOM
+nodes — there is no way to tell "move rendered item 3 before item 1" apart from
+the reverse, because in source there's only one node. So drag-to-reorder is a
+real code edit for distinct siblings, and an inherently agent-routed judgment
+call for list items/reparenting/cross-file — the same `needsAgent` fallback
+every other direct-edit engine in this app already uses.
+
+**Tree read** (`src/preview/layers.ts`, new preload sibling module) walks from
+`document.body` — not `documentElement`, which is where all of Praxis's own
+overlay chrome lives, so it's excluded for free. Node identity is a DOM
+child-index path (`[0,2,1]`), recomputed fresh on every read and never
+trusted across snapshots: `data-praxis-source` isn't unique and `cssPath` is
+too lossy to serve as a handle. A bulk read is a request-id round trip
+(`layers:read`/`layers:read-reply`), the same shape as the Styles tab's
+`styles:read` — the preview preload is sandboxed, so any bulk read of its
+isolated world can only ever be message-passing, never `executeJavaScript`.
+
+**Selection reuses the real click path.** A Layers row click sends
+`layers:select {path, fingerprint}`; the preload re-resolves the path
+(re-validating a `{tag, source}` fingerprint — the same self-healing
+discipline `resolveStyleTarget()` uses), then calls the *exact* functions the
+real in-page click handler calls (`describe`/`showToolbar`/
+`setSelectionHighlight`). Zero new renderer-side selection logic, a real
+in-page outline, and it works independent of Select-mode by construction —
+none of those functions gate on it.
+
+**Freshness** is a debounced, `childList`-only `MutationObserver`, armed only
+while the panel is open (`layers:set-watch`, mirroring `SET_FRAME`'s exact
+on/off shape) plus explicit reads on open/`preview:url-changed`/after a
+successful move. Deliberately not wired to every prop/style edit elsewhere —
+the observer already catches anything that changes the tree's *shape*, and a
+same-shape edit (recoloring, retyping) has nothing here to go stale.
+
+**The panel** (`LayersPanel.tsx` host + `LayersTree.tsx` pure render/drag) sits
+as a `flex-none` sibling above `ChatPanel`'s `<Conversation>`, with the same
+`pt-11` top padding `ConversationContent` already uses to clear the
+`.chat-drag` window-drag strip and the top gradient fade. Hand-rolled, not
+`@pierre/trees` (already a dep, used in the pop-out code editor): its model is
+alphabetically-sorted path strings with `directory|file` semantics, the wrong
+shape for a DOM tree where duplicate-tag siblings must stay in exact DOM order
+and the drop gesture is "between these two specific siblings," not "into a
+folder." Every existing drag interaction in this codebase (resize handles,
+ScrubInput, BezierEditor) is already hand-rolled pointer math with no dnd
+library anywhere.
+
+**The move engine** ships for React, Svelte, and static HTML in v1 — mirroring
+the codebase's existing per-framework pairing (`props.ts`/`props-svelte.ts`).
+React Native and Vue are out, not deferred: RN's preview is an iOS-simulator
+MJPEG bridge with no live DOM, and Vue uses its own devtools inspector instead
+of a stamp — neither has anything for a mover to hook into yet.
+
+v1 scope is deliberately narrow: **same-file, same-immediate-parent
+`before`/`after` only.** `inside` (reparenting) is always `needsAgent` — same
+parent is the one case where scope-safety (does the moved node reference
+locals only valid at its old position?) is trivially guaranteed, and it's also
+an indentation win: identical nesting depth means the target's own leading
+whitespace is already the right template for the moved node's new position.
+The gates, in order: same stamp on both sides → `needsAgent` (cheapest,
+decisive — the case a `.map()`/`{#each}` produces); different files →
+`needsAgent`; not true siblings under one parent → `needsAgent`; either side
+statically inside a `.map()`/`.filter().map()` call, a `{cond && <X/>}`/
+ternary container (React), or an `{#each}`/`{#if}` block (Svelte) →
+`needsAgent` (catches the case where the *current* render shows one instance
+but the template isn't safe to hand-splice). None of this trusts the renderer
+for correctness — the Layers tree's own `dupStamp` flag (computed client-side
+during the walk) is only a pre-flight UX hint that disables dragging on rows
+already known to be templated; the actual gate is main re-deriving everything
+from source.
+
+**The splice** (`src/main/move-node-splice.ts`, new, deliberately dependency-
+free) rebuilds the parent's entire content span from an ordered list of
+original child text runs, rather than incremental substring surgery — every
+untouched sibling's text is copied byte-for-byte, and only the separator
+immediately around the moved node is recomputed. One real bug caught by its
+own unit test before it ever reached the Electron tier: the first version
+borrowed the separator gap *after* the target when inserting `after`, which
+is a sibling gap for every target except the *last* child, where it's
+actually the boundary gap before the parent's closing tag (usually
+less-indented or absent) — fixed by always preferring the gap *before* target
+regardless of `position`, falling back to the one after only when target is
+first. `test/layers-move.mjs` pins this with hand-built `{start,end}` node
+stand-ins over literal strings — no real parser needed, since the algorithm
+only ever touches spans + a whitespace predicate.
+
+**A parent-tracking primitive didn't exist anywhere in this codebase** — every
+existing AST walker (`props.ts`'s `collectNodes`, `props-svelte.ts`'s
+`collectElements`, `html-source.ts`'s `walkElements`) only collects nodes
+matching a type, never tracking parent/children. New shared, framework-
+agnostic `src/main/ast-walk.ts` (`findContainer`/`ancestorChain`, duck-typed
+over `.type`) is used by both the React and Svelte movers; static HTML gets
+its own smaller version instead, because parse5's tree carries `parentNode`
+back-references that a naive generic key-walk would loop on — descending via
+`childNodes` only sidesteps that risk entirely rather than special-casing it.
+
+**Two `props.ts`/`props-svelte.ts` refactors, additive only, zero behavior
+change:** `findElementAtLine` split into `locateJsxOpening(ast, line, col)` +
+a thin parse wrapper, so the movers can parse a file ONCE and locate both the
+dragged and target elements against the identical ast (their JSX node objects
+must be reference-equal for the container lookup to work at all); and
+`parseFile`/`collectNodes`/`BabelNode`, `parseSvelte`/`Node`, all promoted
+from module-private to exported, mirroring what was already exported.
+
+**Why the splice algorithm lives in its own file, and why the unit test only
+covers it:** `move-node.ts` imports `commitEdit`/`resolveSource` from
+`props.ts`, which imports `electron` at module scope — so the whole file (and
+anything that imports it) can't load under plain bun. `control-manifest.ts`/
+`control-panels.ts` already established the fix for exactly this shape:
+factor the pure part into its own electron-free module. The AST-aware gating
+(same-source, same-parent, templated-container detection) still can't be
+unit-tested this way — it's covered end-to-end in `test/layers-panel.mjs`
+instead, against a new fixture (`test/fixtures/layers-app/`) with a real
+`src/Layers.tsx` backing a served `index.html`: a `<ul>` of three distinctly-
+stamped `<li>`s (the direct-move path) and a second `<ul>` whose three
+rendered `<li>`s all carry the *identical* stamp (the `.map()`/needsAgent
+path). The drag itself is dispatched as real `PointerEvent`s at the rows' own
+on-screen coordinates, driving `LayersTree`'s actual pointer-gesture code —
+not a direct engine call standing in for the UI.
+
+**One environment-driven test fix, not a product bug:** `win.click()`
+(Playwright's real actionability-checked click) stalled for its full 30s
+default timeout on this machine for reasons unrelated to the feature — the
+same class of environment quirk that affects the props island elsewhere in
+this suite (documented in the 2026-07-28 entry). Dispatching the click via
+`element.click()` inside `page.evaluate()` instead — the same event the
+button's `onClick` receives either way — resolved it instantly. Confirmed via
+a throwaway probe script that the feature itself (preview load, panel open,
+10 tree rows, click-select, and the drag reordering `Alpha/Beta/Gamma` →
+`Gamma/Alpha/Beta` in `src/Layers.tsx` with exactly the right indentation)
+all worked correctly the whole time — this was purely a test-harness fix.
+
+Tests: `test/layers-move.mjs` (new, unit tier) and `test/layers-panel.mjs`
+(new, electron tier) both green; `node test/run.mjs unit` 40/40. Follow-ups
+(reparenting, a "save as token"-style promotion, whether `inside` is ever
+worth mechanizing) are in `docs/TASKS.md`.
+
+## 2026-07-28 — Design tokens in the Styles panel (user-requested)
+
+The Styles tab was token-blind: it read computed CSS and showed the raw value —
+`color: #6c6c6c` — for a project that calls that `--color-text`. Tokens were
+already detected (`tokens.ts`) and parked in `useTokens`, but the only consumers
+were the chat's scaffold offer and a `props:applyToken` IPC **no renderer code
+calls** (dead since `TokenPalette.tsx` was removed). Now the panel names the
+token, offers a picker on every token-able row, and commits a *reference*.
+
+**Matching lives in `src/shared/token-match.ts`** (new, pure) because both sides
+need it — the island to render, main to re-validate. Its load-bearing rule: a
+token's **value shape gates** what it may be offered for; its **group name only
+ranks**. Group names are unconstrained (a manifest may name a group `brand`, a
+CSS-var scan derives them from the first name segment, Tailwind uses
+`colors`/`spacing`/…), so ranking on them is fine and excluding on them is not.
+That's what keeps `--z-modal: 100` out of the padding picker while still
+surfacing a spacing scale someone filed under `brand`.
+
+**Resolution is based on the LIVE custom property, not the token file.** The
+motivating repo (lkmv.ch) redefines every color under
+`@media (prefers-color-scheme: dark)`, and `fromCss` keeps the first occurrence
+— so a static value comparison silently fails in dark mode. Instead the panel
+asks `styles.read` for the token names themselves: `readStyles` already forwards
+whatever strings it gets to `getPropertyValue`, so custom properties worked
+**with no new IPC** (only the 64-prop cap needed raising). The recorded value is
+the fallback when a name doesn't resolve. Ties are real — a theme with
+`--color-title` and `--color-link` both `#212121` — so one winner is always
+chosen deterministically (class-list corroboration → group affinity → the
+sticky previous pick → detection order) rather than showing "2 tokens".
+
+**Commits write a reference.** `StyleEdit.token` carries only a name + group;
+`main/style-tokens.ts` re-detects the project's tokens, re-runs the same
+value-shape gate, and produces the text to splice — so nothing the island claims
+is written verbatim. A Tailwind-sourced token becomes a class
+(`rewriteClassListToken` → `text-brand-500`); a CSS-var token deliberately
+*skips* S1 and falls to S2, because taking the class path would write
+`text-[#6c6c6c]` — hard-coding the very value the user asked to stop hard-coding.
+`edit.value` still carries the resolved css text, so live preview, the
+post-commit reconcile and Replay all keep working against something concrete.
+An unresolvable token is dropped **silently** and the edit lands as a plain
+value edit: the value is still right, only the reference is unavailable.
+
+**UI: inline expansion, never a popover.** The island is a transparent
+WebContentsView sized to hug the card, so a portal dropdown clips at the view
+edge. A chevron expands `TokenPicker` under the row (what SideRows and
+BezierEditor already do; PanelApp's ResizeObserver grows the view). Colors get a
+swatch grid, lengths a name/value list; hovering previews live. A row with no
+offerable token renders byte-identical to before — token-less projects see no
+layout change at all. `ScrubInput.formatValue` shows the token name on numeric
+rows, and reverts to plain css text the moment a scrub moves off the committed
+value (freezing the name mid-drag would misreport what's about to commit).
+
+**Detection gaps closed:** `findCssFiles` now scans `.less`/`.sass`/`.styl`/
+`.pcss` (custom properties pass through preprocessors untouched — lkmv.ch keeps
+its whole theme in `src/routes/styles.less` and was invisible), the walk reaches
+depth 6 / 120 files (a monorepo's `packages/ui/src/styles/tokens.css` is depth
+5), and the emitted set is capped at 400 since a `TokenSet` now rides in every
+`PanelState` push. Preprocessor *variables* (`@brand:`, `$brand:`) are
+deliberately still ignored — they have no runtime form, so they could never be
+committed back as a reference.
+
+**Groundwork, no behavior change:** `StylePanel.tsx` (839 lines, guideline ~500)
+split into `components/styles/rows/*`; `sameCssValue`/`numericValue`/`toCssText`/
+`parseColorLike` moved to `lib/css-values.ts`, which meant first moving
+`TW_EASE_EQUIV` + `displayBezierPreset` down out of `BezierEditor.tsx`
+(`sameCssValue` depends on them, and a lib can't import a component).
+
+**Two things the plan got wrong, found while building:**
+- The reviewed plan claimed a live duplicate-class bug from `element.classes`
+  being a pick-time snapshot, and proposed widening `styles.read` to return
+  fresh classes. It isn't a bug: `applyStyleEdit` reads the class list from the
+  **source file** (`styles.ts:146`); `edit.classes` only gates `looksTailwind`.
+  The widening was dropped — the class list is consulted only as a tie-break,
+  where staleness degrades gracefully.
+- `--z-modal: 100` **is** a legal `font-weight`, so no value-shape rule can
+  exclude it. `test/token-match.mjs` asserts the honest behavior: offered, but
+  ranked `neutral` so it sits below any real weight scale.
+
+Tests: new `test/token-match.mjs` (unit tier — value kinds, affinity, the
+per-prop gate incl. both negative cases, reference forms per source, and the
+tie-break); `tw-styles.mjs` extended for `tailwindTokenClassFor` /
+`rewriteClassListToken`; `tokens.mjs` extended with a depth-5 `.less` fixture
+that also pins first-definition-wins and proves a LESS variable never becomes a
+token; `style-edit.mjs` drives the real island — the chip names `--color-text`,
+the picker offers *only* the color tokens, clicking `--color-title` writes
+`var(--color-title)` (never `#212121`), and one undo restores it. The fixture
+`propedit-app` gained `src/theme.css` + a `TokenCard`, making it a css-source
+project. Writing that test caught a real bug in the test itself: a
+document-wide `.stylepanel__token-toggle` grabs the *padding* row's toggle,
+since every token-able row now has one.
+
+**Verification status, honestly:** unit tier 39/39 (incl. the new
+`token-match`), plus `tokens` / `tokens-scaffold` / `prop-edit-svelte` /
+`text-edit` / `setup-detect` green. The island-DOM-driven Electron tests
+(`style-edit`, `select-element`, `custom-controls`, `ready-gating`, and
+eventually `prop-edit`) could NOT be verified on the machine this was written
+on: the island `WebContentsView` renders an empty document there, so every
+`.proppanel__*` / `.stylepanel__*` wait times out. That is **pre-existing** —
+all four fail identically with this entire change stashed at HEAD, so it's the
+environment (the Electron window never taking focus), not the feature. Inside
+`style-edit`, the token-source header and the `--color-text` chip assertions
+did pass on the one run that got that far; the picker/commit assertions written
+after the selector fix are unverified. Re-run `node test/run.mjs electron`
+somewhere the window can actually take focus before trusting them.
+
 ## 2026-07-27 — Don't offer/greypanel setup a project can't do (user feedback)
 
 Feedback from a vanilla single-HTML project (whole DOM assembled at runtime from

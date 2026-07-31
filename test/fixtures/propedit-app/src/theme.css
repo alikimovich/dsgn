@@ -1,0 +1,15 @@
+/* Design tokens for the Styles tab's token chips + picker (style-edit.mjs).
+   This file is what `tokens.detect` reads off disk, which makes the fixture a
+   `source: 'css'` project; index.html mirrors the same declarations inline so
+   the preview resolves them live (its server returns index.html for every
+   request, so a <link> here would not load). */
+:root {
+  --color-text: #6c6c6c;
+  /* Deliberately equal values: two tokens that can't be told apart by value
+     alone, which is what exercises the picker's tie-break. */
+  --color-title: #212121;
+  --color-link: #212121;
+  --space-md: 24px;
+  /* Not a color and not a length — must never be offered for either. */
+  --z-modal: 100;
+}

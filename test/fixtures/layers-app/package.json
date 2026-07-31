@@ -1,0 +1,8 @@
+{
+  "name": "praxis-fixture-layers",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "node server.mjs"
+  }
+}
