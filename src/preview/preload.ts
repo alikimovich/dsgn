@@ -17,7 +17,7 @@ import { ipcRenderer } from 'electron'
 import type { SelectedElement } from '../shared/api'
 import { FRAME_DATA_URI, FRAME_INSET } from '../shared/iphone-frame'
 import { buildLayersSnapshot, type LayerFingerprint, resolveLayerElement } from './layers'
-import { declaredVarsFor } from './style-provenance'
+import { specifiedValues, varRefName } from './style-provenance'
 
 // Channels (preview ⇄ main). Kept local — main mirrors these strings.
 const SET_MODE = 'praxis:preview:set-select-mode'
@@ -41,7 +41,7 @@ const TOGGLE_SELECT = 'praxis:preview:toggle-select' // preload → renderer (S 
 const STYLES_PREVIEW = 'styles:preview' // renderer → preload {prop, value}
 const STYLES_CLEAR_PREVIEW = 'styles:clear-preview' // renderer → preload {prop?}
 const STYLES_READ = 'styles:read' // renderer → preload {id, props}
-const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null, declaredVars|null}
+const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null, declaredVars|null, specified|null}
 const STYLES_REPLAY = 'styles:replay' // renderer → preload {prop, from, to}
 // Layers panel: bulk DOM-tree read (request-id round trip, like styles:read),
 // panel-driven select/hover by child-index path, and a watch toggle that arms
@@ -857,7 +857,7 @@ function clearStylePreview(prop?: string): void {
 function readStyles(id: unknown, props: string[]): void {
   const el = resolveStyleTarget()
   if (!el) {
-    ipcRenderer.send(STYLES_READ_REPLY, { id, values: null, declaredVars: null })
+    ipcRenderer.send(STYLES_READ_REPLY, { id, values: null, declaredVars: null, specified: null })
     return
   }
   const cs = getComputedStyle(el)
@@ -872,19 +872,25 @@ function readStyles(id: unknown, props: string[]): void {
     bounded.push(p)
     values[p] = cs.getPropertyValue(p).trim().slice(0, 256)
   }
-  // Same boundary cap as `values`: the var NAMES come from page-controlled CSS.
-  // A real token name never approaches 128 chars, and one that somehow did
-  // would just fail the proof match — fails safe to the raw value.
+  // One stylesheet walk yields BOTH proof halves: `declaredVars` (the var name
+  // a design token must match to be NAMED) and `specified` (the AUTHORED css
+  // text — `1.5rem`, not the `24px` computed style collapses it to;
+  // getComputedStyle always serializes lengths as used px, so the authored
+  // unit only survives here). Same boundary caps as `values`: all of it is
+  // page-controlled CSS. An absurd var name just fails the proof match —
+  // fails safe to the raw value.
+  const spec = specifiedValues(
+    el,
+    bounded.filter((b) => !b.startsWith('--'))
+  )
   const declaredVars: Record<string, string | null> = {}
-  for (const [p, name] of Object.entries(
-    declaredVarsFor(
-      el,
-      bounded.filter((b) => !b.startsWith('--'))
-    )
-  )) {
+  const specified: Record<string, string> = {}
+  for (const [p, text] of Object.entries(spec)) {
+    const name = varRefName(text)
     declaredVars[p] = name ? name.slice(0, 128) : null
+    specified[p] = text.trim().slice(0, 256)
   }
-  ipcRenderer.send(STYLES_READ_REPLY, { id, values, declaredVars })
+  ipcRenderer.send(STYLES_READ_REPLY, { id, values, declaredVars, specified })
 }
 
 // One pending replay at a time (there's only one selection); starting another

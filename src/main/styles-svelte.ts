@@ -99,11 +99,19 @@ const styleAgentPrompt = (edit: StyleEdit, token: ResolvedTokenRef | null): stri
     ? `to the design token \`${token.name}\` (\`${token.ref}\`, currently \`${edit.value}\`), ` +
       'using the token reference rather than the literal value,'
     : `to \`${edit.value}\``
+  // Caller (styles.ts) has already bounded/validated `authored`. Doubles as a
+  // greppable needle for finding the declaration (often a global stylesheet,
+  // not the component itself).
+  const unit = edit.authored && !token
+    ? ` It is currently authored as \`${edit.authored}\` — keep the project's unit and ` +
+      'idiom, converting the target value if needed.'
+    : ''
   return (
-    `Set the CSS property \`${edit.prop}\` ${what} on the element at ${edit.source}. ` +
-    "Its styles may live in this component's own `<style>` block rather than a " +
-    'class or style attribute — edit whichever the component already uses, and do ' +
-    'NOT add an inline `style` attribute where there is none.'
+    `Set the CSS property \`${edit.prop}\` ${what} on the element at ${edit.source}.${unit} ` +
+    "Its styles may live in this component's own `<style>` block or a global " +
+    'stylesheet rather than a class or style attribute — edit whichever the ' +
+    'project already uses, and do NOT add an inline `style` attribute where ' +
+    'there is none.'
   )
 }
 

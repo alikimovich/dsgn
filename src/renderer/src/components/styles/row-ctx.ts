@@ -35,4 +35,12 @@ export interface RowCtx {
    * `group` batches a multi-prop gesture, exactly as `commit` does.
    */
   commitToken: (prop: string, candidate: TokenCandidate, group?: string) => Promise<void>
+
+  /**
+   * The property's AUTHORED css text (`1.5rem`), when the specified
+   * declaration was found — null otherwise. `values` only ever holds the
+   * computed px (getComputedStyle serializes lengths as used px); rows use
+   * this so the readout speaks the project's own units.
+   */
+  authoredFor: (prop: string) => string | null
 }

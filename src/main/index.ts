@@ -945,11 +945,16 @@ function registerPreviewIpc(): void {
         id?: unknown
         values?: Record<string, string> | null
         declaredVars?: Record<string, string | null> | null
+        specified?: Record<string, string> | null
       }
     ) => {
       if (e.sender !== previewView?.webContents) return
       const resolve = typeof p?.id === 'number' ? pendingStyleReads.get(p.id) : undefined
-      resolve?.(p.values ? { values: p.values, declaredVars: p.declaredVars ?? {} } : null)
+      resolve?.(
+        p.values
+          ? { values: p.values, declaredVars: p.declaredVars ?? {}, specified: p.specified ?? {} }
+          : null
+      )
     }
   )
   ipcMain.handle(

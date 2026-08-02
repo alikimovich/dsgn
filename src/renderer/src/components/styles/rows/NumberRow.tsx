@@ -11,11 +11,13 @@ import { TokenRow } from './TokenRow'
 const SIDES = ['top', 'right', 'bottom', 'left'] as const
 
 /**
- * The scrub track's readout: the design token's NAME when the value the track
- * is showing is still the committed one, and the plain css text the moment a
- * scrub moves off it (mid-drag the row is no longer that token, and freezing
- * the name there would misreport what's about to be committed). Undefined
- * hands ScrubInput back its default rendering.
+ * The scrub track's readout, in order of how much it can honestly say: the
+ * design token's NAME when the committed value is proven to be one; else the
+ * AUTHORED css text (`1.5rem` — the project's own unit, which the computed
+ * value collapsed to `24px`); else undefined, handing ScrubInput its default
+ * px rendering. Either custom readout only holds while the track shows the
+ * COMMITTED value — mid-drag the row is no longer that token/declaration, and
+ * freezing the text there would misreport what's about to be committed.
  */
 function tokenFormatter(
   prop: string,
@@ -23,8 +25,9 @@ function tokenFormatter(
   committed: number
 ): ((v: number) => string) | undefined {
   const name = ctx.tokenFor(prop)?.match.token.name
-  if (!name) return undefined
-  return (v) => (v === committed ? name : toCssText(prop, v))
+  const text = name ?? ctx.authoredFor(prop)
+  if (!text) return undefined
+  return (v) => (v === committed ? text : toCssText(prop, v))
 }
 
 /** Numeric scrub row; non-numeric computed text degrades to a readout. */

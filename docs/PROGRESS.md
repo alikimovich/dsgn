@@ -2,6 +2,52 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-01 — The panel reads back the project's units (24px → 1.5rem)
+
+Reported from lkmv.ch: the paragraph's `margin-bottom` showed `24px` while
+`styles.less` says `1.5rem`. Not a bug in the provenance work — a boundary of
+it: `getComputedStyle` serializes every length as USED px, so the authored
+unit is destroyed before Praxis ever sees the value. But `specifiedValues()`
+(style-provenance.ts) was already walking the matched rules and finding the
+authored declaration — then keeping only the `var()` name and discarding the
+text. The authored `1.5rem` was being read and thrown away.
+
+Now the one stylesheet walk yields both halves: `declaredVars` (token proof)
+and `specified` (authored css text), through `styles:read` →
+`StyleReadResult.specified` → StylePanel state → `RowCtx.authoredFor`. The
+scrub readout precedence is: proven token name → authored text (`1.5rem`) →
+default px. Either custom readout only holds while the track shows the
+COMMITTED value — mid-scrub it flips to live px text, since mid-drag the row
+is no longer that declaration. On commit the authored entry is cleared (it
+just went stale; showing the old `1.5rem` against a new number would lie) and
+the reconcile re-read repopulates it.
+
+The write path got the matching half: `StyleEdit.authored` rides along
+(bounded + `isSafeStyleValue`-gated in main, prompt-context only, never
+spliced) so the S3 agent prompt now says "currently authored as `1.5rem` —
+keep the project's unit and idiom." Without that, a scrub on a rem-authored
+declaration seeds "set margin-bottom to `25px`" and the agent clobbers the
+unit — the same convention-respect failure as the inline-style gate, one
+layer down. The authored text doubles as a greppable needle for finding the
+declaration (often a global stylesheet, as on lkmv.ch — the Svelte prompt now
+says "or a global stylesheet" too, since a `.svelte` stamp says nothing about
+where the styles live).
+
+Verified in the real browser (`test/style-provenance.mjs`): the exact
+reported CSS (`p { margin: 0; margin-bottom: 1.5rem }`) asserting both the
+premise (computed really says `24px`) and the fix (specified says `1.5rem`).
+The browser corrected one expectation: CSSOM re-serializes expanded shorthand
+longhands (`margin: 0` → margin-top `0px`, not `0`) — pinned in the test.
+Panel-side rendering is reasoned + typechecked only (same unrunnable
+Electron-tier caveat as the rest of this feature).
+
+Known limit, accepted: scrubbing still COMMITS in px (the scrub model is
+numeric-px throughout). Display and the agent prompt are honest now; a
+direct-splice engine (S2 inline) still writes px. Rem-authored declarations
+never reach S2 today (they live in stylesheets → S3 agent, which is told to
+preserve units), so the gap is theoretical until someone scrubs a rem-authored
+INLINE style.
+
 ## 2026-07-31 — Token naming requires PROOF, not value coincidence
 
 "I really don't want this panel to hallucinate variables and tokens if the

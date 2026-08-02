@@ -84,6 +84,14 @@ export default function StylePanel({
    * value is a token rather than merely equal to one — see `token-match.ts`.
    */
   const [declaredVars, setDeclaredVars] = useState<Record<string, string | null>>({})
+  /**
+   * Per editable longhand: the AUTHORED css text of the specified declaration
+   * (`1.5rem`), when one was found. `values` can only ever hold the computed
+   * `24px` — this is what lets the readout speak the project's units. Cleared
+   * per-prop on commit (the authored text is unknown until the write lands and
+   * the reconcile re-read repopulates it).
+   */
+  const [specifiedVals, setSpecifiedVals] = useState<Record<string, string>>({})
 
   // Async flows (commit chains, reconcile timers) read through the ref so they
   // never act on a stale snapshot; every write goes through merge/setValues.
@@ -188,6 +196,7 @@ export default function StylePanel({
       merge(fresh) // …then the fresh truth
       setResolvedVars(vars)
       setDeclaredVars(res.declaredVars)
+      setSpecifiedVals(res.specified)
     })
     return () => {
       alive = false
@@ -245,12 +254,20 @@ export default function StylePanel({
       if (fresh === undefined) return
       if (sameCssValue(prop, fresh, committed)) {
         merge({ [prop]: fresh })
-        // The write has truly landed — declaredVars is authoritative for this
-        // prop now, so the transient "trust our own recent pick" exemption
-        // (`sticky`) can retire. Without this, a pick main couldn't validate
-        // as a token (silently falls back to a plain value) would go on
-        // claiming a token name forever, since sticky never expires on its own.
+        // The write has truly landed — declaredVars/specified are authoritative
+        // for this prop now, so the transient "trust our own recent pick"
+        // exemption (`sticky`) can retire. Without this, a pick main couldn't
+        // validate as a token (silently falls back to a plain value) would go
+        // on claiming a token name forever, since sticky never expires on its
+        // own.
         setDeclaredVars((d) => ({ ...d, [prop]: res?.declaredVars[prop] ?? null }))
+        setSpecifiedVals((s) => {
+          const next = { ...s }
+          const text = res?.specified[prop]
+          if (text) next[prop] = text
+          else delete next[prop]
+          return next
+        })
         delete stickyRef.current[prop]
         return
       }
@@ -275,6 +292,16 @@ export default function StylePanel({
       if (!tp || tp === 'none') await commit('transition-property', 'all')
     }
     const prev = valuesRef.current[prop] ?? css
+    // The authored text (`1.5rem`) rides along for the S3 agent prompt, then
+    // goes stale the moment we commit — clear it so the readout can't keep
+    // showing the OLD authored value against the new number. The reconcile
+    // re-read repopulates it once the write lands.
+    const authored = specifiedVals[prop]
+    setSpecifiedVals((s) => {
+      const next = { ...s }
+      delete next[prop]
+      return next
+    })
     preview(prop, css) // non-scrub commits (select / Enter) show instantly too
     merge({ [prop]: css })
     // Every not-applied branch uses dropPreview, NOT bare clearPreview: the
@@ -287,7 +314,8 @@ export default function StylePanel({
         value: css,
         classes: element.classes,
         group,
-        token
+        token,
+        authored
       })
       if (res.applied) {
         lastCommitRef.current = { prop, from: prev, to: css }
@@ -402,7 +430,8 @@ export default function StylePanel({
     tokensFor,
     tokenFor,
     tokenValue,
-    commitToken
+    commitToken,
+    authoredFor: (prop) => specifiedVals[prop] ?? null
   }
   const display = values.display ?? ''
   const tokenCount = tokens?.groups.reduce((n, g) => n + g.tokens.length, 0) ?? 0

@@ -91,8 +91,16 @@ export function styleAgentPrompt(
     ? `the design token \`${token.name}\` (\`${token.ref}\`, currently \`${edit.value}\`), ` +
       `using the project's token reference rather than the literal value`
     : `\`${edit.value}\``
+  // The authored text does double duty: it tells the agent to keep the
+  // project's unit (a px scrub target on a rem-authored declaration should
+  // land as rem), and it's a greppable needle for FINDING the declaration.
+  const unit =
+    edit.authored && !token
+      ? ` It is currently authored as \`${edit.authored}\` — keep the project's unit and ` +
+        'idiom, converting the target value if needed.'
+      : ''
   return (
-    `In ${edit.source}, set the css property \`${edit.prop}\` of the ${el} to ${what}. ` +
+    `In ${edit.source}, set the css property \`${edit.prop}\` of the ${el} to ${what}.${unit} ` +
     'Style it the way this project already styles things — a stylesheet, CSS module, ' +
     'styled-component or utility class — and do NOT add an inline `style` prop unless ' +
     'the element already has one.'
@@ -138,7 +146,13 @@ export async function applyStyleEdit(root: string, edit: StyleEdit): Promise<Sty
   edit = {
     ...edit,
     classes: Array.isArray(edit.classes) ? edit.classes : [],
-    group: typeof edit.group === 'string' && edit.group ? edit.group.slice(0, 120) : undefined
+    group: typeof edit.group === 'string' && edit.group ? edit.group.slice(0, 120) : undefined,
+    // Prompt-context only, never spliced — but it lands inside backticks in
+    // the prompt, so it gets the same splice-safety gate as a value anyway.
+    authored:
+      typeof edit.authored === 'string' && edit.authored.trim() && isSafeStyleValue(edit.authored)
+        ? edit.authored.slice(0, 120)
+        : undefined
   }
   // Resolve a token pick BEFORE the framework dispatch, so both engines get the
   // same already-validated reference. The token's value comes from the repo's

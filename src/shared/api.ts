@@ -622,6 +622,14 @@ export interface StyleEdit {
    * still right, only the reference is unavailable.
    */
   token?: { name: string; group: string }
+  /**
+   * The property's AUTHORED css text before this edit (`1.5rem`), when the
+   * panel read one (`StyleReadResult.specified`). Prompt-context only — never
+   * spliced: it lets the S3 agent prompt tell the agent to keep the project's
+   * unit/idiom instead of pasting the scrub's px value into a rem-authored
+   * declaration.
+   */
+  authored?: string
 }
 
 /** A `styles:read` reply: fresh computed values plus proof of token usage. */
@@ -636,6 +644,13 @@ export interface StyleReadResult {
    * from "happens to equal it".
    */
   declaredVars: Record<string, string | null>
+  /**
+   * Per editable longhand: the AUTHORED css text of that same specified
+   * declaration, when one was found — `1.5rem`, where `values` can only ever
+   * say `24px` (computed style serializes lengths as used px). What lets the
+   * panel read back the project's own units instead of the browser's.
+   */
+  specified: Record<string, string>
 }
 
 /** Result of applying a StyleEdit (mirrors PropEditResult's shape). */

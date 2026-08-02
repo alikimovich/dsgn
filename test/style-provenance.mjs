@@ -141,6 +141,31 @@ try {
     'varRefName: a literal is not a reference'
   )
 
+  // --- specifiedValues preserves AUTHORED units (the lkmv.ch 24px-vs-1.5rem
+  // report, verbatim CSS): computed style serializes lengths as used px, so
+  // `margin-bottom: 1.5rem` reads back as `24px` — only the specified
+  // declaration still says rem. Also exercises non-var shorthand expansion:
+  // CSSOM expands `margin: 0` into longhands, so margin-top reads '0'.
+  const authored = await page.evaluate(() => {
+    const style = document.createElement('style')
+    style.textContent = 'p { margin: 0; margin-bottom: 1.5rem; }'
+    document.head.appendChild(style)
+    const el = document.createElement('p')
+    document.body.appendChild(el)
+    return {
+      spec: window.StyleProvenance.specifiedValues(el, ['margin-top', 'margin-bottom']),
+      computed: getComputedStyle(el).getPropertyValue('margin-bottom')
+    }
+  })
+  eq(authored.computed, '24px', 'premise: computed style really does collapse 1.5rem to 24px')
+  eq(
+    authored.spec,
+    // '0px', not the authored '0': CSSOM re-serializes expanded shorthand
+    // longhands (real-browser behavior this test exists to pin down).
+    { 'margin-top': '0px', 'margin-bottom': '1.5rem' },
+    'specified keeps the authored rem, and expands the margin:0 shorthand'
+  )
+
   // --- @import: the nested sheet hangs off CSSImportRule.styleSheet, NOT
   // .cssRules, so a naive grouping-rule walk skips it entirely. Needs a real
   // same-origin URL (about:blank can't resolve @import, and a cross-origin
