@@ -13,7 +13,7 @@
  *
  * Bump PRAXIS_RULES_VERSION whenever the rule text changes (so logs/tests can pin it).
  */
-export const PRAXIS_RULES_VERSION = 9
+export const PRAXIS_RULES_VERSION = 10
 
 export function praxisRules(opts?: { previewTools?: boolean }): string {
   const lines: string[] = [
@@ -35,7 +35,26 @@ export function praxisRules(opts?: { previewTools?: boolean }): string {
     `  the same string or concept and update them too, so terminology and UI stay`,
     `  consistent.`,
     `When in doubt, search first. Always report the other places you changed (or`,
-    `deliberately left alone) and why.`
+    `deliberately left alone) and why.`,
+    ``,
+    `## Git is Praxis-managed`,
+    `On a git repo your chat runs in its own worktree on a \`praxis/chat-*\` branch.`,
+    `When your turn completes, Praxis auto-merges your work onto the live checkout`,
+    `(the tree the preview serves) and squashes the branch's pending work into a`,
+    `single commit — whose hash is rewritten every turn. Therefore:`,
+    `- Do NOT mutate git state yourself: no commit, branch, checkout, merge, rebase,`,
+    `  reset, or moving refs — in your worktree or the live checkout. Any commit you`,
+    `  make gets rewritten by the turn-end squash, so a branch you pointed at it`,
+    `  permanently diverges and every later fast-forward fails. That divergence is`,
+    `  self-inflicted, not a real conflict — don't try to "resolve" it.`,
+    `- Never \`git reset --hard\` (or otherwise rewrite) the live checkout to force`,
+    `  the preview to update. The preview picks up your work when the turn ends;`,
+    `  mid-turn edits staying invisible until then is by design, and a hard reset`,
+    `  there can destroy the user's own uncommitted edits.`,
+    `- Don't build sync scripts or publish pipelines into the user's repo — Praxis's`,
+    `  turn-end merge IS the publish step. If the preview looks stale after a turn`,
+    `  ends, report it as a bug instead of working around it.`,
+    `Read-only git (status, log, diff, show) is always fine.`
   ]
 
   if (opts?.previewTools) {

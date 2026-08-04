@@ -17,7 +17,7 @@ const assert = (cond, msg) => {
 const r = praxisRules()
 assert(typeof r === 'string' && r.length > 0, 'rules render to a non-empty string')
 assert(typeof PRAXIS_RULES_VERSION === 'number', 'version is a number')
-assert(PRAXIS_RULES_VERSION === 9, 'version bumped to 9')
+assert(PRAXIS_RULES_VERSION === 10, 'version bumped to 10')
 assert(r.includes(`v${PRAXIS_RULES_VERSION}`), 'rules carry the version marker')
 // v3 naming — the product is Praxis in the rule text now.
 assert(/praxis/i.test(r), 'names the product Praxis')
@@ -30,6 +30,13 @@ assert(/scope of an element edit/i.test(r), 'R1: scope-of-edit heading present')
 assert(/\blocal\b/i.test(r) && /project-wide/i.test(r), 'R1: local vs project-wide distinction')
 assert(/search first|grep/i.test(r), 'R1: search-first guidance')
 assert(/report/i.test(r), 'R1: report-what-changed guidance')
+// R-git (v10) — Praxis owns git state; the agent must not fight the worktree
+// machinery (turn-end squash rewrites hashes; manual branch moves diverge).
+assert(/git is praxis-managed/i.test(r), 'R-git: heading present')
+assert(/praxis\/chat-/.test(r), 'R-git: names the chat worktree branch scheme')
+assert(/squash/i.test(r), 'R-git: explains the turn-end squash')
+assert(/reset --hard/.test(r), 'R-git: forbids hard-resetting the live checkout')
+assert(/status, log, diff/i.test(r), 'R-git: read-only git allowed')
 // R2: browser inspection → agent-browser, never Chrome DevTools unless asked.
 assert(/agent-browser/i.test(r), 'R2: directs the agent to agent-browser')
 assert(
