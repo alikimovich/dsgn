@@ -266,7 +266,7 @@ export interface ImageAttachment {
 }
 
 export interface AgentOptions {
-  /** Model alias ('opus' | 'sonnet' | 'haiku') or undefined for the account default. */
+  /** Model alias ('fable' | 'opus' | 'sonnet' | 'haiku') or undefined for the account default. */
   model?: string
   /** Reasoning effort ('low' | 'medium' | 'high') or undefined for the model default. */
   effort?: string

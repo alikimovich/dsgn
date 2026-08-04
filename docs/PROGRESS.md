@@ -2,6 +2,16 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-03 — Fable in the model picker
+
+The Claude model picker still listed only Opus / Sonnet / Haiku, so there was
+no way to run a chat on Fable short of leaving it on "Default" and hoping the
+account default was right. Added `{ value: 'fable', label: 'Fable' }` at the
+top of `CLAUDE_MODELS` in `ChatPanel.tsx` (above Opus). The value is passed
+through untouched to the SDK's `model` option, and `claude --help` documents
+`fable` as a first-class latest-model alias alongside `opus`/`sonnet`, so no
+main-side change was needed.
+
 ## 2026-08-03 — Three field reports: agent fights the worktree machinery, stale Codex CLI, interrupt noise
 
 Three user-reported issues from a real my-story session, fixed together:
