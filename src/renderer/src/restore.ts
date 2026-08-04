@@ -1,5 +1,7 @@
 import type { LiveProjectSnapshot, SessionRecord } from '../../shared/api'
 import {
+  type ChatAgentSettings,
+  chatAgentSettingsFromOptions,
   messagesFromTranscript,
   type ProjectEntry,
   readPersistedWorkspace,
@@ -53,8 +55,18 @@ const minimalEntry = (lp: LiveProjectSnapshot): ProjectEntry => ({
   launchSpec: null,
   touchedAt: 0,
   sessionKeys: lp.chats.map((c) => c.sessionKey),
-  activeSessionKey: lp.activeSessionKey ?? lp.chats[0]?.sessionKey ?? lp.projectKey
+  activeSessionKey: lp.activeSessionKey ?? lp.chats[0]?.sessionKey ?? lp.projectKey,
+  chatSettings: liveChatSettings(lp)
 })
+
+/** Every live chat's REAL posture, straight from main's session options. It
+ *  outranks the persisted copy: main survived the reload, the renderer's state
+ *  didn't, so anything the two disagree on is stale on the renderer's side (and a
+ *  stale mode is one the toolbar would then misreport for the rest of the chat). */
+const liveChatSettings = (lp: LiveProjectSnapshot): Record<string, ChatAgentSettings> =>
+  Object.fromEntries(
+    lp.chats.map((c) => [c.sessionKey, chatAgentSettingsFromOptions(c.options)])
+  )
 
 export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
   if (started) return
@@ -78,7 +90,18 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
       const p = persistedByKey.get(lp.projectKey)
       const sessionKeys = lp.chats.map((c) => c.sessionKey)
       const activeSessionKey = lp.activeSessionKey ?? sessionKeys[0] ?? lp.projectKey
-      restored.push(p ? { ...p, sessionKeys, activeSessionKey } : minimalEntry(lp))
+      restored.push(
+        p
+          ? {
+              ...p,
+              sessionKeys,
+              activeSessionKey,
+              // Main's live options win over the persisted copy for the chats it
+              // still has; persisted entries for chats it no longer has are dropped.
+              chatSettings: liveChatSettings(lp)
+            }
+          : minimalEntry(lp)
+      )
       for (const c of lp.chats) {
         useChat
           .getState()

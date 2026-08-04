@@ -382,9 +382,10 @@ const api: PraxisApi = {
       ipcRenderer.invoke('agent:restart-chat', root, sessionKey, options),
     resumeSession: (
       root: string,
-      recordId: string
+      recordId: string,
+      options?: AgentOptions
     ): Promise<{ ok: boolean; sessionKey?: string; error?: string }> =>
-      ipcRenderer.invoke('agent:resume-session', root, recordId),
+      ipcRenderer.invoke('agent:resume-session', root, recordId, options),
     closeChat: (
       root: string,
       sessionKey: string
