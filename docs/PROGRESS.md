@@ -2,6 +2,30 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-07-16 — Drop the top-of-window DiagnoseCard on launch failures (LKM-56)
+
+A failed project open rendered the propose-first `DiagnoseCard` (and its
+"Diagnosing the problem…" busy banner) as the first child of `.app`, pushing
+the whole frameless layout down over the traffic-light strip. The card was
+redundant for this state: the activity console already auto-opens on the
+error line, and the preview footer already carries the message + custom-command
+retry box.
+
+- **Removed the renderer-side diagnosis UI**: `DiagnoseCard.tsx`, the
+  `useDiagnosis` store slice (+ `__dsgnDiagnosis` test handle), the
+  `proposeFix`/`applyFix`/`dismissFix` wiring in `App.tsx`, and the `.diag`
+  CSS block. A failed `attempt()` now just logs the error (which opens the
+  console) and sets the error status.
+- **Kept the main-process seam** (`diagnose.ts`, `diag-cache.ts`,
+  `diag-rules.ts`, the `diagnose:*` IPC + preload bridge and their unit
+  tests) — nothing in the renderer calls it anymore, but the propose-first
+  machinery stays available if diagnosis gets re-surfaced (e.g. through the
+  chat) later; noted in the diag-rules header.
+- Tests: `test/diagnose-card.mjs` deleted; new electron-tier
+  `test/open-fail-console.mjs` opens an empty temp folder for real (via the
+  `menu:open-recent` IPC, throwaway `DSGN_USER_DATA`) and asserts the errbar +
+  console error line render with NO `.diag`/busy banner anywhere.
+
 ## 2026-07-16 — Project skills first in the "/" menu, with descriptions (LKM-54)
 
 The composer's "/" menu listed the SDK's advertised command names flat, so the

@@ -72,7 +72,7 @@ const ELECTRON = [
   'preview-location',
   'feedback-dialog',
   'questions',
-  'diagnose-card',
+  'open-fail-console',
   'select-element',
   'comment-mode',
   'spawn-comment',

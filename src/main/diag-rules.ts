@@ -7,9 +7,10 @@ import type { DiagStep } from '../shared/api'
  * fallback for everything this doesn't match.
  *
  * Pure (no electron / no fs) so it's bun-unit-testable. A match returns just the
- * fix content; diagnose.ts attaches the cache signature + status and renders it
- * through the same propose-first DiagnoseCard as an AI diagnosis. Steps reuse the
+ * fix content; diagnose.ts attaches the cache signature + status. Steps reuse the
  * `DiagStep` shape — repo steps are applyable, host steps are copy-only.
+ * (The renderer no longer surfaces these as a card — launch failures show only
+ * in the activity console — but the `diagnose:*` IPC seam remains for reuse.)
  */
 export interface RuleMatch {
   summary: string

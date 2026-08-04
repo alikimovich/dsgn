@@ -61,7 +61,7 @@
     "test:update": "bun test/update.mjs",
     "test:diag-cache": "bun test/diag-cache.mjs",
     "test:diag-rules": "bun test/diag-rules.mjs",
-    "test:diagnose-card": "electron-vite build && node test/diagnose-card.mjs",
+    "test:open-fail": "electron-vite build && node test/open-fail-console.mjs",
     "test:agent": "electron-vite build && node test/agent-e2e.mjs",
     "test:codex": "electron-vite build && node test/codex-e2e.mjs",
     "test:tokens-scaffold": "electron-vite build && node test/tokens-scaffold.mjs",

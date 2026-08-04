@@ -2,7 +2,6 @@ import { create } from 'zustand'
 import type {
   Annotation,
   CommentMode,
-  Diagnosis,
   Framework,
   PermissionMode,
   PermissionRequest,
@@ -1345,21 +1344,6 @@ export const useLog = create<LogState>((set) => ({
   setOpen: (open) => set({ open })
 }))
 
-/** AI fix proposal for the current open/launch failure (propose-first). */
-interface DiagnosisState {
-  current: Diagnosis | null
-  busy: boolean
-  setCurrent: (current: Diagnosis | null) => void
-  setBusy: (busy: boolean) => void
-}
-
-export const useDiagnosis = create<DiagnosisState>((set) => ({
-  current: null,
-  busy: false,
-  setCurrent: (current) => set({ current }),
-  setBusy: (busy) => set({ busy })
-}))
-
 /** Build the chat prompt prefix that anchors the agent to a picked element. */
 export const describeSelectionForPrompt = (el: SelectedElement): string => {
   const id = el.id ? oneLine(el.id, 64) : ''
@@ -1429,7 +1413,6 @@ export const usePreviewLocation = create<PreviewLocationState>((set) => ({
 ;(window as unknown as { __dsgnTokens?: typeof useTokens }).__dsgnTokens = useTokens
 ;(window as unknown as { __dsgnSetup?: typeof useSetup }).__dsgnSetup = useSetup
 ;(window as unknown as { __dsgnLog?: typeof useLog }).__dsgnLog = useLog
-;(window as unknown as { __dsgnDiagnosis?: typeof useDiagnosis }).__dsgnDiagnosis = useDiagnosis
 ;(window as unknown as { __dsgnWorkspace?: typeof useWorkspace }).__dsgnWorkspace = useWorkspace
 ;(window as unknown as { __dsgnHistory?: typeof useHistory }).__dsgnHistory = useHistory
 ;(window as unknown as { __dsgnSpawns?: typeof useSpawns }).__dsgnSpawns = useSpawns
