@@ -857,7 +857,10 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     }
     const spawn = spawns.get(id)
     if (!spawn) return
-    await spawn.session.interrupt?.() // → emits done → finalizeSpawn commits any work
+    // → emits done → finalizeSpawn commits any work. Interrupting a turn that
+    // already finished/aborted makes the SDK throw "Operation aborted" — a stop
+    // that arrives late is a no-op, not an error.
+    await spawn.session.interrupt?.().catch(() => {})
   })
 
   // v8 F1 Phase 2 — close the loop from a finished comment spawn to a visible result.
@@ -1031,7 +1034,9 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     ;[...session.pending.keys()].forEach((id) => resolvePending(session, id, 'deny'))
     if (session.pendingQuestions)
       [...session.pendingQuestions.keys()].forEach((id) => resolveQuestion(session, id, null))
-    await session.interrupt?.()
+    // A stop that lands after the turn already finished/aborted makes the SDK
+    // throw "Operation aborted" — treat it as the no-op it is.
+    await session.interrupt?.().catch(() => {})
   })
 
   // Don't leave any backend subprocess running after praxis quits.
