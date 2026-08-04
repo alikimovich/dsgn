@@ -52,11 +52,16 @@ try {
   await sleep(150)
   const hidden = await win.evaluate(() => {
     const pane = document.querySelector('.pane--chat')
+    const preview = document.querySelector('.pane--preview')
+    const pad = preview ? getComputedStyle(preview) : null
     return {
       mounted: !!pane,
       hasClass: pane?.classList.contains('pane--chat-hidden') ?? false,
       width: pane ? Math.round(pane.getBoundingClientRect().width) : -1,
       divider: !!document.querySelector('.divider'),
+      sidebarToggle: !!document.querySelector('.sidebar-toggle'),
+      padLeft: pad?.paddingLeft ?? '',
+      padRight: pad?.paddingRight ?? '',
       stored: localStorage.getItem('praxis:chat-hidden')
     }
   })
@@ -64,6 +69,9 @@ try {
   if (!hidden.hasClass) throw new Error('chat pane missing .pane--chat-hidden class')
   if (hidden.width > 4) throw new Error(`hidden chat width ${hidden.width}px should be 0`)
   if (hidden.divider) throw new Error('resize divider still mounted while chat is hidden')
+  if (hidden.sidebarToggle) throw new Error('.sidebar-toggle still mounted while chat is hidden')
+  if (!hidden.padLeft || hidden.padLeft !== hidden.padRight)
+    throw new Error(`preview padding uneven while hidden: "${hidden.padLeft}" vs "${hidden.padRight}"`)
   if (hidden.stored !== '1') throw new Error(`praxis:chat-hidden should be "1", got ${hidden.stored}`)
   await win.screenshot({ path: join(artifacts, '15-chat-hidden.png') })
 
@@ -77,12 +85,14 @@ try {
       hasClass: pane?.classList.contains('pane--chat-hidden') ?? false,
       width: pane ? Math.round(pane.getBoundingClientRect().width) : -1,
       divider: !!document.querySelector('.divider'),
+      sidebarToggle: !!document.querySelector('.sidebar-toggle'),
       stored: localStorage.getItem('praxis:chat-hidden')
     }
   })
   if (shown.hasClass) throw new Error('chat still hidden after previewbar re-toggle')
   if (shown.width < 300) throw new Error(`re-shown chat width ${shown.width}px — expected ~440`)
   if (!shown.divider) throw new Error('resize divider missing after re-show')
+  if (!shown.sidebarToggle) throw new Error('.sidebar-toggle missing after re-show')
   if (shown.stored !== '0') throw new Error(`praxis:chat-hidden should be "0", got ${shown.stored}`)
   await win.screenshot({ path: join(artifacts, '16-chat-reshown.png') })
 

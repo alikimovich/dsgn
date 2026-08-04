@@ -1238,9 +1238,16 @@ body.is-fullscreen .sidebar-toggle {
     position: relative;
     flex: 1 1 auto;
     display: flex;
-    /* Equal breathing room on all open sides — the card floats top to bottom. */
+    /* Equal breathing room on all open sides — the card floats top to bottom.
+       Left is 0 because the chat pane + divider normally occupy that edge. */
     padding: 10px 10px 10px 0;
     background: var(--bg);
+}
+
+/* With the chat hidden nothing sits to the card's left — restore the left
+   padding so the full-window preview is inset equally on both sides. */
+.panes--chat-hidden .pane--preview {
+    padding-left: 10px;
 }
 /* Fills exactly the pane's own top padding (the previewcard/previewbar below
    it already drag on their own) — the last top-of-window gap between the
