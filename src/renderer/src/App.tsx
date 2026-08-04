@@ -51,7 +51,7 @@ import {
 import { projectKey } from '../../shared/projectKey'
 import { controlsPrompt } from './lib/controls-prompt'
 import { restoreWorkspace, type RestoreDeps } from './restore'
-import { Code2, MonitorSmartphone, PanelLeft } from 'lucide-react'
+import { Code2, MessageSquare, MonitorSmartphone, PanelLeft } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -193,6 +193,7 @@ export default function App(): React.JSX.Element {
   )
   const openCount = useWorkspace((s) => s.projects.length)
   const railCollapsed = useWorkspace((s) => s.collapsed)
+  const chatHidden = useWorkspace((s) => s.chatHidden)
   const branch = useSession((s) => s.branch)
   const [editingBranch, setEditingBranch] = useState(false)
   const [branches, setBranches] = useState<string[]>([])
@@ -486,6 +487,7 @@ export default function App(): React.JSX.Element {
         else if (action === 'publish') actionsRef.current.publish()
         else if (action === 'viewport:desktop') useViewport.getState().setViewport('desktop')
         else if (action === 'viewport:mobile') useViewport.getState().setViewport('mobile')
+        else if (action === 'toggle-chat') useWorkspace.getState().toggleChatHidden()
       }),
     []
   )
@@ -1817,7 +1819,14 @@ export default function App(): React.JSX.Element {
             onSwitchSession={(key, sessionKey) => void switchSession(key, sessionKey)}
             onCloseChat={(key, sessionKey) => void closeChatForProject(key, sessionKey)}
           />
-          <section className="pane pane--chat" style={{ width: chatWidth }}>
+          {/* Hidden = width 0, still MOUNTED: a running turn keeps streaming into
+              the live ChatPanel and nothing re-mounts on unhide. The native
+              preview follows the freed space via PreviewPane's ResizeObserver. */}
+          <section
+            className={`pane pane--chat ${chatHidden ? 'pane--chat-hidden' : ''}`}
+            style={{ width: chatHidden ? 0 : chatWidth }}
+            aria-hidden={chatHidden}
+          >
             {/* Window-drag strip across the chat's top edge — the one top-of-window
                 region that isn't already a drag surface (the rail head and the
                 previewbar are). Absolute + low z-index so it adds no layout and
@@ -1825,12 +1834,14 @@ export default function App(): React.JSX.Element {
             <div className="chat-drag" aria-hidden="true" />
             <ChatPanel />
           </section>
-          <div
-            className="divider"
-            onMouseDown={startResize}
-            role="separator"
-            aria-orientation="vertical"
-          />
+          {!chatHidden && (
+            <div
+              className="divider"
+              onMouseDown={startResize}
+              role="separator"
+              aria-orientation="vertical"
+            />
+          )}
           <section className="pane pane--preview">
             {/* Window-drag strip over the pane's own top padding — the only
                 top-of-window gap left once the rail and chat strips drag
@@ -1906,6 +1917,17 @@ export default function App(): React.JSX.Element {
                           pill now. Keyboard: S select, C comment, Y annotate. */}
                       {/* Code editor: a stamp-independent way into the drawer + file
                           tree, so vanilla/un-instrumented projects can still edit code. */}
+                      {/* Hide/show the chat pane — full-window preview (also
+                          Actions menu, ⌘\). Active = chat visible. */}
+                      <button
+                        className={`iconbtn ${chatHidden ? '' : 'is-active'}`}
+                        onClick={() => useWorkspace.getState().toggleChatHidden()}
+                        aria-pressed={!chatHidden}
+                        aria-label={chatHidden ? 'Show chat' : 'Hide chat'}
+                        title={chatHidden ? 'Show chat (⌘\\)' : 'Hide chat (⌘\\)'}
+                      >
+                        <MessageSquare className="size-4" aria-hidden="true" />
+                      </button>
                       <button
                         className={`iconbtn ${drawerSource ? 'is-active' : ''}`}
                         onClick={() => void toggleCodeDrawer()}

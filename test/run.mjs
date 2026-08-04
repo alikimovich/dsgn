@@ -79,6 +79,7 @@ const ELECTRON = [
   'viewport-per-project',
   'rail',
   'rail-collapse',
+  'chat-hide',
   'devserver-multi',
   'static-serve',
   'agent-multi',

@@ -1190,6 +1190,16 @@ body.is-fullscreen .sidebar-toggle {
     position: relative;
 }
 
+/* Hidden chat (⌘\ / previewbar toggle): width goes to 0 inline (App.tsx) while
+   the pane stays mounted — clip the content instead of letting it paint over
+   the preview, and drop the top fade (it would blur the preview's left edge). */
+.pane--chat-hidden {
+    overflow: hidden;
+}
+.pane--chat-hidden::before {
+    display: none;
+}
+
 /* Grab strip along the chat pane's top edge so the window is draggable there —
    with no native titlebar, this strip is the only top-of-window drag surface over
    the chat (the rail head and previewbar already drag). Absolute, so it reserves
