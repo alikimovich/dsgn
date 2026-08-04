@@ -18,6 +18,22 @@ import type {
   UpdateStatus
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { type ChatAgentSettings, DEFAULT_MODEL, DEFAULT_PROVIDER } from './chat-settings'
+
+// The per-chat agent choices + their AgentOptions mappings live in their own
+// (pure, unit-testable) module; re-exported here so importers keep one entry point.
+export {
+  type ChatAgentSettings,
+  DEFAULT_EFFORT,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  agentOptionsFor,
+  chatAgentSettingsFor,
+  chatAgentSettingsFromOptions,
+  defaultChatAgentSettings,
+  resumeChatSettings,
+  toAgentOptions
+} from './chat-settings'
 
 /**
  * One ordered chunk of an assistant turn — additive alongside the flat
@@ -364,31 +380,6 @@ export const messagesFromTranscript = (
   return messages
 }
 
-// Sentinel values mean "use the account/model default" (omit from SDK options).
-export const DEFAULT_MODEL = 'default'
-export const DEFAULT_EFFORT = 'auto'
-/** The default backend (the Claude Agent SDK). */
-export const DEFAULT_PROVIDER = 'claude'
-
-/** Agent choices belong to a chat. `useSession` mirrors the active chat so the
- * toolbar stays simple, while `ProjectEntry.chatSettings` retains every chat's
- * choice as the user moves through the rail. */
-export interface ChatAgentSettings {
-  model: string
-  effort: string
-  provider: string
-  /** Tool-permission posture for THIS chat. Persisted per-chat like model/provider
-   *  so switching chats restores it (main keeps mode per-session; see usePermissions). */
-  permissionMode: PermissionMode
-}
-
-export const defaultChatAgentSettings = (): ChatAgentSettings => ({
-  model: DEFAULT_MODEL,
-  effort: 'high',
-  provider: DEFAULT_PROVIDER,
-  permissionMode: 'auto'
-})
-
 interface SessionState {
   model: string
   effort: string
@@ -503,11 +494,6 @@ export interface ProjectEntry {
    * workspace data and safely use the defaults. */
   chatSettings?: Record<string, ChatAgentSettings>
 }
-
-export const chatAgentSettingsFor = (
-  entry: ProjectEntry,
-  sessionKey: string
-): ChatAgentSettings => ({ ...defaultChatAgentSettings(), ...entry.chatSettings?.[sessionKey] })
 
 export const chatAgentSettingsFromSession = (
   session: Pick<SessionState, 'model' | 'effort' | 'provider'>
@@ -1108,18 +1094,6 @@ export const isAuthError = (message: string): boolean =>
     message
   )
 
-/** Convert the UI sentinels into AgentOptions the SDK understands. */
-export const toAgentOptions = (s: { model: string; effort: string; provider?: string }): {
-  model?: string
-  effort?: string
-  provider?: string
-} => ({
-  model: s.model === DEFAULT_MODEL ? undefined : s.model,
-  effort: s.effort === DEFAULT_EFFORT ? undefined : s.effort,
-  // Default Claude is implied — only send a non-default backend.
-  ...(s.provider && s.provider !== DEFAULT_PROVIDER ? { provider: s.provider } : {})
-})
-
 /**
  * v2 element selection. `selectMode` mirrors the overlay armed in the preview;
  * `selected` is the most recently picked element. The composer reads `selected`
@@ -1157,8 +1131,11 @@ export const useSelection = create<SelectionState>((set) => ({
 
 /**
  * Tool-permission posture + the queue of pending approve/deny prompts. `mode`
- * is the SDK's PermissionMode: 'default' asks (cards), 'acceptEdits' auto-accepts
- * edits, 'bypassPermissions' is Auto (no prompts — approve-all via the SDK).
+ * is the SDK's PermissionMode: 'auto' is Auto (the SDK's classifier approves the
+ * routine calls; only what it flags reaches a card), 'default' asks for every
+ * gated tool, 'acceptEdits' auto-accepts edits. This mirrors the ACTIVE chat's
+ * mode — main holds one per session, so every path that creates or switches a
+ * chat has to move both together (see chat-settings.ts).
  */
 interface PermissionState {
   mode: PermissionMode

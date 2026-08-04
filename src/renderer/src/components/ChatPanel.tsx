@@ -1,12 +1,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  chatAgentSettingsFor,
+  agentOptionsFor,
+  type ChatAgentSettings,
+  chatAgentSettingsFromSession,
   DEFAULT_MODEL,
   describeSelectionForPrompt,
   selectionForBubble,
   isAuthError,
   oneLine,
-  toAgentOptions,
   useAnnotations,
   useChat,
   useComposer,
@@ -972,29 +973,42 @@ export default function ChatPanel(): React.JSX.Element {
     void window.api.agent.interrupt();
   };
 
+  // The toolbar IS this chat's settings: every picker change persists the whole
+  // set for the active sessionKey (so switching away and back restores it) and
+  // returns it, so whatever we then hand main matches what's on screen — mode
+  // included. Returns null when there's no open project to attribute it to.
+  const persistChatSettings = (
+    partial: Partial<ChatAgentSettings>,
+  ): { sessionKey: string; settings: ChatAgentSettings } | null => {
+    const entry = useWorkspace
+      .getState()
+      .projects.find((p) => p.root === projectRoot);
+    if (!entry) return null;
+    const sessionKey = entry.activeSessionKey ?? entry.key;
+    const settings = {
+      ...chatAgentSettingsFromSession(useSession.getState()),
+      ...partial,
+    };
+    useWorkspace.getState().patchEntry(entry.key, {
+      chatSettings: { ...entry.chatSettings, [sessionKey]: settings },
+    });
+    return { sessionKey, settings };
+  };
+
   const onModelChange = (value: string): void => {
     setModel(value);
-    const entry = useWorkspace.getState().projects.find((p) => p.root === projectRoot);
-    if (entry) {
-      const sessionKey = entry.activeSessionKey ?? entry.key;
-      useWorkspace.getState().patchEntry(entry.key, {
-        chatSettings: {
-          ...entry.chatSettings,
-          [sessionKey]: { ...chatAgentSettingsFor(entry, sessionKey), model: value },
-        },
-      });
-    }
+    const chat = persistChatSettings({ model: value });
     // Codex fixes the model when the thread starts — a live `setModel` is a
     // no-op there (see backends/codex.ts), so restart only THIS chat on the
     // new model. Reopening the whole project would replace its default chat,
     // even when the user is looking at an additional chat.
     if (provider === "codex") {
-      if (!projectRoot || !entry) return;
-      const sessionKey = entry.activeSessionKey ?? entry.key;
-      void window.api.agent.restartChat(projectRoot, sessionKey, {
-        ...toAgentOptions({ ...useSession.getState(), model: value }),
-        permissionMode: usePermissions.getState().mode,
-      });
+      if (!projectRoot || !chat) return;
+      void window.api.agent.restartChat(
+        projectRoot,
+        chat.sessionKey,
+        agentOptionsFor(chat.settings),
+      );
       useChat.getState().finish();
       return;
     }
@@ -1006,21 +1020,7 @@ export default function ChatPanel(): React.JSX.Element {
     setMode(mode);
     // Persist per-chat (mirrors onModelChange) so switching away and back restores
     // THIS chat's mode instead of the toolbar drifting from the session's real mode.
-    const entry = useWorkspace
-      .getState()
-      .projects.find((p) => p.root === projectRoot);
-    if (entry) {
-      const sessionKey = entry.activeSessionKey ?? entry.key;
-      useWorkspace.getState().patchEntry(entry.key, {
-        chatSettings: {
-          ...entry.chatSettings,
-          [sessionKey]: {
-            ...chatAgentSettingsFor(entry, sessionKey),
-            permissionMode: mode,
-          },
-        },
-      });
-    }
+    persistChatSettings({ permissionMode: mode });
     void window.api.agent.setPermissionMode(mode);
   };
 
@@ -1033,23 +1033,13 @@ export default function ChatPanel(): React.JSX.Element {
     // "gpt-5" to Claude), so reset to the backend default on switch — the picker
     // repopulates with the new backend's models (see modelsFor).
     setModel(DEFAULT_MODEL);
-    const entry = useWorkspace.getState().projects.find((p) => p.root === projectRoot);
-    if (!projectRoot || !entry) return;
-    const sessionKey = entry.activeSessionKey ?? entry.key;
-    useWorkspace.getState().patchEntry(entry.key, {
-      chatSettings: {
-        ...entry.chatSettings,
-        [sessionKey]: {
-          ...chatAgentSettingsFor(entry, sessionKey),
-          provider: value,
-          model: DEFAULT_MODEL,
-        },
-      },
-    });
-    void window.api.agent.restartChat(projectRoot, sessionKey, {
-      ...toAgentOptions({ ...useSession.getState(), provider: value }),
-      permissionMode: usePermissions.getState().mode,
-    });
+    const chat = persistChatSettings({ provider: value, model: DEFAULT_MODEL });
+    if (!projectRoot || !chat) return;
+    void window.api.agent.restartChat(
+      projectRoot,
+      chat.sessionKey,
+      agentOptionsFor(chat.settings),
+    );
     // The reopened session starts idle — clear any turn left "running" on the slice.
     useChat.getState().finish();
   };

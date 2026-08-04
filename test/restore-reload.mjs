@@ -100,8 +100,14 @@ try {
   )
 
   // ── B. Reattach to a live main session across a hard reload ──────────────────
-  // Register a live session in main + record a user turn on its live record.
-  await win.evaluate((f) => window.api.agent.openProject(f), fixture)
+  // Register a live session in main + record a user turn on its live record. The
+  // session runs 'acceptEdits' — the persisted entry below claims 'auto', so the
+  // restore has to take main's word for it (a picker that keeps showing the stale
+  // value would be telling the user the agent asks less than it really does).
+  await win.evaluate(
+    (f) => window.api.agent.openProject(f, { permissionMode: 'acceptEdits' }),
+    fixture
+  )
   await win.evaluate(() => window.api.agent.send('hello from before the reload'))
   // Persist a workspace entry for it (no launchSpec/url → the reattach path uses
   // the live session; applyProject won't try to relaunch a dev server).
@@ -109,7 +115,13 @@ try {
     const ws = window.__praxisWorkspace.getState()
     const k = ws.openOrActivate(f)
     const entry = window.__praxisWorkspace.getState().projects.find((p) => p.key === k)
-    localStorage.setItem('praxis:workspace', JSON.stringify({ projects: [entry], activeKey: k }))
+    const stale = {
+      ...entry,
+      chatSettings: {
+        [k]: { model: 'default', effort: 'high', provider: 'claude', permissionMode: 'auto' }
+      }
+    }
+    localStorage.setItem('praxis:workspace', JSON.stringify({ projects: [stale], activeKey: k }))
     return k
   }, fixture)
 
@@ -132,7 +144,9 @@ try {
     return {
       hasProject: ws.projects.some((p) => p.key === k),
       activeKey: ws.activeKey,
-      userMsg: slice?.messages.find((m) => m.role === 'user')?.text ?? null
+      userMsg: slice?.messages.find((m) => m.role === 'user')?.text ?? null,
+      mode: window.__praxisPermissions.getState().mode,
+      stored: ws.projects.find((p) => p.key === k)?.chatSettings?.[k]?.permissionMode ?? null
     }
   }, key)
   assert(reattach.hasProject, 'reattached: the live project is back in the rail')
@@ -140,6 +154,14 @@ try {
   assert(
     reattach.userMsg === 'hello from before the reload',
     `reattached chat transcript seeded from the live record, got "${reattach.userMsg}"`
+  )
+  assert(
+    reattach.stored === 'acceptEdits',
+    `reattached: the chat's stored mode comes from main's live session, got "${reattach.stored}"`
+  )
+  assert(
+    reattach.mode === 'acceptEdits',
+    `reattached: the composer's picker shows the session's real mode, got "${reattach.mode}"`
   )
   // The seeded transcript actually renders in the chat pane.
   const dom = await win.textContent('.pane--chat')
