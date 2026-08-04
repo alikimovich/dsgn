@@ -6,6 +6,7 @@ import { promisify } from 'util'
 import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
 import { buildPublishMessage } from '../shared/publish-message'
+import { ensureBranch } from './git'
 
 /**
  * Annotation sidecar + engineer handoff (v3). Reviewer notes are pinned to
@@ -199,10 +200,28 @@ async function shipToMain(
     /* origin/HEAD not set — assume main */
   }
   if (branch === base) {
-    return {
-      ok: false,
-      error: `You're on ${base} — publish runs from a Praxis work branch (praxis/*).`
+    // The open-time `git:ensure` should have moved the checkout onto a praxis/*
+    // work branch, but a project can still land here on its base branch (ensure
+    // failed at open, the user switched back via the titlebar, or a previous
+    // publish's recovery stranded them). Self-heal instead of refusing: move
+    // onto `praxis/<base>` now — `checkout -b` carries the uncommitted work
+    // along, and the rest of the flow keeps the base branch clean exactly as if
+    // open-time ensure had succeeded. `ensureBranch` still refuses non-root
+    // checkouts (a subdir of a larger repo), which stays a hard error.
+    const healed = await ensureBranch(root)
+    if (!healed.isRepo) {
+      return {
+        ok: false,
+        error: `You're on ${base}, and this folder isn't the repository root — open the repo's top-level folder to publish.`
+      }
     }
+    if (!healed.branch || healed.branch === base || healed.error) {
+      return {
+        ok: false,
+        error: `You're on ${base} and Praxis couldn't create a work branch${healed.error ? `: ${healed.error}` : '.'}`
+      }
+    }
+    branch = healed.branch
   }
   try {
     await git(root, ['remote', 'get-url', 'origin'])

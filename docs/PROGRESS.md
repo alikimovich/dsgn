@@ -2,6 +2,21 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-04 — Publish self-heals when the checkout is on the base branch
+
+User-reported: a brand-new repo opened in Praxis stayed on `main`, and Publish
+hard-refused with "You're on main — publish runs from a Praxis work branch."
+The open-time `git:ensure` (App.tsx) is supposed to move the checkout onto
+`praxis/<base>`, but a project can still be on base at publish time (ensure
+failed or was skipped at open, the titlebar switcher went back, a previous
+publish's recovery stranded them). Refusing was pointless: the fix the error
+demands is exactly what `ensureBranch` does, and `checkout -b` carries the
+uncommitted work along. `shipToMain` now self-heals — on-base → run
+`ensureBranch`, continue on the new work branch; the renderer already syncs
+the titlebar from `res.branch`. Non-root checkouts (a subdir of a larger
+repo, where `ensureBranch` refuses by design) stay a hard error, now with a
+message that says to open the repo's top-level folder.
+
 ## 2026-08-03 — Three field reports: agent fights the worktree machinery, stale Codex CLI, interrupt noise
 
 Three user-reported issues from a real my-story session, fixed together:
