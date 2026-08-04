@@ -2,6 +2,36 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-03 — Three field reports: agent fights the worktree machinery, stale Codex CLI, interrupt noise
+
+Three user-reported issues from a real my-story session, fixed together:
+
+**Rules v10 — "Git is Praxis-managed."** The chat agent spent a whole session
+fighting the per-chat isolation machinery: it manually committed in its
+`praxis/chat-*` worktree, pointed `praxis/main` at its own commits to force
+the preview to update, then watched `commitWorktree`'s turn-end squash rewrite
+the branch tip to a different hash every turn → permanent "divergence" it
+diagnosed as a merge conflict, culminating in a `git reset --hard` habit on
+the live checkout and a `sync-preview.sh` workaround script committed INTO the
+user's repo. Root cause: `rules.ts` never mentioned git — the agent had no way
+to know Praxis owns git state, that the squash rewrites hashes by design, or
+that mid-turn edits reaching the preview only at turn end is intentional. New
+unconditional rules section spells all of that out (no git mutations, no hard
+resets on the live checkout, no DIY sync pipelines; read-only git fine).
+`PRAXIS_RULES_VERSION` 9→10, assertions in `test/rules.mjs`.
+
+**Codex SDK 0.142.3 → 0.146.0.** A "Default"-model Codex turn failed with a
+400: `gpt-5.6-sol` (the account's new default) "requires a newer version of
+Codex", preceded by "model metadata not found" fallback warnings. The SDK
+bundles its own `codex` CLI shim, so the pinned old SDK = old CLI. Bump +
+`bun install`; typecheck passes unchanged (no API break).
+
+**`agent:interrupt` no longer throws after the turn is over.** Stopping a turn
+that had already finished/aborted made the Claude SDK's `interrupt()` throw
+"Operation aborted" out of the IPC handler (logged twice per click in the
+main-process console). A late stop is a no-op, not an error — both interrupt
+handlers (`agent:interrupt`, `agent:spawn-interrupt`) now swallow it.
+
 ## 2026-08-01 — The panel reads back the project's units (24px → 1.5rem)
 
 Reported from lkmv.ch: the paragraph's `margin-bottom` showed `24px` while
