@@ -33,6 +33,7 @@
     "test:preview": "electron-vite build && node test/open-preview.mjs",
     "test:mobileframe": "electron-vite build && node test/mobile-frame.mjs",
     "test:viewport": "electron-vite build && node test/viewport-per-project.mjs",
+    "test:chat-hide": "electron-vite build && node test/chat-hide.mjs",
     "test:chat": "electron-vite build && node test/chat-render.mjs",
     "test:revert-action": "electron-vite build && node test/revert-action.mjs",
     "test:select": "electron-vite build && node test/select-element.mjs",

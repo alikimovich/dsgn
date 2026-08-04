@@ -523,6 +523,8 @@ interface WorkspaceState {
   activeKey: string | null
   /** Collapse the left projects rail to a thin strip (persisted across launches). */
   collapsed: boolean
+  /** Hide the chat pane so the preview fills the window (persisted across launches). */
+  chatHidden: boolean
   /** Open a project (or re-activate it if already open). Returns its key. */
   openOrActivate: (root: string, meta?: { name?: string }) => string
   activate: (key: string) => void
@@ -530,6 +532,7 @@ interface WorkspaceState {
   patchEntry: (key: string, partial: Partial<ProjectEntry>) => void
   close: (key: string) => void
   toggleCollapsed: () => void
+  toggleChatHidden: () => void
   /** Toggle whether an (active) project's chat list is hidden — see `chatsCollapsed`. */
   toggleChatsCollapsed: (key: string) => void
   reset: () => void
@@ -829,13 +832,15 @@ try {
 
 // Remember the rail collapse preference across launches (renderer-only UI state).
 const RAIL_KEY = 'praxis:rail-collapsed'
-const readCollapsed = (): boolean => {
+const CHAT_KEY = 'praxis:chat-hidden'
+const readFlag = (key: string): boolean => {
   try {
-    return localStorage.getItem(RAIL_KEY) === '1'
+    return localStorage.getItem(key) === '1'
   } catch {
     return false
   }
 }
+const readCollapsed = (): boolean => readFlag(RAIL_KEY)
 
 const basename = (p: string): string => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p
 // Monotonic recency counter for LRU warm-server eviction (process-lifetime; fine
@@ -857,6 +862,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         /* private mode / no storage — keep it in memory only */
       }
       return { collapsed }
+    }),
+  chatHidden: readFlag(CHAT_KEY),
+  toggleChatHidden: () =>
+    set((s) => {
+      const chatHidden = !s.chatHidden
+      try {
+        localStorage.setItem(CHAT_KEY, chatHidden ? '1' : '0')
+      } catch {
+        /* private mode / no storage — keep it in memory only */
+      }
+      return { chatHidden }
     }),
   openOrActivate: (root, meta) => {
     const key = projectKey(root)

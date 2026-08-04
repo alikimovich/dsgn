@@ -365,6 +365,11 @@ function buildAppMenu(): void {
           click: () => send('logs')
         },
         {
+          label: 'Toggle Chat Panel',
+          accelerator: 'CmdOrCtrl+\\',
+          click: () => send('toggle-chat')
+        },
+        {
           label: 'Publish',
           accelerator: 'CmdOrCtrl+Shift+P',
           click: () => send('publish')

@@ -2,6 +2,26 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-04 — Hide the chat pane (full-window preview)
+
+User request: a way to hide the chat so the preview fills the window. Mirrors
+the rail-collapse pattern: `useWorkspace.chatHidden` (persisted,
+`praxis:chat-hidden`), toggled from a previewbar icon button (MessageSquare,
+active = visible) and an Actions-menu item with the ⌘\ accelerator — menu, not
+a renderer keydown, per the native-accelerator gotcha. The pane collapses to
+width 0 but stays MOUNTED (`.pane--chat-hidden`: overflow clip + top-fade off)
+so a running turn keeps streaming into the live ChatPanel; the resize divider
+unmounts while hidden; the native preview follows the freed space via
+PreviewPane's ResizeObserver, no extra geometry work. New electron-tier test
+`chat-hide` (menu-action hide → previewbar re-show → localStorage round-trip,
+screenshots 14–16).
+
+Hazard rediscovered while verifying: the `test:<name>` package.json aliases
+run tests DIRECTLY (no `PRAXIS_USER_DATA` isolation — only `test/run.mjs`
+provides it), so a direct run persists the fixture project into the real
+userData workspace and later direct runs fail `.empty__open` on boot-restore.
+Run one-offs as `PRAXIS_USER_DATA=$(mktemp -d) node test/<name>.mjs`.
+
 ## 2026-08-04 — Publish self-heals when the checkout is on the base branch
 
 User-reported: a brand-new repo opened in Praxis stayed on `main`, and Publish
