@@ -81,6 +81,7 @@ type Attachment =
 // backend also resets the model to Default (see onProviderChange).
 const CLAUDE_MODELS = [
   { value: DEFAULT_MODEL, label: "Default" },
+  { value: "fable", label: "Fable" },
   { value: "opus", label: "Opus" },
   { value: "sonnet", label: "Sonnet" },
   { value: "haiku", label: "Haiku" },
