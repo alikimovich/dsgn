@@ -266,7 +266,7 @@ export interface ImageAttachment {
 }
 
 export interface AgentOptions {
-  /** Model alias ('opus' | 'sonnet' | 'haiku') or undefined for the account default. */
+  /** Model alias ('fable' | 'opus' | 'sonnet' | 'haiku') or undefined for the account default. */
   model?: string
   /** Reasoning effort ('low' | 'medium' | 'high') or undefined for the model default. */
   effort?: string
@@ -341,6 +341,11 @@ export interface LiveChatSnapshot {
   /** Per-chat worktree isolation status (v9), for the renderer to rehydrate the chat's
    *  isolation chip after a reload. Absent for a non-isolated chat (treated as 'live'). */
   isolation?: { state: 'live' | 'isolated' | 'parked'; branch?: string }
+  /** The options this session is ACTUALLY running with (main's live copy — the
+   *  authority). The renderer reconciles its per-chat pickers against these on
+   *  reattach so a reload can't leave the toolbar showing a posture the session
+   *  never had. */
+  options: AgentOptions
 }
 
 /** One live project (an open workspace-rail entry) and its live chat(s). */
@@ -1260,11 +1265,16 @@ export interface PraxisApi {
      * Resume a past ("previous agent") session by its history record id — requires
      * the record to carry a Claude `sdkSessionId` (else `ok:false`). Starts a live
      * session with the SDK's `resume` option, registers it under a new sessionKey,
-     * and makes it the project's active session.
+     * and makes it the project's active session. `options` is the posture the
+     * resumed chat should run with (model/effort/permission mode) — omit it and the
+     * session falls back to main's defaults, which is how a resumed chat used to
+     * end up asking for every edit while the toolbar still read "Auto". The backend
+     * is always Claude here, whatever `options.provider` says.
      */
     resumeSession: (
       root: string,
-      recordId: string
+      recordId: string,
+      options?: AgentOptions
     ) => Promise<{ ok: boolean; sessionKey?: string; error?: string }>
     /**
      * Close ONE of a project's live chats (v9 multi-chat) — tears down just that

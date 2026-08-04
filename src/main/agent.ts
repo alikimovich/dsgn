@@ -637,7 +637,8 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     async (
       _e,
       root: string,
-      recordId: string
+      recordId: string,
+      options: AgentOptions = {}
     ): Promise<{ ok: boolean; sessionKey?: string; error?: string }> => {
       const key = projectKey(root)
       const rec = store().get(recordId)
@@ -657,7 +658,13 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
         // Resumed chats get a FRESH worktree (their past edits already live in the
         // repo); isolatedCwd falls back to the live root for non-repo projects.
         const cwd = await isolatedCwd(root, sessionKey)
-        const s = await pickProvider({}).startSession(cwd, {}, getWindow, {
+        // Resume is Claude-only (`sdkSessionId` is both the resume id and the
+        // "this was Claude" marker), so pin the backend — but keep the caller's
+        // model/effort/permission posture. Starting with `{}` here silently ran the
+        // resumed chat under main's defaults ('default' = ask for every edit) while
+        // the renderer's toolbar still showed the chat's own mode.
+        const opts: AgentOptions = { ...options, provider: 'claude' }
+        const s = await pickProvider(opts).startSession(cwd, opts, getWindow, {
           emitKey: sessionKey,
           liveRoot: root,
           resumeSessionId: rec.sdkSessionId,
@@ -1019,7 +1026,11 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
         sessionKey,
         record: s.record,
         isRunning: runningKeys.has(sessionKey),
-        isolation: isolationSnapshot(sessionKey)
+        isolation: isolationSnapshot(sessionKey),
+        // The posture this chat is really running under (updated in place by
+        // set-model / set-permission-mode) — the renderer repoints its pickers at
+        // it on reattach rather than trusting its own persisted copy.
+        options: { ...s.options }
       })
     }
     const activeRoot = (activeKey && sessions.get(activeKey)?.record.projectRoot) || null

@@ -16,6 +16,44 @@ uncommitted work along. `shipToMain` now self-heals — on-base → run
 the titlebar from `res.branch`. Non-root checkouts (a subdir of a larger
 repo, where `ensureBranch` refuses by design) stay a hard error, now with a
 message that says to open the repo's top-level folder.
+## 2026-08-03 — The composer's mode picker told the truth only by luck
+
+Field report: an "Allow Edit?" card while the composer read **Auto**. It wasn't
+the classifier flagging a risky edit — the session genuinely wasn't in Auto.
+The posture lives in two places (the renderer's `usePermissions` + main's
+per-session `options.permissionMode`), and several paths moved only one:
+
+- `agent:resume-session` started with a hardcoded `{}` — no mode, no model. So
+  the resumed chat ran `'default'` (ask for every gated tool) while the toolbar
+  showed the UI default, Auto. Boot restore resumes the newest chat on *every*
+  relaunch (`restore.ts` → `resumeMostRecent`), so this was the common path,
+  not an edge case.
+- `attempt` (fresh open) and the LRU-reopen in `applyProject` sent the mode but
+  never recorded it on the project entry, so the next switch back re-seeded the
+  toolbar from `defaultChatAgentSettings()` (Auto) regardless of what main got.
+- Reattach after a renderer reload trusted the renderer's persisted copy even
+  though main — the process that survived — held the real one.
+
+Fixes: `resume-session` now takes `AgentOptions` (backend pinned to Claude, since
+`sdkSessionId` is the resume marker); `LiveChatSnapshot` carries each session's
+live `options` and `restore.ts` rebuilds `chatSettings` from them (main wins);
+and every session-creating call site goes through one new `agentOptionsFor()`
+that can't omit the mode. The per-chat settings + their mappings moved out of
+`store.ts` into a pure `renderer/src/chat-settings.ts` (unit-tested in
+`test/chat-settings.mjs`; `restore-reload.mjs` now asserts a reload repoints the
+picker at main's real mode). The inverse mapping deliberately reads an absent
+`permissionMode` as `'default'` — main's fallback, not the UI's — so a session
+started without one is never *reported* as Auto.
+
+## 2026-08-03 — Fable in the model picker
+
+The Claude model picker still listed only Opus / Sonnet / Haiku, so there was
+no way to run a chat on Fable short of leaving it on "Default" and hoping the
+account default was right. Added `{ value: 'fable', label: 'Fable' }` at the
+top of `CLAUDE_MODELS` in `ChatPanel.tsx` (above Opus). The value is passed
+through untouched to the SDK's `model` option, and `claude --help` documents
+`fable` as a first-class latest-model alias alongside `opus`/`sonnet`, so no
+main-side change was needed.
 
 ## 2026-08-03 — Three field reports: agent fights the worktree machinery, stale Codex CLI, interrupt noise
 

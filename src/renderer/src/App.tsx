@@ -11,9 +11,12 @@ import SessionReview from './components/SessionReview'
 import FeedbackDialog from './components/FeedbackDialog'
 import ConnectDialog from './components/ConnectDialog'
 import {
+  agentOptionsFor,
+  chatAgentSettingsFromSession,
   describeSelectionForPrompt,
   chatAgentSettingsFor,
   isAuthError,
+  resumeChatSettings,
   messagesFromTranscript,
   oneLine,
   toAgentOptions,
@@ -942,10 +945,10 @@ export default function App(): React.JSX.Element {
       }
       await window.api.preview.load(url)
       log.append('Preview loaded')
-      await window.api.agent.openProject(root, {
-        ...toAgentOptions(useSession.getState()),
-        permissionMode: usePermissions.getState().mode
-      })
+      // The choices on screen when the project was opened become this chat's own
+      // (persisted below, so a later switch back restores what main actually runs).
+      const chatSettings = chatAgentSettingsFromSession(useSession.getState())
+      await window.api.agent.openProject(root, agentOptionsFor(chatSettings))
       log.append(`Agent session started (cwd ${root})`)
       useSession.getState().setProjectRoot(root)
       // v5: track the open project in the workspace + show its (per-project) chat,
@@ -994,7 +997,16 @@ export default function App(): React.JSX.Element {
         url,
         previewKind: kind,
         branch: useSession.getState().branch,
-        launchSpec: launchSpec.current
+        launchSpec: launchSpec.current,
+        // Record the posture this session was started with, keyed by its sessionKey
+        // (the project key — openProject creates the default chat). Without it a
+        // switch away and back re-seeded the toolbar from the DEFAULTS, which is how
+        // the picker could read "Auto" for a session main was asking on.
+        chatSettings: {
+          ...useWorkspace.getState().projects.find((p) => p.key === projectKey(root))
+            ?.chatSettings,
+          [projectKey(root)]: chatSettings
+        }
       })
       // Bound warm dev servers (LRU-suspend beyond the cap).
       void evictWarm()
@@ -1165,9 +1177,8 @@ export default function App(): React.JSX.Element {
     // v9 multi-chat: restore whichever of THIS project's own sessionKeys (default,
     // or an additional/resumed chat) was last active, not always the plain default.
     useChat.getState().setActiveChat(target.activeSessionKey ?? target.key)
-    useSession
-      .getState()
-      .setChatAgentSettings(chatAgentSettingsFor(target, target.activeSessionKey ?? target.key))
+    const chatSettings = chatAgentSettingsFor(target, target.activeSessionKey ?? target.key)
+    useSession.getState().setChatAgentSettings(chatSettings)
     useSession.getState().setProjectRoot(target.root)
     useSession.getState().setBranch(target.branch)
     // Each project keeps its own viewport — restore it (after activate, so the
@@ -1194,9 +1205,13 @@ export default function App(): React.JSX.Element {
       void window.api.agent.setActive(target.root, target.activeSessionKey ?? target.key)
     } else {
       try {
-        await window.api.agent.openProject(target.root, {
-          ...toAgentOptions(useSession.getState()),
-          permissionMode: usePermissions.getState().mode
+        // Reopen under THIS chat's own settings (just restored into the toolbar
+        // above), not whatever the outgoing project happened to be running.
+        await window.api.agent.openProject(target.root, agentOptionsFor(chatSettings))
+        // The reopened session is the project's default chat — record its posture
+        // under that key so the toolbar and main stay in step.
+        useWorkspace.getState().patchEntry(target.key, {
+          chatSettings: { ...target.chatSettings, [target.key]: chatSettings }
         })
         useLog
           .getState()
@@ -1282,10 +1297,7 @@ export default function App(): React.JSX.Element {
     // A new chat starts with the choices visible on the chat it was created
     // from. Later picker changes stay isolated to the new sessionKey.
     const chatSettings = chatAgentSettingsFor(entry, entry.activeSessionKey ?? entry.key)
-    const res = await window.api.agent.newChat(entry.root, {
-      ...toAgentOptions(chatSettings),
-      permissionMode: usePermissions.getState().mode
-    })
+    const res = await window.api.agent.newChat(entry.root, agentOptionsFor(chatSettings))
     if (!res.ok || !res.sessionKey) {
       useLog.getState().append(res.error ?? 'Could not start another chat.', 'error')
       return
@@ -1323,7 +1335,16 @@ export default function App(): React.JSX.Element {
   // history list only shows the active project's past sessions).
   const resumeRecord = async (record: SessionRecord): Promise<void> => {
     const key = projectKey(record.projectRoot)
-    const res = await window.api.agent.resumeSession(record.projectRoot, record.id)
+    // A resumed chat runs with the choices on screen (forced back to Claude — see
+    // resumeChatSettings). Hand them to main so the session's real posture is the
+    // one the toolbar shows: resuming used to start on main's defaults, so every
+    // boot-restored chat asked for each edit while its picker read "Auto".
+    const settings = resumeChatSettings(chatAgentSettingsFromSession(useSession.getState()))
+    const res = await window.api.agent.resumeSession(
+      record.projectRoot,
+      record.id,
+      agentOptionsFor(settings)
+    )
     if (!res.ok || !res.sessionKey) {
       useLog.getState().append(res.error ?? 'Could not resume that session.', 'error')
       return
@@ -1333,7 +1354,8 @@ export default function App(): React.JSX.Element {
     const existing = entry?.sessionKeys ?? [key]
     useWorkspace.getState().patchEntry(key, {
       sessionKeys: existing.includes(sessionKey) ? existing : [...existing, sessionKey],
-      activeSessionKey: sessionKey
+      activeSessionKey: sessionKey,
+      chatSettings: { ...entry?.chatSettings, [sessionKey]: settings }
     })
     // Seed the (fresh) chat slice with the record's past turns so the resumed
     // thread shows its history instead of an empty tree — the agent already has
@@ -1342,6 +1364,9 @@ export default function App(): React.JSX.Element {
     useChat.getState().hydrate(sessionKey, messagesFromTranscript(record.transcript))
     if (useSession.getState().projectRoot === record.projectRoot) {
       useChat.getState().setActiveChat(sessionKey)
+      // Repoint the toolbar at what the resumed session actually got (the backend
+      // is pinned to Claude even if the picker was on another one).
+      useSession.getState().setChatAgentSettings(settings)
     }
     setReviewing(null)
   }
