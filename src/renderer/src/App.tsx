@@ -1783,7 +1783,7 @@ export default function App(): React.JSX.Element {
           </div>
         </div>
       ) : (
-        <div className="panes">
+        <div className={`panes ${chatHidden ? 'panes--chat-hidden' : ''}`}>
           <Rail
             onSwitch={(key) => void switchTo(key)}
             onClose={(key) => void closeProjectFromRail(key)}
@@ -2045,15 +2045,19 @@ export default function App(): React.JSX.Element {
               .panes so its no-drag region is applied after the chat pane's drag
               strip (.chat-drag); otherwise, with the rail collapsed, that strip
               would win the overlap and swallow clicks on this button. */}
-          <button
-            className="sidebar-toggle"
-            onClick={() => useWorkspace.getState().toggleCollapsed()}
-            aria-label={railCollapsed ? 'Show projects sidebar' : 'Hide projects sidebar'}
-            aria-pressed={!railCollapsed}
-            title={railCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          >
-            <PanelLeft className="size-3.5" aria-hidden="true" />
-          </button>
+          {/* Gone entirely while the chat is hidden — full-preview mode should be
+              chrome-free; unhiding the chat (⌘\ / previewbar) brings it back. */}
+          {!chatHidden && (
+            <button
+              className="sidebar-toggle"
+              onClick={() => useWorkspace.getState().toggleCollapsed()}
+              aria-label={railCollapsed ? 'Show projects sidebar' : 'Hide projects sidebar'}
+              aria-pressed={!railCollapsed}
+              title={railCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+            >
+              <PanelLeft className="size-3.5" aria-hidden="true" />
+            </button>
+          )}
         </div>
       )}
 
