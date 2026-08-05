@@ -12,6 +12,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import type { SourceView } from '../../../shared/api'
 import { useCodeDrawer, usePanelInset } from '../store'
+import { zedSearch } from './editor-search'
 import FileTreePanel from './FileTreePanel'
 
 /** Default (collapsed) height of the drawer + the native-preview strip it reserves. */
@@ -358,6 +359,9 @@ export default function CodeDrawer({
       const state = EditorState.create({
         doc: view.code,
         extensions: [
+          // Zed-style search panel — must come with basicSetup, which brings the
+          // searchKeymap (⌘F) but leaves the panel to the facet default.
+          zedSearch(),
           basicSetup,
           ...langFor(view.file),
           stampField,
