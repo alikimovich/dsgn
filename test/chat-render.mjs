@@ -73,6 +73,52 @@ try {
   await win.evaluate(() => window.__praxisStore.getState().finish())
   await win.screenshot({ path: join(artifacts, '04-chat-render.png') })
 
+  // LKM-64: a pasted link is one unbreakable token, so a user bubble sized to
+  // its content used to grow past the pane and hang off its left edge. The URL
+  // renders elided (full URL on the tooltip) and the bubble must fit.
+  const LINK =
+    'https://embed.figma.com/design/8cJr4hN6UDrSJVQ6YcX9Qf/portfolio?node-id=127-2510&embed-host=share'
+  await win.evaluate(
+    (link) =>
+      window.__praxisStore
+        .getState()
+        .appendUser(`here, how it started goes right after swiftly: ${link}`),
+    LINK
+  )
+  await win.waitForSelector('.msg__link', { timeout: 5000 })
+  const linkCheck = await win.evaluate((link) => {
+    const bubbles = [...document.querySelectorAll('.msg--user .msg__text')]
+    const bubble = bubbles[bubbles.length - 1]
+    const pane = bubble.closest('.pane--chat') ?? document.body
+    const el = bubble.querySelector('.msg__link')
+    return {
+      label: el?.textContent ?? '',
+      title: el?.getAttribute('title') ?? '',
+      isAnchor: el?.tagName === 'A',
+      // Fits the pane both ways: no horizontal spill inside the bubble, and no
+      // part of the bubble outside the pane's box.
+      overflows: bubble.scrollWidth > bubble.clientWidth + 1,
+      outside:
+        bubble.getBoundingClientRect().left <
+          pane.getBoundingClientRect().left - 1 ||
+        bubble.getBoundingClientRect().right >
+          pane.getBoundingClientRect().right + 1
+    }
+  }, LINK)
+  if (linkCheck.label !== 'embed.figma.com/…/portfolio') {
+    throw new Error(`long url should render elided: ${JSON.stringify(linkCheck.label)}`)
+  }
+  if (linkCheck.title !== LINK) {
+    throw new Error(`elided url should keep the full url on its tooltip: ${linkCheck.title}`)
+  }
+  if (linkCheck.isAnchor) {
+    throw new Error('a user ask is not a link surface — the elided url must not be an <a>')
+  }
+  if (linkCheck.overflows || linkCheck.outside) {
+    throw new Error(`user bubble with a long url must fit the pane: ${JSON.stringify(linkCheck)}`)
+  }
+  await win.screenshot({ path: join(artifacts, '04b-chat-long-link.png') })
+
   // v6: the agent's tool steps collapse into a disclosure (latest step + count);
   // expanding reveals the full list. (It starts collapsed once the turn finished —
   // so clicking is what reveals the step lines; if it were open, the click would
