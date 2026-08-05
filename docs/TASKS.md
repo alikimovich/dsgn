@@ -154,6 +154,18 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       active session; `src/renderer/src/components/ConflictCard.tsx`;
       `stageResolve` + `resolveParkedChat`/`discardParkedChat`; extended
       `test/chat-worktrees.mjs`.
+- [x] **One commit per turn on the LIVE checkout.** ✅ 2026-08-05 (user-requested
+      — "so that I can easily revert or follow the progress") — the merge back
+      onto the live tree is now also committed there, one commit per turn, with
+      the prompt as the subject. Only the turn's own files are staged and it's a
+      partial (pathspec) commit, so the user's unrelated dirty/staged work is
+      untouched; non-repo-root projects are skipped. `src/main/live-commit.ts`,
+      wired from `chat-isolation.ts` + `agent.ts`'s spawn finalizer;
+      `publishToPr`'s file list now diffs vs the default branch instead of HEAD
+      (extracted to `src/main/publish-scope.ts`).
+      `test/live-commit.mjs`. See PROGRESS 2026-08-05.
+      Not done deliberately: no user-facing toggle (the whole point is that it's
+      always on) and no UI surfacing of the commit sha — `git log` is the UI.
 
 ## v10 — Styles tab + AI-surfaced control panels (2026-07-18, user-requested) — SHIPPED
 

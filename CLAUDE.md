@@ -117,6 +117,12 @@ src/
     git.ts, worktrees.ts, chat-worktrees.ts, chat-isolation.ts
                     git/worktree primitives; worktrees: per-chat isolation + sync/merge/recovery;
                     chat-worktrees: turn-scoped ops (sync, commit, apply); chat-isolation: lifecycle
+    live-commit.ts  one commit per turn on the LIVE checkout (pure): stages only the
+                    files that turn changed, partial-commits so the user's own staged
+                    work is untouched, skips non-repo-root projects, never throws
+    publish-scope.ts  what a session changed / is there anything to publish (pure) —
+                    measured against the default branch, since committed turns leave
+                    nothing to see in a HEAD-relative diff. Used by annotations.ts
     setup.ts, scaffold.ts, xcode.ts
     diagnose.ts, diag-cache.ts, diag-rules.ts         sessions-store.ts, edit-history.ts
     update.ts       self-update detection (pure: fetch + rev-list behind-count)
@@ -272,3 +278,10 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   Drift from concurrent live edits syncs at turn start; conflicts park on the
   branch for review. One worktree per open chat costs disk (~node_modules are
   symlinked); worktree directories live under `<userData>/praxis/worktrees`.
+- **The merge onto the live tree is also COMMITTED there — one commit per turn**
+  (`live-commit.ts`, called from `chat-isolation.ts` + the comment-spawn
+  finalizer). Only the files that turn changed are staged, and it's a pathspec
+  (partial) commit, so a user's unrelated dirty/staged work is never swept in.
+  Consequence for anything that asks "what did this session change?": a diff vs
+  `HEAD` now returns nothing — compare against the merge base with the default
+  branch instead (`src/main/publish-scope.ts` does, for the publish paths).

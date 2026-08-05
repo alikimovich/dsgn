@@ -7,6 +7,7 @@ import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
 import { buildPublishMessage } from '../shared/publish-message'
 import { ensureBranch } from './git'
+import { aheadOfBase, changedSince, defaultBase } from './publish-scope'
 
 /**
  * Annotation sidecar + engineer handoff (v3). Reviewer notes are pinned to
@@ -82,15 +83,6 @@ async function git(root: string, args: string[]): Promise<string> {
   return stdout.trim()
 }
 
-/** Tracked files changed vs HEAD — clean paths (no porcelain quoting/rename arrows). */
-async function changedSince(root: string): Promise<string[]> {
-  const out = await git(root, ['-c', 'core.quotePath=false', 'diff', '--name-only', 'HEAD'])
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-}
-
 async function publishToPr(root: string, opts: { title: string }): Promise<PublishResult> {
   const title = opts.title || 'praxis: design handoff'
   // --- Pre-flight: fail before any mutation. ---
@@ -130,13 +122,19 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
     await git(root, ['add', '-u'])
     await git(root, ['add', '--', '.praxis'])
     const staged = await git(root, ['diff', '--cached', '--name-only'])
-    if (!staged) {
+    // Per-turn live commits mean the work is usually already IN the branch's history,
+    // so "nothing staged" no longer means "nothing to publish" — only nothing staged
+    // AND nothing ahead of the base does. When nothing is staged the handoff branch
+    // simply points at the same commits, which is a perfectly publishable PR.
+    if (!staged && (await aheadOfBase(root, await defaultBase(root))) === 0) {
       await git(root, ['checkout', original])
       await git(root, ['branch', '-D', branch])
       return { ok: false, error: 'Nothing to publish — no changes or notes yet.' }
     }
-    await git(root, ['commit', '-m', title])
-    committed = true
+    if (staged) {
+      await git(root, ['commit', '-m', title])
+      committed = true
+    }
     await git(root, ['push', '-u', 'origin', branch])
 
     const body = buildPrBody(annotations, changedFiles)
@@ -189,16 +187,7 @@ async function shipToMain(
   }
   if (branch === 'HEAD') return { ok: false, error: 'Detached HEAD — check out a branch first.' }
   // Default branch (main/master), from origin/HEAD; fall back to main.
-  let base = 'main'
-  try {
-    base =
-      (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(
-        /^origin\//,
-        ''
-      ) || 'main'
-  } catch {
-    /* origin/HEAD not set — assume main */
-  }
+  const base = await defaultBase(root)
   if (branch === base) {
     // The open-time `git:ensure` should have moved the checkout onto a praxis/*
     // work branch, but a project can still land here on its base branch (ensure

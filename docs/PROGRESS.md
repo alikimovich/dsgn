@@ -2,6 +2,63 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-05 — Every turn is a commit on the user's own checkout
+
+User request: "if things were changed, commits should be made on every turn, so
+that I can easily revert or follow the progress." Until now only the chat's
+`praxis/chat-*` worktree branch got commits — the merge back onto the LIVE
+checkout was a plain file write (`autoApplyWorktree`), so the user's repo
+accumulated one giant uncommitted diff until Publish. `git log` showed nothing;
+reverting a single turn meant hand-picking hunks.
+
+New `src/main/live-commit.ts` (pure, unit-tested): `commitLiveTurn(root, files,
+{title, body})` lands the turn's files as ONE commit on whatever branch the live
+checkout is on. Called from `chat-isolation.ts` on every merged turn
+(`afterTurn`), on the parked-chat Apply and the AI conflict-resolve, on
+`releaseChat`'s final salvage merge, and from `agent.ts`'s comment-spawn
+finalizer. Commit subject = the turn's prompt (first line, whitespace-collapsed,
+capped at 72); body = `Praxis turn N (praxis/chat-<id>).`
+
+**Deliberately narrow, because this writes into the user's repo.** Only the
+files that turn touched are staged — never `add -A`, so concurrent hand edits
+elsewhere stay uncommitted and a `git revert` of a turn can't take them along.
+It's a PATHSPEC (partial) commit, so anything the user had staged for their own
+commit stays staged and out of ours (asserted in the test). `.praxis/` is
+filtered like `commitWorktree` does. Non-repo-ROOT projects are skipped — for a
+subdirectory project a commit would sweep the enclosing repo, the exact surprise
+`isRepoRoot` exists to prevent. Identity is forced (`Praxis <praxis@local>`) and
+`--no-verify` set, same reasoning as `commitWorktree`: a target repo's husky
+hook must not be able to abort a turn. Any git failure returns
+`committed: false` and never throws — the change is already in the working tree,
+so a failed commit is exactly the old behavior, not lost work.
+
+**Knock-on fixed in the same pass:** `publishToPr`'s `changedSince` diffed vs
+`HEAD`, which now reports NOTHING for a session whose turns all committed — the
+notes handoff would have said "Nothing to publish" and shipped an empty file
+list in the PR body. It now diffs vs the merge base with the default branch
+(two-dot, so uncommitted edits still count) and falls back to HEAD; the
+"nothing staged" abort inside is now "nothing staged AND nothing ahead of base",
+and the handoff commit is skipped when there's nothing to stage. `shipToMain`
+needed no change (it already counted `base..branch`) and now shares the same
+`defaultBase`. Those three git questions moved to a new pure
+`src/main/publish-scope.ts` purely so they're testable: `annotations.ts` imports
+`electron`, and a bun test can't load it (`SyntaxError: Export named 'ipcMain'
+not found`) — the same reason `chat-worktrees.ts` was split from
+`chat-isolation.ts`.
+
+`test/live-commit.mjs` (unit tier) covers the helper against real temp repos —
+plus a section that drives `chat-isolation.ts` itself with its window/store seam
+injected (no Electron), running two real turns through a worktree and asserting
+two live commits and a CLEAN live checkout between them. Fixture gotcha it cost
+an hour: `createWorktree` symlinks `node_modules`/`.env` unconditionally, so a
+temp repo WITHOUT a `.gitignore` gets those symlinks committed onto the branch —
+`autoApplyWorktree` then can't read them, refuses the whole batch, and every
+turn parks. Temp-repo fixtures must gitignore both (as `chat-worktrees.mjs`
+already did).
+
+Also told the agent about it in `rules.ts` ("commits it there as ONE commit per
+turn") so a chat doesn't mistake its own turn commits for someone else's work.
+
 ## 2026-08-04 — Rail chat list capped at 5 + hide-UI button gets expand arrows
 
 Two user requests. (1) A project's rail chat list showed EVERY previous chat

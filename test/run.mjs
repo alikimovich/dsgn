@@ -48,6 +48,7 @@ const UNIT = [
   'edit-history',
   'worktrees',
   'chat-worktrees',
+  'live-commit',
   'file-tree',
   'rules',
   'tw-classes',
