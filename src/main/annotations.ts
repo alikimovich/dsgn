@@ -82,9 +82,52 @@ async function git(root: string, args: string[]): Promise<string> {
   return stdout.trim()
 }
 
-/** Tracked files changed vs HEAD — clean paths (no porcelain quoting/rename arrows). */
+/** The repo's default branch (main/master) from origin/HEAD; `main` when it isn't set. */
+async function defaultBase(root: string): Promise<string> {
+  try {
+    return (
+      (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(
+        /^origin\//,
+        ''
+      ) || 'main'
+    )
+  } catch {
+    return 'main' // origin/HEAD not set — assume main
+  }
+}
+
+/** How many commits HEAD is ahead of the default branch (local ref, then the remote
+ *  one). 0 when neither ref resolves — e.g. a repo that has never been pushed. */
+async function aheadOfBase(root: string, base: string): Promise<number> {
+  for (const ref of [base, `origin/${base}`]) {
+    try {
+      const n = Number(await git(root, ['rev-list', '--count', `${ref}..HEAD`]))
+      if (Number.isFinite(n)) return n
+    } catch {
+      /* ref doesn't exist here — try the next one */
+    }
+  }
+  return 0
+}
+
+/**
+ * Tracked files this branch changed — COMMITTED work included. Praxis commits every
+ * turn on the live checkout (`live-commit.ts`), so a diff vs HEAD alone would report
+ * "nothing changed" for a session whose turns all landed. Diff against the merge base
+ * with the default branch — two-dot, i.e. vs the WORKING TREE, so uncommitted edits
+ * still count — and fall back to HEAD when there's no base to compare against (no
+ * origin, unborn branch, or the checkout IS the base branch). Clean paths (no
+ * porcelain quoting / rename arrows).
+ */
 async function changedSince(root: string): Promise<string[]> {
-  const out = await git(root, ['-c', 'core.quotePath=false', 'diff', '--name-only', 'HEAD'])
+  const flags = ['-c', 'core.quotePath=false', 'diff', '--name-only']
+  let out: string
+  try {
+    const mergeBase = await git(root, ['merge-base', 'HEAD', await defaultBase(root)])
+    out = await git(root, [...flags, mergeBase])
+  } catch {
+    out = await git(root, [...flags, 'HEAD'])
+  }
   return out
     .split('\n')
     .map((l) => l.trim())
@@ -130,13 +173,19 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
     await git(root, ['add', '-u'])
     await git(root, ['add', '--', '.praxis'])
     const staged = await git(root, ['diff', '--cached', '--name-only'])
-    if (!staged) {
+    // Per-turn live commits mean the work is usually already IN the branch's history,
+    // so "nothing staged" no longer means "nothing to publish" — only nothing staged
+    // AND nothing ahead of the base does. When nothing is staged the handoff branch
+    // simply points at the same commits, which is a perfectly publishable PR.
+    if (!staged && (await aheadOfBase(root, await defaultBase(root))) === 0) {
       await git(root, ['checkout', original])
       await git(root, ['branch', '-D', branch])
       return { ok: false, error: 'Nothing to publish — no changes or notes yet.' }
     }
-    await git(root, ['commit', '-m', title])
-    committed = true
+    if (staged) {
+      await git(root, ['commit', '-m', title])
+      committed = true
+    }
     await git(root, ['push', '-u', 'origin', branch])
 
     const body = buildPrBody(annotations, changedFiles)
@@ -189,16 +238,7 @@ async function shipToMain(
   }
   if (branch === 'HEAD') return { ok: false, error: 'Detached HEAD — check out a branch first.' }
   // Default branch (main/master), from origin/HEAD; fall back to main.
-  let base = 'main'
-  try {
-    base =
-      (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(
-        /^origin\//,
-        ''
-      ) || 'main'
-  } catch {
-    /* origin/HEAD not set — assume main */
-  }
+  const base = await defaultBase(root)
   if (branch === base) {
     // The open-time `git:ensure` should have moved the checkout onto a praxis/*
     // work branch, but a project can still land here on its base branch (ensure

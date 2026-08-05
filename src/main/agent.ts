@@ -35,6 +35,7 @@ import {
 } from './chat-isolation'
 import { clearHistory, recordEdit } from './edit-history'
 import { isRepoRoot } from './git'
+import { commitLiveTurn } from './live-commit'
 import { createSessionStore, type SessionStore } from './sessions-store'
 import {
   applyToWorkingTree,
@@ -287,6 +288,12 @@ async function finalizeSpawn(id: string, _status: 'done' | 'error'): Promise<voi
       const group = `comment:${id}`
       for (const e of auto.edits)
         recordEdit(parentRoot, e.file, e.before, e.after, undefined, group)
+      // …and as one commit on the live checkout, like an interactive chat's turn, so
+      // the spawn shows up in `git log` and can be reverted on its own.
+      await commitLiveTurn(parentRoot, files, {
+        title: firstLine(text),
+        body: 'Praxis comment spawn.'
+      })
       await removeWorktree(parentRoot, wt, { keepBranch: false })
       try {
         store().remove(session.record.id)
