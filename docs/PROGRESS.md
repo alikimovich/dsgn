@@ -2,6 +2,25 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-04 — Rail chat list capped at 5 + hide-UI button gets expand arrows
+
+Two user requests. (1) A project's rail chat list showed EVERY previous chat
+(~17 rows in the wild) — now live chats and running spawns always show, and
+previous chats fill the remainder of a 5-row budget (`MAX_CHAT_ROWS`,
+Rail.tsx), the rest behind a muted "Show N more" / "Show less" row.
+Session-only state (a Set of project keys in the Rail component) — a long
+history re-tucks on relaunch. (2) The previewbar hide-UI toggle swapped its
+chat-bubble icon for diagonal expand arrows: Maximize2 when the UI is shown
+(expand the preview), Minimize2 while hidden (bring the UI back); the arrow
+direction carries the state, so the is-active accent is gone.
+New electron-tier test `rail-chat-overflow`. Its three hard-won gotchas: an
+EMPTY `.rail__chats` has zero height, so Playwright's default visibility wait
+never resolves (wait `state: 'attached'`); App re-runs `useHistory.load()` on
+several triggers and every resolve REPLACES the store's byKey — stub `load`
+before seeding fakes or they vanish mid-test; the rail re-renders on
+unrelated store ticks, so Playwright's actionability wait sees buttons
+perpetually detached — JS-click them (same reason code-drawer.mjs does).
+
 ## 2026-08-04 — Hide-UI goes Figma: ⌘. hides chat AND rail
 
 User request: match Figma's ⌘. "hide UI, leave only the preview" instead of

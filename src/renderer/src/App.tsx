@@ -51,7 +51,7 @@ import {
 import { projectKey } from '../../shared/projectKey'
 import { controlsPrompt } from './lib/controls-prompt'
 import { restoreWorkspace, type RestoreDeps } from './restore'
-import { Code2, MessageSquare, MonitorSmartphone, PanelLeft } from 'lucide-react'
+import { Code2, Maximize2, Minimize2, MonitorSmartphone, PanelLeft } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -1918,15 +1918,22 @@ export default function App(): React.JSX.Element {
                       {/* Code editor: a stamp-independent way into the drawer + file
                           tree, so vanilla/un-instrumented projects can still edit code. */}
                       {/* Figma-style hide UI: chat + sidebar collapse, only the
-                          preview stays (also Actions menu, ⌘.). Active = UI shown. */}
+                          preview stays (also Actions menu, ⌘.). Diagonal expand
+                          arrows — outward to go full-preview, inward to bring
+                          the UI back; the direction carries the state, so no
+                          is-active accent. */}
                       <button
-                        className={`iconbtn ${chatHidden ? '' : 'is-active'}`}
+                        className="iconbtn"
                         onClick={() => useWorkspace.getState().toggleChatHidden()}
-                        aria-pressed={!chatHidden}
+                        aria-pressed={chatHidden}
                         aria-label={chatHidden ? 'Show UI' : 'Hide UI'}
                         title={chatHidden ? 'Show UI (⌘.)' : 'Hide UI (⌘.)'}
                       >
-                        <MessageSquare className="size-4" aria-hidden="true" />
+                        {chatHidden ? (
+                          <Minimize2 className="size-4" aria-hidden="true" />
+                        ) : (
+                          <Maximize2 className="size-4" aria-hidden="true" />
+                        )}
                       </button>
                       <button
                         className={`iconbtn ${drawerSource ? 'is-active' : ''}`}
