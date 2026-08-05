@@ -39,10 +39,24 @@ eq(
   'query dropped, single segment kept'
 )
 
-// One enormous path segment: nothing structural is small enough, so fall back
-// to host + ellipsis rather than emitting something over budget.
+// A segment too long to keep whole is truncated rather than dropped — a real
+// slug's first half still says what the link is (`linear.app/…/long-links-…`).
+eq(
+  elideUrl('https://linear.app/kitos/issue/LKM-64/long-links-make-bubbles-too-wide'),
+  'linear.app/…/long-links-make-bubbles-too-wi…',
+  'over-long last segment is truncated, not dropped'
+)
 const oneSeg = elideUrl(`https://example.com/${'x'.repeat(200)}`)
-eq(oneSeg, 'example.com/…', 'over-long single segment falls back to the host')
+ok(oneSeg.length <= 44, `over-long single segment stays within max: ${oneSeg.length}`)
+ok(oneSeg.startsWith('example.com/x'), `host + head of the segment kept: ${oneSeg}`)
+
+// ...but when the host leaves no usable room, say "there was a path" instead of
+// showing two characters of it.
+eq(
+  elideUrl('https://verylonghostname.example.com/some-page', 32),
+  'verylonghostname.example.com/…',
+  'no room for a readable segment → host + ellipsis'
+)
 
 // A host that busts the budget on its own gets hard-truncated (never returned
 // longer than asked for).

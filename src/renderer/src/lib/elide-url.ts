@@ -50,12 +50,18 @@ export function elideUrl(url: string, max = 44): string {
   const segments = path.split('/').filter(Boolean)
   const last = segments[segments.length - 1]
 
-  if (last) {
-    // The ellipsis goes where content was actually dropped: mid-path when
-    // there were segments in between, otherwise trailing (the query/hash).
-    const collapsed =
-      segments.length > 1 ? `${host}/…/${last}` : `${host}/${last}…`
-    if (collapsed.length <= max) return collapsed
+  // The ellipsis goes where content was actually dropped: mid-path when there
+  // were segments in between, and trailing when the query/hash went.
+  const prefix = segments.length > 1 ? `${host}/…/` : `${host}/`
+  const room = max - prefix.length
+  // Below a few characters the last segment is unrecognizable anyway — better
+  // to say "there was a path" than to show two letters of it.
+  if (last && room >= 6) {
+    // One ellipsis is enough: a mid-path `…` already says content was cut, so
+    // the trailing one is only for a URL whose query was the sole casualty.
+    const trail = segments.length === 1 && /[?#]/.test(clean) ? '…' : ''
+    if (last.length + trail.length <= room) return `${prefix}${last}${trail}`
+    return `${prefix}${last.slice(0, room - 1)}…`
   }
   const bare = `${host}/…`
   if (bare.length <= max) return bare
