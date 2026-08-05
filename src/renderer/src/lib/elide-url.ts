@@ -36,7 +36,9 @@ function trimTrailingPunctuation(url: string): string {
  * Drops the scheme and any `www.`, then — only if it still doesn't fit —
  * collapses the middle of the path and the whole query/hash into an ellipsis,
  * keeping the host and the last path segment (the two bits that say what the
- * link IS): `embed.figma.com/…/portfolio`.
+ * link IS): `embed.figma.com/…/portfolio`. A last segment too long for what's
+ * left is truncated rather than dropped (`linear.app/…/long-links-make-bu…`);
+ * only a host that leaves no readable room falls back to `host/…`.
  */
 export function elideUrl(url: string, max = 44): string {
   const clean = url

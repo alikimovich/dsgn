@@ -21,7 +21,10 @@ the chat pane, its first half unreadable. Two causes, both fixed:
   an ask into text/link runs and shortens each link to the two parts a human
   reads: `embed.figma.com/…/portfolio`. The ellipsis is placed where content
   was actually dropped (mid-path when segments were skipped, trailing when only
-  the query went), and the full URL lives on the `title` tooltip.
+  the query went — never both), a last segment too long for the remaining
+  budget is truncated rather than dropped (`linear.app/…/long-links-make-bu…`,
+  since the slug is usually the only part that identifies the link), and the
+  full URL lives on the `title` tooltip.
 
 The elided run is a `<span>`, not an `<a>`: an ask is displayed text, not a
 click surface, and turning user-typed strings into live links would be a new
