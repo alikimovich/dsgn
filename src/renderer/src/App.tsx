@@ -1892,14 +1892,14 @@ export default function App(): React.JSX.Element {
                           pill now. Keyboard: S select, C comment, Y annotate. */}
                       {/* Code editor: a stamp-independent way into the drawer + file
                           tree, so vanilla/un-instrumented projects can still edit code. */}
-                      {/* Hide/show the chat pane — full-window preview (also
-                          Actions menu, ⌘\). Active = chat visible. */}
+                      {/* Figma-style hide UI: chat + sidebar collapse, only the
+                          preview stays (also Actions menu, ⌘.). Active = UI shown. */}
                       <button
                         className={`iconbtn ${chatHidden ? '' : 'is-active'}`}
                         onClick={() => useWorkspace.getState().toggleChatHidden()}
                         aria-pressed={!chatHidden}
-                        aria-label={chatHidden ? 'Show chat' : 'Hide chat'}
-                        title={chatHidden ? 'Show chat (⌘\\)' : 'Hide chat (⌘\\)'}
+                        aria-label={chatHidden ? 'Show UI' : 'Hide UI'}
+                        title={chatHidden ? 'Show UI (⌘.)' : 'Hide UI (⌘.)'}
                       >
                         <MessageSquare className="size-4" aria-hidden="true" />
                       </button>
@@ -2046,7 +2046,7 @@ export default function App(): React.JSX.Element {
               strip (.chat-drag); otherwise, with the rail collapsed, that strip
               would win the overlap and swallow clicks on this button. */}
           {/* Gone entirely while the chat is hidden — full-preview mode should be
-              chrome-free; unhiding the chat (⌘\ / previewbar) brings it back. */}
+              chrome-free; unhiding the UI (⌘. / previewbar) brings it back. */}
           {!chatHidden && (
             <button
               className="sidebar-toggle"

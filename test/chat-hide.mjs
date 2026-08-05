@@ -18,7 +18,6 @@ const fixture = join(root, 'test', 'fixtures', 'static-app')
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const sendMenu = (app, action) =>
   app.evaluate(
     ({ BrowserWindow }, a) => BrowserWindow.getAllWindows()[0].webContents.send('menu:action', a),
@@ -47,9 +46,14 @@ try {
   if (before < 300) throw new Error(`visible chat width ${before}px — expected ~440`)
   await win.screenshot({ path: join(artifacts, '14-chat-visible.png') })
 
-  // Hide via the menu action (the ⌘\ accelerator's path).
+  // Hide via the menu action (the ⌘. accelerator's path). The chat snaps to 0
+  // instantly but the rail ANIMATES width for 0.24s — wait it out, don't sleep.
   await sendMenu(app, 'toggle-chat')
-  await sleep(150)
+  await win.waitForFunction(
+    () => (document.querySelector('.rail')?.getBoundingClientRect().width ?? 99) < 4,
+    undefined,
+    { timeout: 3000 }
+  )
   const hidden = await win.evaluate(() => {
     const pane = document.querySelector('.pane--chat')
     const preview = document.querySelector('.pane--preview')
@@ -62,6 +66,9 @@ try {
       sidebarToggle: !!document.querySelector('.sidebar-toggle'),
       padLeft: pad?.paddingLeft ?? '',
       padRight: pad?.paddingRight ?? '',
+      railWidth: Math.round(
+        document.querySelector('.rail')?.getBoundingClientRect().width ?? -1
+      ),
       stored: localStorage.getItem('praxis:chat-hidden')
     }
   })
@@ -72,13 +79,19 @@ try {
   if (hidden.sidebarToggle) throw new Error('.sidebar-toggle still mounted while chat is hidden')
   if (!hidden.padLeft || hidden.padLeft !== hidden.padRight)
     throw new Error(`preview padding uneven while hidden: "${hidden.padLeft}" vs "${hidden.padRight}"`)
+  if (hidden.railWidth > 4)
+    throw new Error(`rail width ${hidden.railWidth}px while UI hidden — should collapse to ~0`)
   if (hidden.stored !== '1') throw new Error(`praxis:chat-hidden should be "1", got ${hidden.stored}`)
   await win.screenshot({ path: join(artifacts, '15-chat-hidden.png') })
 
   // Show again via the previewbar button (needs the dev server running).
-  await win.waitForSelector('[aria-label="Show chat"]', { timeout: 60000 })
-  await win.click('[aria-label="Show chat"]')
-  await sleep(150)
+  await win.waitForSelector('[aria-label="Show UI"]', { timeout: 60000 })
+  await win.click('[aria-label="Show UI"]')
+  await win.waitForFunction(
+    () => (document.querySelector('.rail')?.getBoundingClientRect().width ?? 0) >= 160,
+    undefined,
+    { timeout: 3000 }
+  )
   const shown = await win.evaluate(() => {
     const pane = document.querySelector('.pane--chat')
     return {
@@ -86,6 +99,9 @@ try {
       width: pane ? Math.round(pane.getBoundingClientRect().width) : -1,
       divider: !!document.querySelector('.divider'),
       sidebarToggle: !!document.querySelector('.sidebar-toggle'),
+      railWidth: Math.round(
+        document.querySelector('.rail')?.getBoundingClientRect().width ?? -1
+      ),
       stored: localStorage.getItem('praxis:chat-hidden')
     }
   })
@@ -93,6 +109,8 @@ try {
   if (shown.width < 300) throw new Error(`re-shown chat width ${shown.width}px — expected ~440`)
   if (!shown.divider) throw new Error('resize divider missing after re-show')
   if (!shown.sidebarToggle) throw new Error('.sidebar-toggle missing after re-show')
+  if (shown.railWidth < 160)
+    throw new Error(`rail width ${shown.railWidth}px after re-show — preference not restored`)
   if (shown.stored !== '0') throw new Error(`praxis:chat-hidden should be "0", got ${shown.stored}`)
   await win.screenshot({ path: join(artifacts, '16-chat-reshown.png') })
 

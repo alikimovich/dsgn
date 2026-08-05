@@ -1190,7 +1190,7 @@ body.is-fullscreen .sidebar-toggle {
     position: relative;
 }
 
-/* Hidden chat (⌘\ / previewbar toggle): width goes to 0 inline (App.tsx) while
+/* Hidden UI (⌘. / previewbar toggle): width goes to 0 inline (App.tsx) while
    the pane stays mounted — clip the content instead of letting it paint over
    the preview, and drop the top fade (it would blur the preview's left edge). */
 .pane--chat-hidden {
@@ -1248,6 +1248,19 @@ body.is-fullscreen .sidebar-toggle {
    padding so the full-window preview is inset equally on both sides. */
 .panes--chat-hidden .pane--preview {
     padding-left: 10px;
+}
+
+/* Hide-UI also collapses the rail — visually only (mirrors .rail--collapsed),
+   never touching the persisted rail preference, so showing the UI restores the
+   rail exactly as the user left it. */
+.panes--chat-hidden .rail {
+    width: 0;
+    border-right-color: transparent;
+    pointer-events: none;
+}
+.panes--chat-hidden .rail .rail__inner {
+    transform: translateX(-100%);
+    opacity: 0;
 }
 /* Fills exactly the pane's own top padding (the previewcard/previewbar below
    it already drag on their own) — the last top-of-window gap between the

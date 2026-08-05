@@ -2,6 +2,21 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-04 — Hide-UI goes Figma: ⌘. hides chat AND rail
+
+User request: match Figma's ⌘. "hide UI, leave only the preview" instead of
+the ⌘\ chat-only toggle shipped earlier the same day. ⌘. was Stop Project
+(the Xcode convention) — Stop moved to ⌘⇧.. The toggle (menu "Toggle UI" +
+the previewbar button, same `toggle-chat` action/state underneath) now also
+collapses the rail — via CSS only (`.panes--chat-hidden .rail` mirrors
+`.rail--collapsed`), never touching the persisted rail preference, so
+showing the UI restores the rail exactly as the user left it.
+Test gotcha this surfaced: the chat pane snaps to width 0 instantly but the
+rail ANIMATES width for 0.24s — a fixed post-toggle sleep reads the rail
+mid-transition (or, on a busy renderer, before the transition even starts:
+one live read caught 168px at +500ms). `chat-hide` now waits on the width
+crossing the threshold (waitForFunction), not on a timer.
+
 ## 2026-08-04 — Zed-style editor search panel
 
 User request: make the code editor's search look/behave like Zed's. The old

@@ -365,8 +365,9 @@ function buildAppMenu(): void {
           click: () => send('logs')
         },
         {
-          label: 'Toggle Chat Panel',
-          accelerator: 'CmdOrCtrl+\\',
+          // Figma's "hide UI": chat + sidebar collapse, only the preview stays.
+          label: 'Toggle UI',
+          accelerator: 'CmdOrCtrl+.',
           click: () => send('toggle-chat')
         },
         {
@@ -375,8 +376,10 @@ function buildAppMenu(): void {
           click: () => send('publish')
         },
         {
+          // ⌘. went to Toggle UI (the Figma muscle-memory); Stop keeps the
+          // Xcode-ish combo one modifier up.
           label: 'Stop Project',
-          accelerator: 'CmdOrCtrl+.',
+          accelerator: 'CmdOrCtrl+Shift+.',
           click: () => send('stop')
         },
         { type: 'separator' },
