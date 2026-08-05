@@ -94,6 +94,11 @@ eq(splitUrls('www.example.com/a/b').length, 1, 'www. host is one link run')
 eq(splitUrls('www.example.com/a/b')[0].kind, 'link', 'www. host detected')
 eq(splitUrls('figma.com/design/abc')[0].kind, 'text', 'scheme-less host left alone')
 
+// A scheme with nothing usable after it stays plain text (no empty span).
+const bare = splitUrls('ends with https://.')
+eq(bare.length, 1, 'bare scheme is not a link run')
+eq(bare[0].text, 'ends with https://.', 'bare scheme text is preserved verbatim')
+
 // Multiple links in one ask.
 const two = splitUrls('a https://example.com/one b https://example.com/two')
 eq(two.filter((r) => r.kind === 'link').length, 2, 'both urls detected')

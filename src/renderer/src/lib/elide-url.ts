@@ -78,10 +78,13 @@ export function splitUrls(text: string, max?: number): TextRun[] {
   let at = 0
   for (const m of text.matchAll(URL_RE)) {
     const href = trimTrailingPunctuation(m[0])
-    if (!href) continue
+    // A bare scheme ("https://.") trims down to nothing worth showing — leave
+    // it in the text run rather than rendering an empty span.
+    const label = href && elideUrl(href, max)
+    if (!label) continue
     const start = m.index
     if (start > at) runs.push({ kind: 'text', text: text.slice(at, start) })
-    runs.push({ kind: 'link', href, label: elideUrl(href, max) })
+    runs.push({ kind: 'link', href, label })
     at = start + href.length
   }
   if (at < text.length || runs.length === 0)
