@@ -131,6 +131,21 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       project (git ls-files, fs-walk fallback). `test/file-tree.mjs`. Also renamed
       the toolbar "Editor" button → "IDE" and dropped the pop-out's redundant
       close button (native traffic lights close it).
+- [x] **Phase 5 — the sidebar became a file manager.** ✅ 2026-08-05
+      (user-requested) — new file / rename / delete from the tree: a toolbar above
+      it plus Finder's click-the-selected-file-again to rename. New
+      `src/main/file-ops.ts` (pure) behind `source:create-file`/`rename-file`/
+      `delete-file`; every renderer path is re-validated (no traversal, no
+      `.git`/`.praxis`/`.dsgn`/`node_modules`), create/rename never clobber, and
+      delete goes to the OS trash because the content-diff undo history can't
+      represent a deleted file. `test/file-ops.mjs`. See PROGRESS 2026-08-05.
+      Deliberately out of scope: directory create/rename/delete (a nested path
+      makes dirs implicitly; git doesn't track empty ones anyway) and drag-to-move.
+- [ ] **Follow-up:** see the sidebar's new chrome rendered. The Electron tier
+      can't launch a window here (`test:codedrawer` dies at `.empty__open`, at
+      HEAD too), so the toolbar / rename field / delete confirm are unverified
+      visually, as is whether the tree widget re-fires a selection change for an
+      already-selected row (the `dblclick` fallback exists because it might not).
 
 ## Per-chat worktree isolation (2026-07-16, concurrent-chat safety) — SHIPPED
 

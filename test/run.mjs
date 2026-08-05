@@ -51,6 +51,7 @@ const UNIT = [
   'chat-worktrees',
   'live-commit',
   'file-tree',
+  'file-ops',
   'rules',
   'tw-classes',
   'tw-styles',

@@ -2,6 +2,62 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-05 — The editor's file tree became a file MANAGER (new / rename / delete)
+
+The pop-out editor's sidebar could only ever open what already existed. It now
+creates, renames and deletes files: a `＋` / pencil / trash toolbar above the
+tree, and Finder's click-the-selected-file-again to rename.
+
+`src/main/file-ops.ts` (new, pure — fs + path only, `test/file-ops.mjs`) holds
+the three ops behind `source:create-file` / `source:rename-file` /
+`source:delete-file`. Every path arrives from the renderer, so each op
+re-validates it from scratch through one gate (`normalizeRelPath`): repo-relative
+POSIX only, no `..`, no absolute/drive paths, no NUL, and nothing at any depth
+inside `.git`, `.praxis`, `.dsgn` (the pre-rename sidecar the agent's write-deny
+also covers) or `node_modules`. Create never clobbers (`flag: 'wx'`), rename
+never overwrites, and both are file-only — directories are made implicitly by a
+nested path and are never renamed or deleted.
+
+Two details worth keeping:
+
+- **Delete goes to the OS trash.** The undo history (`edit-history.ts`) is
+  content-diff based: it reads a file, compares it to the text it last wrote, and
+  writes the other side. There is no representation of "this file used to exist",
+  so a delete can never be a Cmd+Z. `shell.trashItem` is the only undo there is —
+  injected from `index.ts` rather than imported, so `file-ops.ts` stays pure and
+  testable. If trashing throws (no desktop session, unsupported fs) it falls back
+  to removing the file: the user asked for it gone.
+- **A case-only rename is allowed.** On a case-insensitive filesystem
+  `Foo.tsx` → `foo.tsx` reports the target as already existing, and the
+  no-clobber guard would make case fixes impossible. It compares the two paths
+  case-folded and lets that one through.
+
+`FileTreePanel.tsx` keeps all the new chrome OUTSIDE the tree widget, which owns
+its own shadow DOM: the toolbar and the name field are our own React above it,
+and each successful op rebuilds the tree from a fresh `source:tree` listing
+(there's no incremental add/remove we can lean on) then re-selects the path the
+op landed on. The name field takes a whole relative path, so a rename doubles as
+a move and "new file" seeded with the selected file's directory is one word of
+typing. A rename follows the file if it was the one on screen; a delete closes
+the drawer if it was.
+
+**Rename-on-second-click, and why there are two triggers.** Clicking the
+already-selected file is the natural gesture, but from outside the widget it's
+indistinguishable from the programmatic mirror-select that Cmd+click navigation
+and back/forward do — both surface as "selection changed to the file that's
+already open". So the selection callback only treats it as a rename when a real
+`pointerdown` landed on the tree in the last 600ms. A `dblclick` fallback covers
+the case where the widget doesn't re-fire a selection change for a row that was
+already selected; it ignores double-clicks while focus is in the tree's own
+search box (found by descending `activeElement` through shadow roots — the
+document only ever reports the host). Both paths just open the same field, so
+firing both is harmless.
+
+Verified: `test:file-ops` (44/44 unit tier green), typecheck + build green. The
+Electron tier still can't launch a window on this machine — `test:codedrawer`
+dies at `.empty__open` at HEAD too — so the sidebar's new chrome hasn't been
+seen rendered; it wants a manual `bun run dev` pass.
+
 ## 2026-08-05 — The status line shows tokens + working time, not the tool caption
 
 The line beside the running cat used to echo the current tool step ("Edit ·
