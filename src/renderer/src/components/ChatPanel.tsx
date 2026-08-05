@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   agentOptionsFor,
   type ChatAgentSettings,
@@ -51,6 +58,7 @@ import { useStickToBottomContext } from "use-stick-to-bottom";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { splitUrls } from "@/lib/elide-url";
 import {
   ArrowUp,
   Check,
@@ -191,6 +199,12 @@ function StepDisclosure({
  * vs `clientHeight`) rather than a line/character count, so it only ever
  * kicks in when the bubble truly exceeds the cap — short messages get no
  * fade, no pointer cursor, no click handler.
+ *
+ * That cap is vertical only, so long URLs got their own treatment (LKM-64):
+ * a pasted link is one unbreakable token, and the bubble is sized to its
+ * content, so a link wider than the pane used to drag the whole bubble off
+ * the left edge. Links now render elided (`splitUrls`) with the full URL on
+ * the tooltip, and `.msg__text` breaks anything still too long to fit.
  */
 function ClampedUserText({
   text,
@@ -207,6 +221,7 @@ function ClampedUserText({
   // ClampedUserText renders inside <Conversation>, so it can reach the
   // stick-to-bottom context directly — no prop plumbing needed.
   const { stopScroll } = useStickToBottomContext();
+  const runs = useMemo(() => splitUrls(text), [text]);
 
   // Only measurable while collapsed (the clamp's max-height is what makes
   // scrollHeight > clientHeight meaningful); once we've learned a bubble
@@ -243,7 +258,7 @@ function ClampedUserText({
     <div
       ref={ref}
       className={cn(
-        "msg__text w-fit rounded-lg border border-[var(--border-prominent)] bg-muted px-3 py-2 text-sm",
+        "msg__text w-fit max-w-full rounded-lg border border-[var(--border-prominent)] bg-muted px-3 py-2 text-sm",
         !expanded && "msg__text--clamp",
         clickable && "cursor-pointer",
       )}
@@ -261,7 +276,17 @@ function ClampedUserText({
           : undefined
       }
     >
-      {text}
+      {runs.map((run, i) =>
+        run.kind === "link" ? (
+          // Elided to host + last segment; the full URL stays in the tooltip.
+          // Not an anchor — a user's ask is plain text, not a link surface.
+          <span key={i} className="msg__link" title={run.href}>
+            {run.label}
+          </span>
+        ) : (
+          <Fragment key={i}>{run.text}</Fragment>
+        ),
+      )}
       {!expanded && overflows && (
         <div className="msg__text-fade" aria-hidden="true" />
       )}

@@ -59,6 +59,7 @@ const UNIT = [
   'layers-move',
   'inline-style',
   'css-values',
+  'elide-url',
   'control-panels',
   'svelte-instance',
   'docs-links',

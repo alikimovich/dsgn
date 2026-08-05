@@ -1556,6 +1556,21 @@ body.is-resizing {
     font-size: 14px;
     line-height: 1.5;
     white-space: pre-wrap;
+    /* `anywhere`, not `break-word`: both wrap an over-long token, but only
+       `anywhere` also shrinks the element's min-content width — which is what
+       the user bubble is sized by (`w-fit`). With `break-word` the bubble
+       still measures itself against the unbroken token and spills past the
+       pane's left edge (LKM-64). */
+    overflow-wrap: anywhere;
+}
+
+/* A URL inside a user ask, shortened for display (see `elideUrl`). Dotted
+   underline = "this text is abridged, hover for the whole thing"; it's
+   deliberately not a link (asks aren't a click surface). */
+.msg__link {
+    text-decoration: underline dotted
+        color-mix(in srgb, var(--text) 35%, transparent);
+    text-underline-offset: 2px;
 }
 
 .msg--user .msg__text {
@@ -1597,6 +1612,10 @@ body.is-resizing {
 .markdown {
     font-size: 14px;
     line-height: 1.55;
+    /* Same reason as `.msg__text`: an assistant turn that prints a long URL or
+       an unbroken path shouldn't push the chat pane wider than it is. `pre`
+       keeps its own horizontal scroll (white-space: pre never wraps). */
+    overflow-wrap: anywhere;
 }
 
 .markdown > :first-child {
