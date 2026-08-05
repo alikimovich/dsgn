@@ -75,6 +75,10 @@ src/
                     (framework 'static': no package.json/dev command; live-reload)
     file-tree.ts    list a project's files (git ls-files / fs-walk) for the
                     pop-out editor's @pierre/trees sidecar (source:tree IPC)
+    file-ops.ts     the same sidebar's file MANAGER — create/rename/delete
+                    (source:create-file/rename-file/delete-file). Pure; every
+                    renderer-supplied path is re-validated (no traversal, no
+                    .git/.praxis/.dsgn/node_modules), delete goes to the OS trash
     agent.ts        persistent multi-turn agent session (streams over agent:* IPC)
     backends/       provider seam: claude.ts, codex.ts, gemini.ts behind pickProvider
                     (gemini currently has NO SDK dep — treat as experimental)

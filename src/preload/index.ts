@@ -13,6 +13,7 @@ import type {
   Diagnosis,
   FeedbackInput,
   FeedbackResult,
+  FileOpResult,
   Framework,
   GithubConnectOptions,
   GithubConnectResult,
@@ -312,6 +313,12 @@ const api: PraxisApi = {
       ipcRenderer.invoke('source:popout', root, source),
     closeWindow: (): Promise<void> => ipcRenderer.invoke('source:close-window'),
     tree: (root: string): Promise<string[]> => ipcRenderer.invoke('source:tree', root),
+    createFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:create-file', root, path),
+    renameFile: (root: string, from: string, to: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:rename-file', root, from, to),
+    deleteFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:delete-file', root, path),
     onNavigate: (cb: (source: string) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, source: string): void => cb(source)
       ipcRenderer.on('editor:navigate', listener)

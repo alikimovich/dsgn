@@ -500,6 +500,18 @@ export interface SourceWriteResult {
   error?: string
 }
 
+/**
+ * Result of a create / rename / delete from the editor's file-tree sidebar.
+ * `path` is the repo-relative POSIX path the op landed on (the new path for a
+ * rename), so the renderer can re-select it once the tree reloads.
+ */
+export interface FileOpResult {
+  ok: boolean
+  path?: string
+  /** Human-readable failure (bad path, name taken, fs error). */
+  error?: string
+}
+
 export type PropKind = 'string' | 'number' | 'boolean' | 'enum' | 'other'
 
 /** One editable prop/attribute of a selected element. */
@@ -1184,6 +1196,12 @@ export interface PraxisApi {
     closeWindow: () => Promise<void>
     /** Repo-relative file paths for the pop-out editor's file-tree sidebar. */
     tree: (root: string) => Promise<string[]>
+    /** File-tree sidebar: create an empty file (parent dirs created as needed). */
+    createFile: (root: string, path: string) => Promise<FileOpResult>
+    /** File-tree sidebar: rename/move a file. Never overwrites an existing path. */
+    renameFile: (root: string, from: string, to: string) => Promise<FileOpResult>
+    /** File-tree sidebar: delete a file (to the OS trash where that's available). */
+    deleteFile: (root: string, path: string) => Promise<FileOpResult>
     /** Standalone editor window: retarget event when a second pop-out reuses it. */
     onNavigate: (cb: (source: string) => void) => () => void
   }
