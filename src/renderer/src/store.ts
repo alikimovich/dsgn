@@ -18,6 +18,7 @@ import type {
   UpdateStatus
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { emptyUsage, addUsage as sumUsage, type TokenUsage } from '../../shared/run-stats'
 import { type ChatAgentSettings, DEFAULT_MODEL, DEFAULT_PROVIDER } from './chat-settings'
 
 // The per-chat agent choices + their AgentOptions mappings live in their own
@@ -97,12 +98,25 @@ interface ChatSlice {
    *  conflict card. Empty/undefined otherwise (and after a reload, where the snapshot
    *  doesn't carry them — the card then omits the file list). */
   isolationFiles?: string[]
+  /** Tokens this chat has spent since it opened (summed from the backends' `usage`
+   *  event deltas) — the status line's ↑/↓ counters. */
+  usage: TokenUsage
+  /** Time this chat has spent WORKING, in ms: the sum of its finished turns'
+   *  durations. Idle time between turns is deliberately excluded — a wall-clock
+   *  "session age" would mostly measure how long the user was at lunch. */
+  workedMs: number
+  /** When the turn in flight started (`Date.now()`), or null when idle. The status
+   *  line adds the live remainder to `workedMs`; `finish` folds it in. */
+  turnStartedAt: number | null
 }
 const emptySlice = (): ChatSlice => ({
   messages: [],
   isRunning: false,
   streamingId: null,
-  isolation: 'live'
+  isolation: 'live',
+  usage: emptyUsage(),
+  workedMs: 0,
+  turnStartedAt: null
 })
 
 interface ChatState {
@@ -154,6 +168,8 @@ interface ChatState {
   startAssistant: (key?: string) => void
   appendDelta: (text: string, key?: string) => void
   appendStatus: (text: string, key?: string) => void
+  /** Add one backend `usage` event's token delta to this chat's running totals. */
+  addUsage: (delta: TokenUsage, key?: string) => void
   finish: (key?: string) => void
   /** Is the given project's turn in flight (for the rail's working dot)? */
   isRunningFor: (key: string) => boolean
@@ -224,7 +240,14 @@ export const useChat = create<ChatState>((set, get) => {
           streamingId,
           title: prev.title,
           isolation: prev.isolation,
-          isolationFiles: prev.isolationFiles
+          isolationFiles: prev.isolationFiles,
+          // A restored chat's past turns carry no usage/timing (neither the
+          // transcript nor the live snapshot records them), so its counters start
+          // from zero and describe this app run's work on the chat. A reattached
+          // in-flight turn times from now — its real start is already gone.
+          usage: prev.usage,
+          workedMs: prev.workedMs,
+          turnStartedAt: isRunning ? Date.now() : prev.turnStartedAt
         }
         return key === s.activeKey
           ? {
@@ -295,7 +318,10 @@ export const useChat = create<ChatState>((set, get) => {
             { id, role: 'assistant', text: '', statuses: [], segments: [] }
           ],
           isRunning: true,
-          streamingId: id
+          streamingId: id,
+          // Start the working-time clock unless a turn is somehow already timing
+          // (two starts without a finish would otherwise lose the first's elapsed).
+          turnStartedAt: sl.turnStartedAt ?? Date.now()
         }
       }),
     appendDelta: (text, key) =>
@@ -330,10 +356,44 @@ export const useChat = create<ChatState>((set, get) => {
           return { ...m, statuses: [...m.statuses, text], segments }
         })
       })),
-    finish: (key) => patch(key, (sl) => ({ ...sl, isRunning: false, streamingId: null })),
+    addUsage: (delta, key) => patch(key, (sl) => ({ ...sl, usage: sumUsage(sl.usage, delta) })),
+    finish: (key) =>
+      patch(key, (sl) => ({
+        ...sl,
+        isRunning: false,
+        streamingId: null,
+        // Fold the finished turn's elapsed time into the chat's total and stop the
+        // clock — the gap until the next turn is idle time, which doesn't count.
+        workedMs: sl.workedMs + (sl.turnStartedAt ? Date.now() - sl.turnStartedAt : 0),
+        turnStartedAt: null
+      })),
     isRunningFor: (key) => !!get().byKey[key]?.isRunning
   }
 })
+
+/** What the chat's status line shows: the active chat's token totals + how long
+ *  it has been working (`turnStartedAt` non-null ⟺ that clock is still running). */
+export interface RunStats {
+  usage: TokenUsage
+  workedMs: number
+  turnStartedAt: number | null
+}
+
+/**
+ * The active chat's run stats. Selects the slice itself (a stable reference that
+ * only changes when that chat changes) rather than a derived object, so this
+ * doesn't re-render on every unrelated store write.
+ */
+export const useRunStats = (): RunStats => {
+  const slice = useChat((s) => s.byKey[s.activeKey])
+  return {
+    usage: slice?.usage ?? EMPTY_USAGE,
+    workedMs: slice?.workedMs ?? 0,
+    turnStartedAt: slice?.turnStartedAt ?? null
+  }
+}
+// Module-level so an absent slice yields the same object every render.
+const EMPTY_USAGE = emptyUsage()
 
 /**
  * Rebuild chat messages from a persisted session transcript (v9 resume). The

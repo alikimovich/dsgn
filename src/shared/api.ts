@@ -214,6 +214,11 @@ export type AgentEvent = (
   | { type: 'question-request'; request: QuestionRequest }
   /** A pending question was resolved (answered elsewhere / abort / session change) — dismiss its card. */
   | { type: 'question-resolved'; id: string }
+  /** Tokens the backend just reported, as a DELTA to add to the chat's running
+   *  totals (main dedupes the providers' repeated cumulative readings — see
+   *  `shared/run-stats.ts`). Drives the status line's ↑/↓ counters. `cached` is
+   *  the share of `input` served from the prompt cache, not an extra amount. */
+  | { type: 'usage'; input: number; output: number; cached: number }
   | { type: 'done' }
   | { type: 'error'; message: string }
   /** An auto-generated name for this chat, summarising what the conversation is

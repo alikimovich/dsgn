@@ -2,6 +2,53 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-05 — The status line shows tokens + working time, not the tool caption
+
+The line beside the running cat used to echo the current tool step ("Edit ·
+src/components/Hero.tsx", or "Working…" before the first one). That caption is
+already on screen: every step is listed in the turn's own `StepDisclosure` a few
+lines above, latest step first. So the one strip that's visible for the WHOLE
+turn was spending itself on a duplicate, and told the user nothing about what
+the turn was costing. It now reads `↑ 12k  ↓ 830  1:23` — tokens in, tokens out,
+and how long this chat has been working.
+
+New `src/shared/run-stats.ts` (pure, `test/run-stats.mjs`) holds all of it:
+`readUsage` normalizes a provider's loosely-typed usage payload, `usageDelta`
+turns the repeated cumulative readings into an increment, `formatTokens` /
+`formatDuration` render them. New `usage` `AgentEvent` carries the DELTA (never a
+total), the store sums it per chat slice, `RunStats.tsx` renders the active
+chat's.
+
+**Two things were easy to get wrong here.** (1) *Double counting.* The Claude SDK
+reports one request's usage three times — `message_start` (input side),
+`message_delta` (running output total), then the complete `assistant` message —
+so `claude.ts` keeps the running maximum it has already emitted per request and
+sends only the difference (reset at `message_start`; a field the payload omits
+reads as 0 and can't claw tokens back). (2) *The providers disagree about cached
+tokens*: Anthropic reports cache reads/writes ALONGSIDE `input_tokens`, Codex
+reports `cached_input_tokens` as a subset OF its `input_tokens`. `readUsage`
+normalizes both to "all input tokens, of which this many were cached", so `↑`
+means the same thing on either backend. Both cases are pinned by the unit test.
+
+Codex only reports usage once, at `turn.completed`, so its counters step at the
+end of a turn instead of during it; Gemini (experimental, unwired) reports none
+and its counters stay at zero.
+
+Time is WORKING time — the sum of finished turns plus the one in flight — not
+wall clock since the chat opened, which would mostly measure how long the user
+was at lunch. It lives on the chat slice (`workedMs` + `turnStartedAt`), so each
+chat has its own. Neither the transcript nor the live snapshot records tokens or
+timing, so a resumed/reloaded chat's counters start from zero and describe this
+app run's work on it; a reattached in-flight turn times from the reattach.
+
+Small knock-ons: the status row lost its `aria-live` (a clock ticking into a live
+region is announced every second — the cat's own `role="img"` label already says
+whether a turn is running, and the readout carries the full sentence as sr-only
+text + a `title` breakdown with exact counts). The row is `pointer-events: none`,
+so the readout opts back in — a native tooltip needs hover — which is safe
+because the scroll-to-bottom button paints above it. `.chat__status-text` and its
+pulse keyframes are gone.
+
 ## 2026-08-05 — Every turn is a commit on the user's own checkout
 
 User request: "if things were changed, commits should be made on every turn, so

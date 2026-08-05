@@ -17,6 +17,7 @@ import type {
   SlashCommandItem
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { addUsage, emptyUsage, isEmptyUsage, readUsage, usageDelta } from '../../shared/run-stats'
 import { checkContrast, suggestAccessible } from '../apca'
 import { lexLiteral, locateAnchor, validateManifest } from '../control-manifest'
 import { saveManifest } from '../control-panels'
@@ -1291,6 +1292,20 @@ async function startSession(
   // Drive the output stream for the life of the session.
   void (async () => {
     let streamedText = false
+    // Token accounting for the API request in flight. The SDK reports the SAME
+    // request's usage repeatedly and cumulatively — `message_start` (the input
+    // side), then each `message_delta` (the running output total), then the
+    // complete `assistant` message — so remember the running maximum already
+    // emitted and send only what's new. Reset per request, at `message_start`.
+    let sentUsage = emptyUsage()
+    const reportUsage = (raw: unknown): void => {
+      const total = readUsage(raw)
+      if (!total) return
+      const delta = usageDelta(sentUsage, total)
+      if (isEmptyUsage(delta)) return
+      sentUsage = addUsage(sentUsage, delta)
+      emit({ type: 'usage', ...delta })
+    }
     try {
       for await (const msg of q) {
         switch (msg.type) {
@@ -1311,6 +1326,15 @@ async function startSession(
             break
           }
           case 'stream_event': {
+            const ev = (msg as { event?: { type?: string; message?: unknown; usage?: unknown } })
+              .event
+            if (ev?.type === 'message_start') {
+              // A new request — its counters start from zero again.
+              sentUsage = emptyUsage()
+              reportUsage((ev.message as { usage?: unknown } | undefined)?.usage)
+            } else if (ev?.type === 'message_delta') {
+              reportUsage(ev.usage)
+            }
             const text = textDelta(msg)
             if (text) {
               streamedText = true
@@ -1320,6 +1344,9 @@ async function startSession(
             break
           }
           case 'assistant': {
+            // The final, authoritative usage for this request — a no-op delta
+            // when the stream events above already reported all of it.
+            reportUsage((msg.message as { usage?: unknown }).usage)
             for (const block of msg.message.content) {
               if (block.type === 'text' && !streamedText) {
                 cap.appendAssistant(block.text)

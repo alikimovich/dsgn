@@ -67,6 +67,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import CatLoader from "./CatLoader";
+import RunStats from "./RunStats";
 
 // A pending composer attachment. Images carry base64 bytes + a data URL for the
 // thumbnail (sent as a vision block); files carry only their name + absolute path
@@ -399,6 +400,7 @@ export default function ChatPanel(): React.JSX.Element {
     startAssistant,
     appendDelta,
     appendStatus,
+    addUsage,
     finish,
   } = useChat();
   const { model, provider, slashCommands, projectRoot, setModel, setProvider } =
@@ -581,6 +583,13 @@ export default function ChatPanel(): React.JSX.Element {
         useChat.getState().setTitle(key, event.title);
       } else if (event.type === "status") {
         appendStatus(event.text, key);
+      } else if (event.type === "usage") {
+        // Token deltas from the backend (already deduped in main) — they sum into
+        // the chat's totals for the status line.
+        addUsage(
+          { input: event.input, output: event.output, cached: event.cached },
+          key,
+        );
       } else if (event.type === "error") {
         // A Claude auth failure gets a short line pointing at the (Claude-specific)
         // onboarding banner. Non-Claude backends (Codex/Gemini) have no such banner
@@ -647,7 +656,7 @@ export default function ChatPanel(): React.JSX.Element {
         }
       }
     });
-  }, [appendDelta, appendStatus, finish]);
+  }, [appendDelta, appendStatus, addUsage, finish]);
 
   // "/" slash-command menu state. The menu reads the "/" token containing the
   // caret, so it triggers anywhere in the message — at the very start or after a
@@ -1280,16 +1289,14 @@ export default function ChatPanel(): React.JSX.Element {
         />
       </Conversation>
 
-      {/* Live status line — a cat that runs (with the current step, like a
-          terminal "Architecting…" indicator) while a turn is in flight and
-          settles on the idle sprite while waiting for input. */}
-      <div className="chat__status" aria-live="polite">
+      {/* Live status line — a cat that runs while a turn is in flight and settles
+          on the idle sprite while waiting for input, alongside what the chat has
+          spent (tokens in/out) and how long it has been working. No aria-live: the
+          clock ticks every second, and announcing that on a loop is noise — the
+          cat's own role="img" label already says whether a turn is running. */}
+      <div className="chat__status">
         <CatLoader running={isRunning} />
-        {isRunning && (
-          <span className="chat__status-text">
-            {messages[messages.length - 1]?.statuses.at(-1) ?? "Working…"}
-          </span>
-        )}
+        <RunStats />
       </div>
 
       <div className="composer">

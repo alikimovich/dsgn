@@ -1870,9 +1870,9 @@ body.is-resizing {
     }
 }
 
-/* Live status line above the composer — the agent's "Architecting…"-style
-   indicator. A pixel-art cat sits at the left, idling while it waits for input
-   and running (accent-tinted) beside the current step while a turn is live. */
+/* Live status line above the composer. A pixel-art cat sits at the left, idling
+   while it waits for input and running while a turn is live, beside the chat's
+   token counts and working time (RunStats.tsx). */
 /* The row itself carries the fade as its own background (rather than a
    decorative layer sitting entirely above it) and overlaps UP into the
    scroller by the same amount it grew via padding-top, so a scrolled-up
@@ -1882,7 +1882,8 @@ body.is-resizing {
    the scroller's last 56px. z-index above plain message content (auto/0) so
    the overlap is actually visible, but below the pinned ask (6) and the
    scroll-to-bottom button (20). Click-through so text/the scroll button
-   underneath stay reachable — the cat/status text don't need clicks. */
+   underneath stay reachable — the cat doesn't need clicks (the stats readout
+   opts back in below, for its tooltip). */
 .chat__status {
     position: relative;
     z-index: 5;
@@ -1901,24 +1902,14 @@ body.is-resizing {
     pointer-events: none;
 }
 
-.chat__status-text {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 12px;
-    color: var(--muted-foreground);
-    animation: chat-status-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes chat-status-pulse {
-    0%,
-    100% {
-        opacity: 0.55;
-    }
-    50% {
-        opacity: 1;
-    }
+/* The token/timing readout is the one thing in this click-through row that WANTS
+   the pointer: its `title` breaks the numbers down (exact counts, cached share),
+   and a native tooltip never appears without hover. Safe to opt back in — the
+   scroll-to-bottom button paints above (z-20 vs the row's 5), so it still wins
+   the hit test wherever the two overlap. Everything else about the readout is
+   Tailwind, on the element itself. */
+.chat__stats {
+    pointer-events: auto;
 }
 
 /* The sprite is a solid-black SVG drawn as a mask over currentColor, so it

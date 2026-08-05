@@ -52,14 +52,25 @@ try {
     s.startAssistant()
     s.appendStatus('Read · src/components/Hero.tsx')
     s.appendStatus('Edit · src/components/Hero.tsx')
+    // Token deltas as the backend reports them (LKM-62) — the status line sums them.
+    s.addUsage({ input: 9800, output: 120, cached: 9000 })
     // Stream the markdown in chunks to mimic real deltas.
     for (let i = 0; i < sample.length; i += 12) {
       store.getState().appendDelta(sample.slice(i, i + 12))
     }
-    store.getState().finish()
+    store.getState().addUsage({ input: 2600, output: 710, cached: 2000 })
   }, SAMPLE)
 
   await win.waitForSelector('.markdown pre code', { timeout: 5000 })
+  // Mid-turn: the running cat is captioned with tokens in/out + working time,
+  // NOT the current tool step (which lives in the turn's own step disclosure).
+  const running = (await win.textContent('.chat__stats')) ?? ''
+  if (!/↑ 12k/.test(running) || !/↓ 830/.test(running) || !/\d+:\d\d/.test(running)) {
+    throw new Error(`status line should show tokens + elapsed: ${running}`)
+  }
+  await win.screenshot({ path: join(artifacts, '04a-chat-status.png') })
+
+  await win.evaluate(() => window.__praxisStore.getState().finish())
   await win.screenshot({ path: join(artifacts, '04-chat-render.png') })
 
   // v6: the agent's tool steps collapse into a disclosure (latest step + count);
