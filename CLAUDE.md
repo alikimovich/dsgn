@@ -146,6 +146,10 @@ src/
   shared/token-match.ts  which design tokens may be offered for a css property
                     and which one a computed value IS. Pure + used by BOTH main
                     (re-validating a pick) and the island (chips + picker)
+  shared/run-stats.ts  the chat status line's numbers: main normalizes each
+                    provider's usage payload + dedupes its repeated cumulative
+                    readings into `usage` event deltas, the renderer sums and
+                    formats them (RunStats.tsx, next to the cat)
   renderer/src/     React 18 UI: App.tsx, components/ (ChatPanel, PreviewPane,
                     PropPanel, CodeDrawer, Rail, LayersPanel + LayersTree, …),
                     zustand store.ts, shadcn ui/

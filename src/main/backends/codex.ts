@@ -3,6 +3,7 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { AgentEvent, AgentOptions } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { isEmptyUsage, readUsage } from '../../shared/run-stats'
 import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
 import { describeTool, sendToRenderer } from './tools'
 import { createRecordCapture } from './record'
@@ -214,13 +215,21 @@ async function startSession(
           case 'item.completed':
             handleItem(ev.item, true)
             break
+          case 'turn.completed': {
+            // Codex reports tokens once, for the whole turn (no incremental
+            // readings to dedupe like Claude's) — so the status line's counters
+            // step up at the end of each turn rather than during it.
+            const used = readUsage((ev as { usage?: unknown }).usage)
+            if (used && !isEmptyUsage(used)) emit({ type: 'usage', ...used })
+            break
+          }
           case 'turn.failed':
             emitError(ev.error.message)
             break
           case 'error':
             emitError(ev.message)
             break
-          // thread.started / turn.started / turn.completed need no extra handling.
+          // thread.started / turn.started need no extra handling.
         }
       }
     } catch (err) {

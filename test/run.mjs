@@ -45,6 +45,7 @@ const UNIT = [
   'sessions-store',
   'chat-title',
   'chat-settings',
+  'run-stats',
   'edit-history',
   'worktrees',
   'chat-worktrees',
