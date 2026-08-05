@@ -2,6 +2,26 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-04 — Zed-style editor search panel
+
+User request: make the code editor's search look/behave like Zed's. The old
+panel was CodeMirror's stock bottom bar (basicSetup ships `searchKeymap` but
+no `search()` config, so the panel came from the facet default). New
+`components/editor-search.ts` supplies the config: `search({ top, createPanel
+})` with a plain-DOM panel (a CM Panel can't be React) — one rounded query
+field with inline Aa / wd / .* toggles, ‹ › stepping, a live n/N match count
+(capped at 1000, red when 0), a collapsible replace row (Replace / All,
+⌘↵ = replace-all from the field), Esc closes. Styling is an
+`EditorView.theme` riding the same design-token vars as `praxisTheme`, so it
+follows light/dark and works in the pop-out editor window too. Only the
+search input carries `main-field` (CM focuses it on open). @codemirror/search
+promoted to a direct dep (was transitive via codemirror). New electron-tier
+test `editor-search` (⌘F → panel shape, live count, Enter stepping, replace
+toggle, Esc; screenshots 17–18).
+Gotcha for future keyboard tests: Enter/findNext selects the next match AFTER
+the cursor — assert "any current ≥ 1", not "1/N", when the click position
+seeded the cursor mid-file.
+
 ## 2026-08-04 — Hide the chat pane (full-window preview)
 
 User request: a way to hide the chat so the preview fills the window. Mirrors
