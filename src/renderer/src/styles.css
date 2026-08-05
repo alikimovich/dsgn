@@ -830,6 +830,11 @@ body.is-fullscreen .sidebar-toggle {
     color: var(--text-muted);
     opacity: 0.7;
 }
+
+/* "Show N more / Show less" overflow row — quieter than a real chat row. */
+.rail__chat--more {
+    color: var(--text-muted);
+}
 /* Per-chat isolation (v9): a chat whose changes couldn't auto-merge shows an amber
    "conflict" status badge so it's visible in the rail without opening it. */
 .rail__chat-badge {

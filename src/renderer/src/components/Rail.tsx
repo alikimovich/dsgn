@@ -6,6 +6,7 @@ import {
   Plus,
   X,
 } from "lucide-react";
+import { useState } from "react";
 import type { SessionRecord } from "../../../shared/api";
 import {
   chatTitle,
@@ -42,6 +43,11 @@ const firstUserText = (
   entries: { role: string; text: string }[],
 ): string | undefined =>
   entries.find((e) => e.role === "user" && e.text.trim())?.text;
+
+/** Cap on visible chat rows per project. Live chats + running agents always
+ *  show (they're actionable); previous chats fill the remaining slots, the
+ *  rest sit behind a "Show N more" row. */
+const MAX_CHAT_ROWS = 5;
 
 /**
  * v5 left rail (Cursor-style) — the open projects, each led by a folder icon
@@ -83,6 +89,9 @@ export default function Rail({
   const updateProgress = useUpdate((s) => s.progress);
   const updateError = useUpdate((s) => s.error);
   const updateDismissedSubject = useUpdate((s) => s.dismissedSubject);
+  // Projects whose FULL previous-chats list is shown (session-only, resets on
+  // relaunch — a long history should re-tuck itself, like Cursor's sidebar).
+  const [moreShown, setMoreShown] = useState<Set<string>>(new Set());
 
   if (projects.length === 0) return null;
 
@@ -140,6 +149,20 @@ export default function Rail({
                 )
               : [];
             const working = expanded ? (spawns[p.key] ?? []) : [];
+            const live = expanded
+              ? [...sessionKeys]
+                  .reverse()
+                  .filter((sk) => (byKey[sk]?.messages.length ?? 0) > 0)
+              : [];
+            // Live + working rows always show; previous chats fill what's left
+            // of the row budget, the rest behind "Show N more".
+            const pastCapacity = Math.max(
+              0,
+              MAX_CHAT_ROWS - live.length - working.length,
+            );
+            const showAllPast = moreShown.has(p.key);
+            const pastVisible = showAllPast ? past : past.slice(0, pastCapacity);
+            const hiddenPast = past.length - pastVisible.length;
             const FolderIcon = expanded ? FolderOpen : Folder;
             return (
               <li
@@ -215,10 +238,7 @@ export default function Rail({
                   filling the rail with "New chat" rows). */}
                 {expanded && (
                   <ul className="rail__chats" aria-label={`${p.name}'s chats`}>
-                    {[...sessionKeys]
-                      .reverse()
-                      .filter((sk) => (byKey[sk]?.messages.length ?? 0) > 0)
-                      .map((sk) => {
+                    {live.map((sk) => {
                       const isActiveChat = sk === (p.activeSessionKey ?? p.key);
                       // Prefer the conversation-derived name (main's auto-title);
                       // fall back to the opening prompt until it's generated.
@@ -293,8 +313,8 @@ export default function Rail({
                         </button>
                       </li>
                     ))}
-                    {/* Previous chats for this project (newest first). */}
-                    {past.map((rec) => {
+                    {/* Previous chats for this project (newest first, capped). */}
+                    {pastVisible.map((rec) => {
                       const name =
                         rec.title ?? chatTitle(firstUserText(rec.transcript));
                       return (
@@ -325,6 +345,26 @@ export default function Rail({
                         </li>
                       );
                     })}
+                    {/* Overflow toggle — only when the history spills past the cap. */}
+                    {past.length > pastCapacity && (
+                      <li className="rail__chat-item">
+                        <button
+                          className="rail__chat rail__chat--more"
+                          onClick={() =>
+                            setMoreShown((prev) => {
+                              const next = new Set(prev);
+                              if (showAllPast) next.delete(p.key);
+                              else next.add(p.key);
+                              return next;
+                            })
+                          }
+                        >
+                          <span className="rail__chat-name">
+                            {showAllPast ? "Show less" : `Show ${hiddenPast} more`}
+                          </span>
+                        </button>
+                      </li>
+                    )}
                   </ul>
                 )}
               </li>

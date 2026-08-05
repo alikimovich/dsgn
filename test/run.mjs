@@ -80,6 +80,7 @@ const ELECTRON = [
   'rail-collapse',
   'chat-hide',
   'editor-search',
+  'rail-chat-overflow',
   'devserver-multi',
   'static-serve',
   'agent-multi',
