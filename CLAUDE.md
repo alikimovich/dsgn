@@ -120,6 +120,9 @@ src/
     live-commit.ts  one commit per turn on the LIVE checkout (pure): stages only the
                     files that turn changed, partial-commits so the user's own staged
                     work is untouched, skips non-repo-root projects, never throws
+    publish-scope.ts  what a session changed / is there anything to publish (pure) —
+                    measured against the default branch, since committed turns leave
+                    nothing to see in a HEAD-relative diff. Used by annotations.ts
     setup.ts, scaffold.ts, xcode.ts
     diagnose.ts, diag-cache.ts, diag-rules.ts         sessions-store.ts, edit-history.ts
     update.ts       self-update detection (pure: fetch + rev-list behind-count)
@@ -281,4 +284,4 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   (partial) commit, so a user's unrelated dirty/staged work is never swept in.
   Consequence for anything that asks "what did this session change?": a diff vs
   `HEAD` now returns nothing — compare against the merge base with the default
-  branch instead (`changedSince` in `annotations.ts` does).
+  branch instead (`src/main/publish-scope.ts` does, for the publish paths).

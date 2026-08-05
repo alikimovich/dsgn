@@ -7,6 +7,7 @@ import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
 import { buildPublishMessage } from '../shared/publish-message'
 import { ensureBranch } from './git'
+import { aheadOfBase, changedSince, defaultBase } from './publish-scope'
 
 /**
  * Annotation sidecar + engineer handoff (v3). Reviewer notes are pinned to
@@ -80,58 +81,6 @@ function removeAnnotation(root: string, id: string): Promise<Annotation[]> {
 async function git(root: string, args: string[]): Promise<string> {
   const { stdout } = await execFileP('git', args, { cwd: root, maxBuffer: 10 * 1024 * 1024 })
   return stdout.trim()
-}
-
-/** The repo's default branch (main/master) from origin/HEAD; `main` when it isn't set. */
-async function defaultBase(root: string): Promise<string> {
-  try {
-    return (
-      (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(
-        /^origin\//,
-        ''
-      ) || 'main'
-    )
-  } catch {
-    return 'main' // origin/HEAD not set — assume main
-  }
-}
-
-/** How many commits HEAD is ahead of the default branch (local ref, then the remote
- *  one). 0 when neither ref resolves — e.g. a repo that has never been pushed. */
-async function aheadOfBase(root: string, base: string): Promise<number> {
-  for (const ref of [base, `origin/${base}`]) {
-    try {
-      const n = Number(await git(root, ['rev-list', '--count', `${ref}..HEAD`]))
-      if (Number.isFinite(n)) return n
-    } catch {
-      /* ref doesn't exist here — try the next one */
-    }
-  }
-  return 0
-}
-
-/**
- * Tracked files this branch changed — COMMITTED work included. Praxis commits every
- * turn on the live checkout (`live-commit.ts`), so a diff vs HEAD alone would report
- * "nothing changed" for a session whose turns all landed. Diff against the merge base
- * with the default branch — two-dot, i.e. vs the WORKING TREE, so uncommitted edits
- * still count — and fall back to HEAD when there's no base to compare against (no
- * origin, unborn branch, or the checkout IS the base branch). Clean paths (no
- * porcelain quoting / rename arrows).
- */
-async function changedSince(root: string): Promise<string[]> {
-  const flags = ['-c', 'core.quotePath=false', 'diff', '--name-only']
-  let out: string
-  try {
-    const mergeBase = await git(root, ['merge-base', 'HEAD', await defaultBase(root)])
-    out = await git(root, [...flags, mergeBase])
-  } catch {
-    out = await git(root, [...flags, 'HEAD'])
-  }
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
 }
 
 async function publishToPr(root: string, opts: { title: string }): Promise<PublishResult> {

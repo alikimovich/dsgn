@@ -8,7 +8,11 @@
  * of the commit; a file the turn created is committed; `.praxis/` sidecar paths are
  * filtered; a no-op (content already at HEAD) commits nothing; an empty file list, a
  * non-repo directory and a repo SUBDIRECTORY are all skipped without throwing; and
- * `commitTitle` collapses/caps a multi-line prompt.
+ * `commitTitle` collapses/caps a multi-line prompt. Then the real `chat-isolation.ts`
+ * turn path (no Electron — its window/store seam is injected): two turns in a worktree
+ * produce two live commits and a clean live checkout. Finally `publish-scope.ts`: a
+ * fully-committed session is still in publish scope (the regression per-turn commits
+ * would otherwise cause).
  * Uses real temp git repos.
  *
  * Run with: bun run test:live-commit
@@ -21,6 +25,7 @@ import {
   isolatedCwd,
   releaseChat
 } from '../src/main/chat-isolation.ts'
+import { aheadOfBase, changedSince, defaultBase } from '../src/main/publish-scope.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -210,6 +215,34 @@ try {
     ok(porcelain(repo).length === 0, 'the live checkout is clean between turns')
 
     await releaseChat(key)
+  }
+
+  // --- 9. Committed turns must stay PUBLISHABLE (`publish-scope.ts`). A session whose
+  // turns all committed leaves a spotless working tree, so the old "diff vs HEAD" scope
+  // would have reported nothing to publish and shipped an empty file list in the PR. ---
+  {
+    const repo = makeRepo({ 'a.txt': 'a\n' })
+    ok((await defaultBase(repo)) === 'main', 'defaultBase falls back to main with no origin')
+    ok((await changedSince(repo)).length === 0, 'a clean checkout on the base branch: nothing')
+
+    g(repo, 'checkout', '-q', '-b', 'praxis/main')
+    writeFileSync(join(repo, 'a.txt'), 'turn 1\n')
+    await commitLiveTurn(repo, ['a.txt'], { title: 'turn one' })
+    writeFileSync(join(repo, 'b.txt'), 'turn 2\n')
+    await commitLiveTurn(repo, ['b.txt'], { title: 'turn two' })
+    ok(porcelain(repo).length === 0, 'the work is fully committed (nothing vs HEAD)')
+    const scope = await changedSince(repo)
+    ok(
+      scope.length === 2 && scope.includes('a.txt') && scope.includes('b.txt'),
+      `both committed turns are still in scope (got ${scope.join(',')})`
+    )
+    ok((await aheadOfBase(repo, 'main')) === 2, 'ahead-of-base sees the two turn commits')
+
+    // …and an uncommitted hand edit on top still counts (two-dot diff vs the WORKING tree).
+    writeFileSync(join(repo, 'c.txt'), 'by hand\n')
+    g(repo, 'add', 'c.txt')
+    ok((await changedSince(repo)).includes('c.txt'), 'uncommitted work is still in scope')
+    ok((await aheadOfBase(repo, 'nope')) === 0, 'an unresolvable base is 0, not a throw')
   }
 } finally {
   rmSync(base, { recursive: true, force: true })

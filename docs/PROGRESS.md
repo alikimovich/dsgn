@@ -39,8 +39,12 @@ list in the PR body. It now diffs vs the merge base with the default branch
 (two-dot, so uncommitted edits still count) and falls back to HEAD; the
 "nothing staged" abort inside is now "nothing staged AND nothing ahead of base",
 and the handoff commit is skipped when there's nothing to stage. `shipToMain`
-needed no change (it already counted `base..branch`) and now shares the
-extracted `defaultBase` helper.
+needed no change (it already counted `base..branch`) and now shares the same
+`defaultBase`. Those three git questions moved to a new pure
+`src/main/publish-scope.ts` purely so they're testable: `annotations.ts` imports
+`electron`, and a bun test can't load it (`SyntaxError: Export named 'ipcMain'
+not found`) — the same reason `chat-worktrees.ts` was split from
+`chat-isolation.ts`.
 
 `test/live-commit.mjs` (unit tier) covers the helper against real temp repos —
 plus a section that drives `chat-isolation.ts` itself with its window/store seam

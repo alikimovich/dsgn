@@ -161,7 +161,8 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       partial (pathspec) commit, so the user's unrelated dirty/staged work is
       untouched; non-repo-root projects are skipped. `src/main/live-commit.ts`,
       wired from `chat-isolation.ts` + `agent.ts`'s spawn finalizer;
-      `publishToPr`'s file list now diffs vs the default branch instead of HEAD.
+      `publishToPr`'s file list now diffs vs the default branch instead of HEAD
+      (extracted to `src/main/publish-scope.ts`).
       `test/live-commit.mjs`. See PROGRESS 2026-08-05.
       Not done deliberately: no user-facing toggle (the whole point is that it's
       always on) and no UI surfacing of the commit sha — `git log` is the UI.
