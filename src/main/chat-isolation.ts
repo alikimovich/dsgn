@@ -8,6 +8,7 @@ import type { AgentEvent, SessionRecord, SessionTranscriptEntry } from '../share
 import { projectKey } from '../shared/projectKey'
 import {
   applyParked,
+  completeResolve,
   completeTurn,
   createChatWorktree,
   discardParked,
@@ -396,8 +397,10 @@ export async function resolveParkedChat(
   }
   if (!prep.clean) return { ok: true, conflicted: prep.conflicted }
   // No overlap — the sides merged automatically. Commit + merge onto live and unpark now.
+  // Uses completeResolve (not completeTurn): stageResolve may have resolved a binary
+  // conflict by policy, and only completeResolve's patch-based apply can land that.
   const merge = st.chain.then(async () => {
-    const outcome = await completeTurn(st.liveRoot, st.wt, 'Resolve chat/live merge')
+    const outcome = await completeResolve(st.liveRoot, st.wt, 'Resolve chat/live merge')
     if (outcome.outcome === 'merged') {
       const group = `chat:${st.wt.id}:resolve`
       for (const e of outcome.edits) {

@@ -2,6 +2,37 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-05 — "Resolve it" couldn't actually resolve a binary conflict
+
+Reported live: a chat replaced an image the user had also replaced (a genuine
+binary conflict), parked as expected, but clicking **Resolve it** did nothing —
+the banner just came back. Root cause was two compounding bugs in the park/
+resolve pipeline (`chat-worktrees.ts`):
+
+- `stageResolve`'s conflict detection only looks for `<<<<<<<` text markers,
+  which a binary file can never carry. For a genuine binary conflict, the 3-way
+  `git apply` either fast-forwards or silently leaves the live bytes untouched —
+  either way `stageResolve` reported `clean: true` while quietly **dropping the
+  chat's own change**.
+- Even when that "clean" merge-back was attempted, it went through
+  `completeTurn` → `autoApplyWorktree`, which unconditionally refuses the
+  *whole* batch the instant any file's content contains a NUL byte (its binary
+  heuristic) — so it just re-parked, silently, every time.
+
+Fixed both: `stageResolve` now compares the post-apply file against the chat's
+own target blob (read via `git show <chatHeadBeforeReset>:<path>`, captured
+before the live-snapshot reset erases the ref) and, when they differ and the
+blob is binary, resolves by policy — keep the chat's version, which is what the
+review UI already told the user Resolve does; there's no way to byte-merge two
+PNGs. A new `completeResolve` (used only by the explicit resolve path, not the
+ordinary turn-end auto-merge — that one *should* keep parking on first contact
+with a binary drift, so the user gets the review UI at all) commits the
+worktree and lands it via the binary-capable `applyParked` patch-apply instead
+of `autoApplyWorktree`. Covered by a new `repo7` case in
+`test/chat-worktrees.mjs`. Known follow-up, not fixed here: a turn that mixes a
+binary conflict with an overlapping *text* conflict still routes its post-agent
+merge through the ordinary `completeTurn` and would re-park on the binary file.
+
 ## 2026-08-05 — Rail chats got a status dot and an inline rename (LKM-65)
 
 The rail listed a project's chats as bare names, so nothing distinguished a chat

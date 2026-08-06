@@ -1,5 +1,5 @@
 import { execFile } from 'child_process'
-import { readFile } from 'fs/promises'
+import { readFile, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { promisify } from 'util'
 import {
@@ -36,6 +36,21 @@ const git = (cwd: string, args: string[], timeout = 15000): Promise<{ stdout: st
     stdout: string
     stderr: string
   }>
+
+/** Binary-safe `git show <ref>:<path>` — `null` when the path didn't exist at that ref. */
+const readBlobAt = async (cwd: string, ref: string, rel: string): Promise<Buffer | null> => {
+  try {
+    const res = (await execFileP('git', ['show', `${ref}:${rel}`], {
+      cwd,
+      timeout: 15000,
+      maxBuffer: 64 * 1024 * 1024,
+      encoding: 'buffer'
+    })) as unknown as { stdout: Buffer }
+    return res.stdout
+  } catch {
+    return null
+  }
+}
 
 const revParse = async (cwd: string, rev: string): Promise<string> =>
   (await git(cwd, ['rev-parse', rev])).stdout.trim()
@@ -136,6 +151,24 @@ export async function applyParked(liveRoot: string, wt: Worktree): Promise<Apply
   return { ok: false, conflict: res.conflict, files, error: res.error }
 }
 
+/**
+ * Turn-end commit + merge for the EXPLICIT "Resolve it" path (post-`stageResolve`):
+ * identical in shape to `completeTurn`, but merges via the binary-capable patch apply
+ * (`applyParked`) instead of `autoApplyWorktree`'s plain-file-write path — a resolved
+ * binary conflict can't round-trip through `autoApplyWorktree`'s UTF-8 read, which
+ * unconditionally refuses any batch containing a NUL byte and would otherwise re-park
+ * the chat right after the user asked Praxis to resolve it. Safe to apply directly (no
+ * drift caution needed) because `stageResolve` just reset the worktree onto a live
+ * snapshot moments earlier, so this diffs and applies against exactly that snapshot.
+ */
+export async function completeResolve(liveRoot: string, wt: Worktree, message: string): Promise<TurnOutcome> {
+  const { committed, files } = await commitWorktree(wt, message)
+  if (!committed) return { outcome: 'noop', files: [], edits: [] }
+  const res = await applyParked(liveRoot, wt)
+  if (res.ok) return { outcome: 'merged', files: res.files, edits: [], newBase: res.newBase }
+  return { outcome: 'parked', files, edits: [] }
+}
+
 export interface ResolvePrep {
   /** Files left carrying `<<<<<<<` conflict markers — the agent must reconcile these.
    *  Empty ⇒ the two sides merged with no textual overlap (no agent turn needed). */
@@ -154,8 +187,19 @@ export interface ResolvePrep {
  * where they did. Advances `wt.baseSha` to the live snapshot so the eventual merge-back
  * (after the agent resolves) is a clean, driftless apply. The chat's diff is captured
  * BEFORE the reset (the reset would erase it). Returns the marker-bearing files.
+ *
+ * Binary files (images etc.) can never carry `<<<<<<<` markers, so a genuine binary
+ * conflict — live and chat both changed the same file to DIFFERENT bytes — produces no
+ * marker for the scan below to find. Left alone, `applyToWorkingTree`'s 3-way apply
+ * either fast-forwards cleanly or silently leaves the live bytes in place, which reads
+ * as "clean" while quietly dropping the chat's own change. Detect that case by comparing
+ * the post-apply file against the chat's own target blob (captured via `chatHead`, its
+ * HEAD before the reset below) and, when they differ, resolve by policy: keep the chat's
+ * version — there's no way to "merge" two PNGs, and that's what the review UI already
+ * tells the user Resolve does.
  */
 export async function stageResolve(liveRoot: string, wt: Worktree): Promise<ResolvePrep> {
+  const chatHead = await revParse(wt.path, 'HEAD') // the chat's own cumulative work, before we move the ref
   const patch = await diffWorktree(wt) // chat's cumulative changes — capture before reset
   const files = await changedFiles(wt)
   const indexFile = join(dirname(wt.path), `.index-resolve-${wt.id}`)
@@ -173,7 +217,14 @@ export async function stageResolve(liveRoot: string, wt: Worktree): Promise<Reso
     } catch {
       continue // deleted/renamed — no marker to find
     }
-    if (text.includes('<<<<<<<') && text.includes('>>>>>>>')) conflicted.push(rel)
+    if (text.includes('<<<<<<<') && text.includes('>>>>>>>')) {
+      conflicted.push(rel)
+      continue
+    }
+    const target = await readBlobAt(wt.path, chatHead, rel)
+    if (!target || !target.includes(0)) continue // text, or removed on the chat's side — marker scan already covers it
+    const current = await readFile(join(wt.path, rel)).catch(() => null)
+    if (!current || !target.equals(current)) await writeFile(join(wt.path, rel), target)
   }
   return { conflicted, files, clean: conflicted.length === 0 }
 }
