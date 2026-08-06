@@ -2,6 +2,43 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-05 — Rail chats got a status dot and an inline rename (LKM-65)
+
+The rail listed a project's chats as bare names, so nothing distinguished a chat
+still thinking from one that had finished and was waiting to be read — the whole
+point of running several at once. Each chat row now leads with a dot:
+
+- **hollow ring** — stale: nothing in flight, nothing new. Every past chat, and
+  every live one you've already read.
+- **filled grey, blinking** — a turn is in flight.
+- **filled green** — a turn finished while you were looking at a *different*
+  chat. `finish` sets `needsReview` only when the key it's given isn't the
+  active one and that chat was actually running (the bare `finish()` calls that
+  clear a reopened session's stale flag must not light it), and `setActiveChat`
+  clears it: opening a chat IS reading it. A turn that lands on screen never
+  goes green — you watched it happen.
+
+The dot sits in a 16px slot with the project row's own padding (8) and gap (7),
+which is the project glyph's geometry exactly — so dots centre on the folder
+icon above them while the names still start at 31px, the project name's indent.
+`test/rail-chat-status.mjs` asserts both numerically rather than by screenshot,
+since the alignment is the requirement. The spawn rows' old inline 5px
+`.rail__sdot` folded into the same slot (queued → idle, running → working),
+which also stops a background agent's name sitting 11px right of every other.
+
+Renaming is a hover pencil that swaps the row for an input (Enter/blur commits,
+Escape reverts, an empty or unchanged name is a cancel). Main stays the only
+writer of a name: `agent:rename-chat` writes it onto the LIVE session's record —
+which is what makes it persist on teardown, survive a reload through the
+workspace snapshot, and permanently block `maybeGenerateTitle` (it skips any
+chat whose record already has a name) — then re-broadcasts it as the usual
+`title` event. `sessions:rename` does the same for a past record. Both normalise
+the input (one line, collapsed whitespace, 120 cap) and the renderer adopts what
+main echoes back rather than the raw keystrokes.
+
+`Rail.tsx` was already near the size limit, so the row itself moved to
+`RailChatRow.tsx` and now renders all three kinds (live, spawn, past).
+
 ## 2026-08-05 — A pasted link no longer drags the chat bubble off the pane (LKM-64)
 
 Paste a Figma embed URL into an ask and the bubble hung off the LEFT edge of

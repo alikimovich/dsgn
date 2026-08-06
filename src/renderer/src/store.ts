@@ -108,6 +108,11 @@ interface ChatSlice {
   /** When the turn in flight started (`Date.now()`), or null when idle. The status
    *  line adds the live remainder to `workedMs`; `finish` folds it in. */
   turnStartedAt: number | null
+  /** A turn finished while the user was looking at some OTHER chat — the rail
+   *  marks it green ("done, go check it"). Cleared the moment they open it. A
+   *  turn that finishes on the chat that's already on screen never sets this:
+   *  they watched it land. */
+  needsReview: boolean
 }
 const emptySlice = (): ChatSlice => ({
   messages: [],
@@ -116,7 +121,8 @@ const emptySlice = (): ChatSlice => ({
   isolation: 'live',
   usage: emptyUsage(),
   workedMs: 0,
-  turnStartedAt: null
+  turnStartedAt: null,
+  needsReview: false
 })
 
 interface ChatState {
@@ -157,6 +163,8 @@ interface ChatState {
   tagRevert: (key: string, group: string) => void
   /** Drop a project's chat buffer (on close). */
   clearChat: (key: string) => void
+  /** Clear a chat's "done — go check it" flag (it's been read). */
+  markReviewed: (key: string) => void
   // Actions default to the active project; pass a key to target a backgrounded one.
   appendUser: (
     text: string,
@@ -212,7 +220,9 @@ export const useChat = create<ChatState>((set, get) => {
     isolation: 'live',
     setActiveChat: (key) =>
       set((s) => {
-        const slice = s.byKey[key] ?? emptySlice()
+        const prev = s.byKey[key] ?? emptySlice()
+        // Opening a chat IS reading it — drop any "done, go check it" mark.
+        const slice = prev.needsReview ? { ...prev, needsReview: false } : prev
         return {
           activeKey: key,
           byKey: { ...s.byKey, [key]: slice },
@@ -247,7 +257,8 @@ export const useChat = create<ChatState>((set, get) => {
           // in-flight turn times from now — its real start is already gone.
           usage: prev.usage,
           workedMs: prev.workedMs,
-          turnStartedAt: isRunning ? Date.now() : prev.turnStartedAt
+          turnStartedAt: isRunning ? Date.now() : prev.turnStartedAt,
+          needsReview: prev.needsReview
         }
         return key === s.activeKey
           ? {
@@ -277,6 +288,12 @@ export const useChat = create<ChatState>((set, get) => {
         const byKey = { ...s.byKey }
         delete byKey[key]
         return { byKey }
+      }),
+    markReviewed: (key) =>
+      set((s) => {
+        const slice = s.byKey[key]
+        if (!slice?.needsReview) return {}
+        return { byKey: { ...s.byKey, [key]: { ...slice, needsReview: false } } }
       }),
     appendUser: (text, key, extras) =>
       patch(key, (sl) => ({
@@ -357,7 +374,10 @@ export const useChat = create<ChatState>((set, get) => {
         })
       })),
     addUsage: (delta, key) => patch(key, (sl) => ({ ...sl, usage: sumUsage(sl.usage, delta) })),
-    finish: (key) =>
+    finish: (key) => {
+      // A turn that lands on a chat the user isn't looking at is the one worth
+      // flagging green in the rail; one that lands on screen was already seen.
+      const unseen = key !== undefined && key !== get().activeKey
       patch(key, (sl) => ({
         ...sl,
         isRunning: false,
@@ -365,8 +385,13 @@ export const useChat = create<ChatState>((set, get) => {
         // Fold the finished turn's elapsed time into the chat's total and stop the
         // clock — the gap until the next turn is idle time, which doesn't count.
         workedMs: sl.workedMs + (sl.turnStartedAt ? Date.now() - sl.turnStartedAt : 0),
-        turnStartedAt: null
-      })),
+        turnStartedAt: null,
+        // Only a turn that was actually running counts as a completion — the bare
+        // `finish()` calls that clear a reopened session's stale running flag must
+        // not light the badge.
+        needsReview: sl.needsReview || (unseen && sl.isRunning)
+      }))
+    },
     isRunningFor: (key) => !!get().byKey[key]?.isRunning
   }
 })
@@ -1051,6 +1076,8 @@ interface HistoryState {
   load: (root: string) => Promise<void>
   /** Delete one record and drop it from the list. */
   remove: (root: string, id: string) => Promise<void>
+  /** Rename one record (rail inline rename); no-op if main rejects the name. */
+  rename: (root: string, id: string, title: string) => Promise<void>
 }
 
 export const useHistory = create<HistoryState>((set) => ({
@@ -1075,6 +1102,20 @@ export const useHistory = create<HistoryState>((set) => ({
     }
     set((s) => ({
       byKey: { ...s.byKey, [key]: (s.byKey[key] ?? []).filter((r) => r.id !== id) }
+    }))
+  },
+  rename: async (root, id, title) => {
+    const key = projectKey(root)
+    // Main normalises + validates the name, and is the only writer of the record —
+    // adopt what it echoes back rather than the raw input.
+    const res = await window.api.sessions.rename(id, title).catch(() => null)
+    if (!res?.ok || !res.title) return
+    const named = res.title
+    set((s) => ({
+      byKey: {
+        ...s.byKey,
+        [key]: (s.byKey[key] ?? []).map((r) => (r.id === id ? { ...r, title: named } : r))
+      }
     }))
   }
 }))

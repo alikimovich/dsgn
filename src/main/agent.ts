@@ -222,6 +222,10 @@ const runningCount = (parentKey: string): number =>
   [...spawns.values()].filter((s) => s.parentKey === parentKey).length
 const worktreesDir = (): string => join(dataDir(), 'worktrees')
 const firstLine = (t: string): string => (t.split('\n')[0] || 'Praxis comment edit').slice(0, 72)
+/** Normalise a user-typed chat name: one line, collapsed whitespace, capped.
+ *  Empty (after trimming) means "no rename" — the caller rejects it. */
+const cleanTitle = (t: unknown): string =>
+  typeof t === 'string' ? t.replace(/\s+/g, ' ').trim().slice(0, 120) : ''
 
 /** Tear down a session: stop it emitting, deny its prompts, provider teardown,
  * then persist it to history (v5-D) — a torn-down session is a "previous agent". */
@@ -741,6 +745,29 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     }
   )
 
+  // Rename a live chat (rail inline rename). Writing the name onto the session's
+  // record is what makes it stick: the record is persisted on teardown, the
+  // workspace snapshot replays it after a reload, and `maybeGenerateTitle` skips
+  // any chat whose record already carries a name — so a user-chosen name can never
+  // be overwritten by the auto-namer. The `title` event keeps every other renderer
+  // view (and this window's own store) in step.
+  ipcMain.handle('agent:rename-chat', (_e, sessionKey: string, title: string) => {
+    const session = sessions.get(sessionKey)
+    if (!session) return { ok: false, error: 'no live chat' }
+    const name = cleanTitle(title)
+    if (!name) return { ok: false, error: 'empty name' }
+    session.record.title = name
+    // A resumed/parked chat may already have its record on disk — keep that copy
+    // in step too. A never-persisted live record stays out of `sessions:list`.
+    try {
+      if (store().get(session.record.id)) store().save(session.record)
+    } catch {
+      /* history is non-critical */
+    }
+    session.emit({ type: 'title', title: name })
+    return { ok: true, title: name }
+  })
+
   // Does this project still have a live session? (LRU eviction can suspend a
   // backgrounded project's session; the renderer reopens it on switch-back.)
   ipcMain.handle('agent:is-open', (_e, root: string) => sessions.has(projectKey(root)))
@@ -1007,6 +1034,15 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
   // is persisted only on teardown, so it isn't here).
   ipcMain.handle('sessions:list', (_e, root: string) => store().list(projectKey(root)))
   ipcMain.handle('sessions:get', (_e, id: string) => store().get(id))
+  ipcMain.handle('sessions:rename', (_e, id: string, title: string) => {
+    const name = cleanTitle(title)
+    if (!name) return { ok: false, error: 'empty name' }
+    const rec = store().get(id)
+    if (!rec) return { ok: false, error: 'unknown session' }
+    rec.title = name
+    store().save(rec)
+    return { ok: true, title: name }
+  })
   ipcMain.handle('sessions:remove', (_e, id: string) => store().remove(id))
 
   // v9 reattach: everything still live in main, for a fresh renderer (after a
