@@ -107,6 +107,7 @@
     "test:live-commit": "bun test/live-commit.mjs",
     "test:file-tree": "bun test/file-tree.mjs",
     "test:file-ops": "bun test/file-ops.mjs",
+    "test:attachments": "bun test/attachments.mjs",
     "test:rules": "bun test/rules.mjs",
     "test:tw-classes": "bun test/tw-classes.mjs",
     "test:tw-styles": "bun test/tw-styles.mjs",

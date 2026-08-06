@@ -1321,6 +1321,11 @@ export interface PraxisApi {
       sessionKey: string
     ) => Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }>
     send: (text: string, images?: ImageAttachment[]) => Promise<void>
+    /** Write a pasted image (clipboard bytes, no on-disk origin) into the app's
+     *  attachments dir and return its absolute path — so the turn can tell the
+     *  agent WHERE the image it can see actually lives. '' if it couldn't be
+     *  written; a dropped image needs no call (it already has a path). */
+    saveAttachment: (image: ImageAttachment, name?: string) => Promise<string>
     setModel: (model: string) => Promise<void>
     /** Change the permission posture live (drives the SDK's setPermissionMode). */
     setPermissionMode: (mode: PermissionMode) => Promise<void>

@@ -80,6 +80,11 @@ src/
                     renderer-supplied path is re-validated (no traversal, no
                     .git/.praxis/.dsgn/node_modules), delete goes to the OS trash
     agent.ts        persistent multi-turn agent session (streams over agent:* IPC)
+    attachments.ts  gives a PASTED composer image a path (attachments:save writes
+                    the clipboard bytes under <userData>/praxis/attachments so the
+                    turn can tell the agent where the image it can see lives; a
+                    DROPPED image needs no call — the renderer already has its
+                    path). Pure fs+path; sanitizes the renderer-supplied name
     backends/       provider seam: claude.ts, codex.ts, gemini.ts behind pickProvider
                     (gemini currently has NO SDK dep — treat as experimental)
     simulator.ts    iOS Simulator preview (Metro/Expo detect, MJPEG sim bridge)

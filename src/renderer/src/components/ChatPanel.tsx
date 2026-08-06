@@ -79,9 +79,21 @@ import RunStats from "./RunStats";
 
 // A pending composer attachment. Images carry base64 bytes + a data URL for the
 // thumbnail (sent as a vision block); files carry only their name + absolute path
-// (folded into the prompt text so the agent reads them itself).
+// (folded into the prompt text so the agent reads them itself). An image ALSO
+// carries a path when it came from one — dropped from Finder, that's its real
+// location; pasted from the clipboard, `path` is empty until `send` materializes
+// the bytes (see saveAttachment). Either way the path is named in the prompt, so
+// the agent can copy/move the actual file instead of asking where it lives.
 type Attachment =
-  | { id: string; kind: "image"; mediaType: string; data: string; url: string }
+  | {
+      id: string;
+      kind: "image";
+      mediaType: string;
+      data: string;
+      url: string;
+      name: string;
+      path: string;
+    }
   | { id: string; kind: "file"; name: string; path: string };
 
 // The model picker is per-backend: Claude's own models vs. the models the
@@ -889,18 +901,29 @@ export default function ChatPanel(): React.JSX.Element {
     [],
   );
 
-  // Read image files (paste/drop) into base64 attachments + a preview URL.
+  // Read image files (paste/drop) into base64 attachments + a preview URL. A
+  // dropped image also keeps its on-disk path (recovered in the preload); a
+  // pasted one has none, and gets one written for it at send time.
   const addImageFiles = (files: File[]): void => {
     let nextId = Date.now();
     for (const file of files) {
       if (!file.type.startsWith("image/")) continue;
+      const path = window.api.pathForFile(file);
       const reader = new FileReader();
       reader.onload = () => {
         const url = String(reader.result); // data:<mime>;base64,<data>
         const data = url.slice(url.indexOf(",") + 1);
         setAttachments((a) => [
           ...a,
-          { id: `att${nextId++}`, kind: "image", mediaType: file.type, data, url },
+          {
+            id: `att${nextId++}`,
+            kind: "image",
+            mediaType: file.type,
+            data,
+            url,
+            name: file.name,
+            path,
+          },
         ]);
       };
       reader.readAsDataURL(file);
@@ -949,9 +972,13 @@ export default function ChatPanel(): React.JSX.Element {
   const send = (raw: string = input): void => {
     const text = raw.trim();
     if ((!text && attachments.length === 0) || isRunning) return;
-    const images = attachments
-      .filter((a) => a.kind === "image")
-      .map((a) => ({ mediaType: a.mediaType, data: a.data }));
+    const imageAtts = attachments.flatMap((a) =>
+      a.kind === "image" ? [a] : [],
+    );
+    const images = imageAtts.map((a) => ({
+      mediaType: a.mediaType,
+      data: a.data,
+    }));
     const files = attachments.filter((a) => a.kind === "file");
     // File attachments ride as hidden context (like the selection pill below):
     // the agent gets each absolute path prepended so it can read the file with
@@ -973,9 +1000,11 @@ export default function ChatPanel(): React.JSX.Element {
       ? `📎 ${files.map((f) => f.name).join(", ")}`
       : "";
     appendUser(text || fileSummary, undefined, {
-      attachments: attachments
-        .filter((a) => a.kind === "image")
-        .map((a) => ({ id: a.id, mediaType: a.mediaType, url: a.url })),
+      attachments: imageAtts.map((a) => ({
+        id: a.id,
+        mediaType: a.mediaType,
+        url: a.url,
+      })),
       selection: selected ? selectionForBubble(selected) : undefined,
     });
     startAssistant();
@@ -985,10 +1014,33 @@ export default function ChatPanel(): React.JSX.Element {
     // A newly-sent ask becomes the pinned message — any previously-expanded
     // ask should collapse back to its clamp instead of hanging around full-height.
     setExpandedUserMsgs(new Set());
-    void window.api.agent.send(
-      fileCtx + ctx + text,
-      images.length ? images : undefined,
-    );
+    // Images ride as vision blocks, but the agent also needs to know WHERE each
+    // one is: without a path it can see a screenshot and still have to ask the
+    // user to find it before it can copy it into the repo. Dropped images
+    // already have their real path; pasted ones are only clipboard bytes, so
+    // main writes them out first (at send, not at paste — an attachment the user
+    // removes again should never hit the disk). A save that fails just yields no
+    // path, leaving that image vision-only as before.
+    void (async () => {
+      const paths = await Promise.all(
+        imageAtts.map((a) =>
+          a.path
+            ? Promise.resolve(a.path)
+            : window.api.agent
+                .saveAttachment({ mediaType: a.mediaType, data: a.data }, a.name)
+                .catch(() => ""),
+        ),
+      );
+      const imageCtx = paths.some(Boolean)
+        ? `[Attached images — the image(s) in this message are on disk at]\n${paths
+            .filter(Boolean)
+            .join("\n")}\n\n`
+        : "";
+      await window.api.agent.send(
+        fileCtx + imageCtx + ctx + text,
+        images.length ? images : undefined,
+      );
+    })();
     if (selected) setSelected(null);
   };
 
@@ -1390,7 +1442,7 @@ export default function ChatPanel(): React.JSX.Element {
               {attachments.map((a) => (
                 <div
                   key={a.id}
-                  title={a.kind === "file" ? a.path : undefined}
+                  title={a.path || undefined}
                   className={
                     a.kind === "image"
                       ? "relative h-12 w-12 overflow-hidden rounded-md border border-border"
