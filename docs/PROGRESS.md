@@ -33,6 +33,17 @@ app state.
 
 The composer chip's tooltip now shows that path for images too (it already did
 for file cards), so "what exactly am I sending?" is answerable before sending.
+## 2026-08-05 — Composer attachments line up with the prompt text (LKM-66)
+
+A pasted image (or dropped file) chip floated in the middle of the composer
+instead of sitting above the caret. The row wasn't styled centred — shadcn's
+`InputGroup` is `flex items-center`, and the block-end addon (the model/permission
+bar) flips it to `flex-col` via `has-[>[data-align=block-end]]:flex-col`, so every
+direct child without `w-full` shrinks to fit and centres on the cross axis. The
+chip row now takes `w-full` and the textarea's own 14px left padding, which is the
+same fix `Inspector` (the selection pill row) already carried. `test/chat-render.mjs`
+asserts the numbers — chip's left edge == where the placeholder starts, row width
+== the textarea's — since the alignment IS the requirement.
 
 ## 2026-08-05 — Rail chats got a status dot and an inline rename (LKM-65)
 
