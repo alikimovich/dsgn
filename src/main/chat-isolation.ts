@@ -391,10 +391,43 @@ export async function resolveParkedChat(
       st.parked = false
       dropParkRecord(st)
       emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
+      return
     }
+    if (outcome.outcome === 'noop') {
+      // Staging showed the live tree already CONTAINS the chat's work (or the
+      // chat's diff vanished against it) — there is nothing left to merge.
+      // Leaving the chat parked here made "Resolve it" a silent infinite loop:
+      // ok:true + still-parked re-renders the same card. Unpark.
+      st.parked = false
+      dropParkRecord(st)
+      emitIsolation(sessionKey, 'isolated', st.wt.branch)
+      return
+    }
+    // 'parked' again — autoApplyWorktree refused the batch (it only writes text
+    // files that still match the snapshot; a DELETED or binary file in the
+    // chat's diff refuses forever, so retrying can never converge). The user
+    // explicitly asked to resolve, so fall back to the explicit-apply
+    // machinery (the review modal's Apply): a 3-way `git apply` handles
+    // deletions/binary/modes. No per-file undo entries for this path — same
+    // trade-off as the modal's Apply.
+    const res = await applyParked(st.liveRoot, st.wt)
+    if (res.ok) {
+      if (res.newBase) st.wt.baseSha = res.newBase
+      st.parked = false
+      dropParkRecord(st)
+      emitIsolation(sessionKey, 'merged', st.wt.branch, res.files)
+      return
+    }
+    throw new Error(
+      `the merged result couldn't be written onto the project${res.error ? ` (${res.error.slice(0, 200)})` : ''}`
+    )
   })
   st.chain = merge.catch(() => {})
-  await merge.catch(() => {})
+  try {
+    await merge
+  } catch (e) {
+    return { ok: false, conflicted: [], error: e instanceof Error ? e.message : String(e) }
+  }
   return { ok: true, conflicted: [] }
 }
 

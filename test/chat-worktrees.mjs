@@ -244,6 +244,37 @@ try {
     "the agent's reconciled result landed on the live tree"
   )
 
+  // ============================================================================
+  // repo7 — a parked DELETION can actually resolve. completeTurn's file-copy
+  //         merge refuses deletes FOREVER (readFile on the missing file), which
+  //         used to make the conflict card's "Resolve it" a silent infinite
+  //         loop; resolveParkedChat now falls back to applyParked (3-way
+  //         `git apply`) — this is that exact chain at the primitive level.
+  // ============================================================================
+  const repo7 = makeRepo('repo7', { 'README.md': 'base\n', 'Doomed.tsx': 'delete me\n' })
+  const wt7 = await createChatWorktree(repo7, 'chatseven', worktreesDir)
+  // Chat deletes a file and edits README; the user concurrently edits README live → park.
+  rmSync(join(wt7.path, 'Doomed.tsx'))
+  writeFileSync(join(wt7.path, 'README.md'), 'chat version\n')
+  writeFileSync(join(repo7, 'README.md'), 'user version\n')
+  const p7 = await completeTurn(repo7, wt7, 'park with deletion')
+  ok(p7.outcome === 'parked', `deletion + drift parks: ${p7.outcome}`)
+  const prep7 = await stageResolve(repo7, wt7)
+  ok(prep7.conflicted.includes('README.md'), `overlapping README carries markers: ${prep7.conflicted}`)
+  ok(!existsSync(join(wt7.path, 'Doomed.tsx')), 'the re-laid diff kept the deletion staged')
+  // The agent reconciles the markers…
+  writeFileSync(join(wt7.path, 'README.md'), 'user version + chat version\n')
+  const done7 = await completeTurn(repo7, wt7, 'resolve with deletion')
+  // …but the file-copy merge still refuses the deletion — the loop to escape.
+  ok(done7.outcome === 'parked', `file-copy merge still refuses a deletion: ${done7.outcome}`)
+  const ap7 = await applyParked(repo7, wt7)
+  ok(ap7.ok === true, `applyParked fallback lands it: ${JSON.stringify(ap7)}`)
+  ok(!existsSync(join(repo7, 'Doomed.tsx')), 'the deletion reached the live tree')
+  ok(
+    readFileSync(join(repo7, 'README.md'), 'utf8') === 'user version + chat version\n',
+    'the reconciled README landed on the live tree'
+  )
+
   if (failed === 0) console.log('CHAT-WORKTREES OK — fork/turn-merge/incremental/sync/park/apply/discard/resolve')
   else console.error(`CHAT-WORKTREES: ${failed} assertion(s) failed`)
   process.exitCode = failed === 0 ? 0 : 1
