@@ -14,6 +14,7 @@ import type {
   WorkspaceSnapshot
 } from '../shared/api'
 import { projectKey } from '../shared/projectKey'
+import { pruneAttachments, saveImageAttachment } from './attachments'
 import { type ProviderSession, pickProvider } from './backends'
 import { EDIT_TOOLS } from './backends/tools'
 import {
@@ -833,6 +834,20 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     if (activeKey) await beforeTurn(activeKey, text)
     session.send(text, images)
   })
+
+  // Give a PASTED image a path. A dropped image already has one (the renderer
+  // recovers it via webUtils), but clipboard bytes exist nowhere on disk, so the
+  // agent could see the screenshot and still have no file to copy or point at.
+  // The renderer calls this as it sends, then names the path in the prompt.
+  ipcMain.handle(
+    'attachments:save',
+    async (_e, image: ImageAttachment, name?: string): Promise<string> => {
+      const dir = join(dataDir(), 'attachments')
+      const saved = await saveImageAttachment(dir, image, name, String(Date.now()))
+      void pruneAttachments(dir, Date.now())
+      return saved
+    }
+  )
 
   // Tag the live session with branch / PR metadata for its history record (the
   // renderer knows these; main captures transcript + files). No-op if no session.

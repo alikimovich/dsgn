@@ -405,6 +405,8 @@ const api: PraxisApi = {
       ipcRenderer.invoke('agent:rename-chat', sessionKey, title),
     send: (text: string, images?: ImageAttachment[]): Promise<void> =>
       ipcRenderer.invoke('agent:send', text, images),
+    saveAttachment: (image: ImageAttachment, name?: string): Promise<string> =>
+      ipcRenderer.invoke('attachments:save', image, name),
     setModel: (model: string): Promise<void> => ipcRenderer.invoke('agent:set-model', model),
     setPermissionMode: (mode: PermissionMode): Promise<void> =>
       ipcRenderer.invoke('agent:set-permission-mode', mode),

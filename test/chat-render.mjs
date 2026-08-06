@@ -544,6 +544,43 @@ try {
     timeout: 5000
   })
 
+  // Drop an IMAGE file → it becomes a vision thumbnail as before, but it ALSO
+  // keeps the file's real on-disk path (LKM-67), which the turn hands to the
+  // agent so it can copy/point at the actual file instead of asking where it
+  // lives. Same real-preload seam as the file card above.
+  const droppedImage = join(artifacts, 'dropped-shot.png')
+  writeFileSync(
+    droppedImage,
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64'
+    )
+  )
+  await win.evaluate(() => {
+    const fi = document.createElement('input')
+    fi.type = 'file'
+    fi.id = '__test_image_input'
+    fi.style.display = 'none'
+    document.body.appendChild(fi)
+  })
+  await win.setInputFiles('#__test_image_input', droppedImage)
+  await win.evaluate(() => {
+    const fi = document.getElementById('__test_image_input')
+    const dt = new DataTransfer()
+    dt.items.add(fi.files[0])
+    const ta = document.querySelector('.composer__input')
+    ta.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+    fi.remove()
+  })
+  const imageChip = await win.waitForSelector(`[title="${droppedImage}"]`, { timeout: 5000 })
+  if (!(await imageChip.$('img[alt="attachment"]'))) {
+    throw new Error('a dropped image should still render as a thumbnail, not a file card')
+  }
+  await win.click('button[aria-label="Remove image"]')
+  await win.waitForFunction((p) => !document.querySelector(`[title="${p}"]`), droppedImage, {
+    timeout: 5000
+  })
+
   // A SENT user turn keeps its images + the selected element pill in the bubble
   // (LKM-53) — they used to vanish from the composer without surfacing in the
   // transcript. `appendUser` carries them onto the message.

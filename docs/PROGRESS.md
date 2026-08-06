@@ -2,6 +2,37 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-05 — A shared image now comes with its path, not just its pixels (LKM-67)
+
+A non-image file dropped into the composer already rode along as an absolute
+path the agent could read. An image didn't: it became a base64 vision block and
+nothing else. So the model could *see* the screenshot perfectly and still had no
+file to copy into the repo — it would answer "I need the file path on your
+computer, could you tell me where this is saved?", which is an absurd question
+to ask about an image the user just handed it.
+
+Both kinds of image now carry a path, and `send` names it in the same hidden
+context block the file attachments use:
+
+- **Dropped from Finder** — it already has one. `addImageFiles` calls the same
+  `pathForFile` preload seam `addFiles` does, so the real location rides along.
+- **Pasted from the clipboard** — there is no file anywhere; it's bytes in
+  memory. `attachments:save` writes them into
+  `<userData>/praxis/attachments/<stamp>-<name>.<ext>` and hands back that path.
+
+The save happens at **send**, not at paste: an attachment the user thinks better
+of and removes should never touch the disk. It's also best-effort — a refused or
+failed save just yields no path, which is exactly today's behavior (vision block
+alone), never a broken turn. `src/main/attachments.ts` holds the naming/writing/
+pruning (pure, fs-only, so `test/attachments.mjs` covers it); the media type
+picks the extension from a fixed table and the browser-supplied filename is
+reduced to a bare stem, so a name like `../../etc/passwd` can only ever produce
+`<stamp>-passwd.png` inside the attachments dir. Saved copies older than a week
+are swept on the next save — these are scratch copies of clipboard bytes, not
+app state.
+
+The composer chip's tooltip now shows that path for images too (it already did
+for file cards), so "what exactly am I sending?" is answerable before sending.
 ## 2026-08-05 — Composer attachments line up with the prompt text (LKM-66)
 
 A pasted image (or dropped file) chip floated in the middle of the composer
