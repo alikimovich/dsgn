@@ -478,6 +478,33 @@ try {
   await win.waitForSelector('.composer__input ~ * img, .composer img', { timeout: 5000 }).catch(() => {})
   const thumb = await win.$('img[alt="attachment"]')
   if (!thumb) throw new Error('pasted image should add a thumbnail attachment')
+  // LKM-66: the chip row is left-aligned with the prompt text, not centered
+  // (the InputGroup is a flex column with items-center, so a shrink-to-fit row
+  // would float to the middle).
+  const attachAlign = await win.evaluate(() => {
+    const row = document.querySelector('.composer__attachments')
+    const chip = row?.firstElementChild
+    const ta = document.querySelector('.composer__input')
+    if (!row || !chip || !ta) return null
+    const style = getComputedStyle(ta)
+    return {
+      chipLeft: chip.getBoundingClientRect().left,
+      textLeft: ta.getBoundingClientRect().left + parseFloat(style.paddingLeft),
+      rowWidth: row.getBoundingClientRect().width,
+      inputWidth: ta.getBoundingClientRect().width,
+    }
+  })
+  if (!attachAlign) throw new Error('attachment chip row should be in the composer')
+  if (Math.abs(attachAlign.chipLeft - attachAlign.textLeft) > 1) {
+    throw new Error(
+      `attachment chip should start at the prompt text (${attachAlign.textLeft}), got ${attachAlign.chipLeft}`
+    )
+  }
+  if (Math.abs(attachAlign.rowWidth - attachAlign.inputWidth) > 1) {
+    throw new Error(
+      `attachment row should span the composer like the textarea (${attachAlign.inputWidth}), got ${attachAlign.rowWidth}`
+    )
+  }
   // Removing it clears the chip.
   await win.click('button[aria-label="Remove image"]')
   await win.waitForFunction(() => !document.querySelector('img[alt="attachment"]'), { timeout: 5000 })

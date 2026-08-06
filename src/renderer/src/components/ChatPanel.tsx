@@ -1386,7 +1386,11 @@ export default function ChatPanel(): React.JSX.Element {
             <Inspector element={selected} onClear={() => setSelected(null)} />
           )}
           {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-2 pt-2">
+            /* w-full: the InputGroup is a flex COLUMN with `items-center`, so a
+               shrink-to-fit row would sit centered above the textarea. Full
+               width + the textarea's own 14px left padding lines the chips up
+               with the prompt text (same trick as Inspector's pill row). */
+            <div className="composer__attachments flex w-full flex-wrap gap-1.5 pl-[14px] pr-3 pt-2">
               {attachments.map((a) => (
                 <div
                   key={a.id}
