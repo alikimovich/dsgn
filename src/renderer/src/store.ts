@@ -18,6 +18,7 @@ import type {
   UpdateStatus
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { emptyUsage, addUsage as sumUsage, type TokenUsage } from '../../shared/run-stats'
 import { type ChatAgentSettings, DEFAULT_MODEL, DEFAULT_PROVIDER } from './chat-settings'
 
 // The per-chat agent choices + their AgentOptions mappings live in their own
@@ -97,12 +98,31 @@ interface ChatSlice {
    *  conflict card. Empty/undefined otherwise (and after a reload, where the snapshot
    *  doesn't carry them — the card then omits the file list). */
   isolationFiles?: string[]
+  /** Tokens this chat has spent since it opened (summed from the backends' `usage`
+   *  event deltas) — the status line's ↑/↓ counters. */
+  usage: TokenUsage
+  /** Time this chat has spent WORKING, in ms: the sum of its finished turns'
+   *  durations. Idle time between turns is deliberately excluded — a wall-clock
+   *  "session age" would mostly measure how long the user was at lunch. */
+  workedMs: number
+  /** When the turn in flight started (`Date.now()`), or null when idle. The status
+   *  line adds the live remainder to `workedMs`; `finish` folds it in. */
+  turnStartedAt: number | null
+  /** A turn finished while the user was looking at some OTHER chat — the rail
+   *  marks it green ("done, go check it"). Cleared the moment they open it. A
+   *  turn that finishes on the chat that's already on screen never sets this:
+   *  they watched it land. */
+  needsReview: boolean
 }
 const emptySlice = (): ChatSlice => ({
   messages: [],
   isRunning: false,
   streamingId: null,
-  isolation: 'live'
+  isolation: 'live',
+  usage: emptyUsage(),
+  workedMs: 0,
+  turnStartedAt: null,
+  needsReview: false
 })
 
 interface ChatState {
@@ -143,6 +163,8 @@ interface ChatState {
   tagRevert: (key: string, group: string) => void
   /** Drop a project's chat buffer (on close). */
   clearChat: (key: string) => void
+  /** Clear a chat's "done — go check it" flag (it's been read). */
+  markReviewed: (key: string) => void
   // Actions default to the active project; pass a key to target a backgrounded one.
   appendUser: (
     text: string,
@@ -154,6 +176,8 @@ interface ChatState {
   startAssistant: (key?: string) => void
   appendDelta: (text: string, key?: string) => void
   appendStatus: (text: string, key?: string) => void
+  /** Add one backend `usage` event's token delta to this chat's running totals. */
+  addUsage: (delta: TokenUsage, key?: string) => void
   finish: (key?: string) => void
   /** Is the given project's turn in flight (for the rail's working dot)? */
   isRunningFor: (key: string) => boolean
@@ -196,7 +220,9 @@ export const useChat = create<ChatState>((set, get) => {
     isolation: 'live',
     setActiveChat: (key) =>
       set((s) => {
-        const slice = s.byKey[key] ?? emptySlice()
+        const prev = s.byKey[key] ?? emptySlice()
+        // Opening a chat IS reading it — drop any "done, go check it" mark.
+        const slice = prev.needsReview ? { ...prev, needsReview: false } : prev
         return {
           activeKey: key,
           byKey: { ...s.byKey, [key]: slice },
@@ -224,7 +250,15 @@ export const useChat = create<ChatState>((set, get) => {
           streamingId,
           title: prev.title,
           isolation: prev.isolation,
-          isolationFiles: prev.isolationFiles
+          isolationFiles: prev.isolationFiles,
+          // A restored chat's past turns carry no usage/timing (neither the
+          // transcript nor the live snapshot records them), so its counters start
+          // from zero and describe this app run's work on the chat. A reattached
+          // in-flight turn times from now — its real start is already gone.
+          usage: prev.usage,
+          workedMs: prev.workedMs,
+          turnStartedAt: isRunning ? Date.now() : prev.turnStartedAt,
+          needsReview: prev.needsReview
         }
         return key === s.activeKey
           ? {
@@ -254,6 +288,12 @@ export const useChat = create<ChatState>((set, get) => {
         const byKey = { ...s.byKey }
         delete byKey[key]
         return { byKey }
+      }),
+    markReviewed: (key) =>
+      set((s) => {
+        const slice = s.byKey[key]
+        if (!slice?.needsReview) return {}
+        return { byKey: { ...s.byKey, [key]: { ...slice, needsReview: false } } }
       }),
     appendUser: (text, key, extras) =>
       patch(key, (sl) => ({
@@ -295,7 +335,10 @@ export const useChat = create<ChatState>((set, get) => {
             { id, role: 'assistant', text: '', statuses: [], segments: [] }
           ],
           isRunning: true,
-          streamingId: id
+          streamingId: id,
+          // Start the working-time clock unless a turn is somehow already timing
+          // (two starts without a finish would otherwise lose the first's elapsed).
+          turnStartedAt: sl.turnStartedAt ?? Date.now()
         }
       }),
     appendDelta: (text, key) =>
@@ -330,10 +373,52 @@ export const useChat = create<ChatState>((set, get) => {
           return { ...m, statuses: [...m.statuses, text], segments }
         })
       })),
-    finish: (key) => patch(key, (sl) => ({ ...sl, isRunning: false, streamingId: null })),
+    addUsage: (delta, key) => patch(key, (sl) => ({ ...sl, usage: sumUsage(sl.usage, delta) })),
+    finish: (key) => {
+      // A turn that lands on a chat the user isn't looking at is the one worth
+      // flagging green in the rail; one that lands on screen was already seen.
+      const unseen = key !== undefined && key !== get().activeKey
+      patch(key, (sl) => ({
+        ...sl,
+        isRunning: false,
+        streamingId: null,
+        // Fold the finished turn's elapsed time into the chat's total and stop the
+        // clock — the gap until the next turn is idle time, which doesn't count.
+        workedMs: sl.workedMs + (sl.turnStartedAt ? Date.now() - sl.turnStartedAt : 0),
+        turnStartedAt: null,
+        // Only a turn that was actually running counts as a completion — the bare
+        // `finish()` calls that clear a reopened session's stale running flag must
+        // not light the badge.
+        needsReview: sl.needsReview || (unseen && sl.isRunning)
+      }))
+    },
     isRunningFor: (key) => !!get().byKey[key]?.isRunning
   }
 })
+
+/** What the chat's status line shows: the active chat's token totals + how long
+ *  it has been working (`turnStartedAt` non-null ⟺ that clock is still running). */
+export interface RunStats {
+  usage: TokenUsage
+  workedMs: number
+  turnStartedAt: number | null
+}
+
+/**
+ * The active chat's run stats. Selects the slice itself (a stable reference that
+ * only changes when that chat changes) rather than a derived object, so this
+ * doesn't re-render on every unrelated store write.
+ */
+export const useRunStats = (): RunStats => {
+  const slice = useChat((s) => s.byKey[s.activeKey])
+  return {
+    usage: slice?.usage ?? EMPTY_USAGE,
+    workedMs: slice?.workedMs ?? 0,
+    turnStartedAt: slice?.turnStartedAt ?? null
+  }
+}
+// Module-level so an absent slice yields the same object every render.
+const EMPTY_USAGE = emptyUsage()
 
 /**
  * Rebuild chat messages from a persisted session transcript (v9 resume). The
@@ -991,6 +1076,8 @@ interface HistoryState {
   load: (root: string) => Promise<void>
   /** Delete one record and drop it from the list. */
   remove: (root: string, id: string) => Promise<void>
+  /** Rename one record (rail inline rename); no-op if main rejects the name. */
+  rename: (root: string, id: string, title: string) => Promise<void>
 }
 
 export const useHistory = create<HistoryState>((set) => ({
@@ -1015,6 +1102,20 @@ export const useHistory = create<HistoryState>((set) => ({
     }
     set((s) => ({
       byKey: { ...s.byKey, [key]: (s.byKey[key] ?? []).filter((r) => r.id !== id) }
+    }))
+  },
+  rename: async (root, id, title) => {
+    const key = projectKey(root)
+    // Main normalises + validates the name, and is the only writer of the record —
+    // adopt what it echoes back rather than the raw input.
+    const res = await window.api.sessions.rename(id, title).catch(() => null)
+    if (!res?.ok || !res.title) return
+    const named = res.title
+    set((s) => ({
+      byKey: {
+        ...s.byKey,
+        [key]: (s.byKey[key] ?? []).map((r) => (r.id === id ? { ...r, title: named } : r))
+      }
     }))
   }
 }))

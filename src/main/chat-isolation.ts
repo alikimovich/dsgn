@@ -17,6 +17,7 @@ import {
 } from './chat-worktrees'
 import { recordEdit } from './edit-history'
 import { isRepoRoot } from './git'
+import { commitLiveTurn } from './live-commit'
 import type { SessionStore } from './sessions-store'
 import { branchPatch, deleteBranch, removeWorktree, type Worktree } from './worktrees'
 
@@ -34,7 +35,9 @@ const gitOut = async (cwd: string, args: string[]): Promise<string> =>
  * long-lived `praxis/chat-<id>` worktree, forked before its session starts and used
  * as the session's `cwd` for the chat's whole life. After each completed agent turn
  * the chat's work auto-merges back onto the LIVE checkout (which the preview always
- * serves) so the preview updates between turns; on mid-turn drift the turn PARKS on
+ * serves) so the preview updates between turns, and the merged files are committed
+ * there too (`live-commit.ts`) so every turn is one revertable commit in the user's
+ * own history; on mid-turn drift the turn PARKS on
  * its branch for the existing SessionReview UI instead of clobbering the user's edit.
  *
  * Dependency-injected (`initChatIsolation`) so `agent.ts` barely grows — the pure git
@@ -181,8 +184,10 @@ function lastTurn(transcript: SessionTranscriptEntry[]): SessionTranscriptEntry[
  * Turn-end hook (fired on `done` AND `error` to salvage interrupted work): commit the
  * turn, merge it onto the live tree, and advance the fork point. Queued on the chat's
  * chain (never awaited by the caller). On `merged`, records the edits as one undo group
- * `chat:<id>:<turnNo>`, advances `baseSha`, and unparks. On `parked`, upserts the park
- * record (with the last turn's transcript) for the review UI. `noop` does nothing.
+ * `chat:<id>:<turnNo>`, commits the merged files on the live checkout (so the turn is
+ * one revertable commit in the user's own history), advances `baseSha`, and unparks. On
+ * `parked`, upserts the park record (with the last turn's transcript) for the review UI.
+ * `noop` does nothing.
  */
 export function afterTurn(sessionKey: string, message: string, transcript: SessionTranscriptEntry[] = []): void {
   const st = states.get(sessionKey)
@@ -198,6 +203,10 @@ export function afterTurn(sessionKey: string, message: string, transcript: Sessi
           recordEdit(st.liveRoot, e.file, e.before, e.after, undefined, group)
         }
         if (outcome.newBase) st.wt.baseSha = outcome.newBase
+        await commitLiveTurn(st.liveRoot, outcome.files, {
+          title: message,
+          body: `Praxis turn ${turnNo} (${st.wt.branch}).`
+        })
         if (st.parked) {
           st.parked = false
           dropParkRecord(st)
@@ -323,6 +332,13 @@ export async function applyParkedBranch(
     const res = await task
     if (res.ok) {
       if (res.newBase) st.wt.baseSha = res.newBase
+      // A 3-way apply onto a dirty tree can leave conflict markers, so unlike the
+      // turn path this commits whatever landed — keeping the apply revertable in one
+      // step, markers and all, instead of tangling it with the user's other WIP.
+      await commitLiveTurn(st.liveRoot, res.files, {
+        title: `Apply ${st.wt.branch} changes`,
+        body: 'Praxis parked-chat apply.'
+      })
       st.parked = false
       dropParkRecord(st)
       emitIsolation(key, 'merged', st.wt.branch, res.files)
@@ -388,6 +404,10 @@ export async function resolveParkedChat(
         recordEdit(st.liveRoot, e.file, e.before, e.after, undefined, group)
       }
       if (outcome.newBase) st.wt.baseSha = outcome.newBase
+      await commitLiveTurn(st.liveRoot, outcome.files, {
+        title: 'Resolve chat/live merge',
+        body: `Praxis conflict resolution (${st.wt.branch}).`
+      })
       st.parked = false
       dropParkRecord(st)
       emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
@@ -554,6 +574,10 @@ export async function releaseChat(sessionKey: string): Promise<void> {
             `chat:${st.wt.id}:${turnNo}`
           )
         }
+        await commitLiveTurn(st.liveRoot, outcome.files, {
+          title: 'Praxis chat changes',
+          body: `Praxis final turn (${st.wt.branch}).`
+        })
       } else if (outcome.outcome === 'parked') {
         st.parked = true
         upsertParkRecord(st, outcome.files)

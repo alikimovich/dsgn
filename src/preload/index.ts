@@ -13,6 +13,7 @@ import type {
   Diagnosis,
   FeedbackInput,
   FeedbackResult,
+  FileOpResult,
   Framework,
   GithubConnectOptions,
   GithubConnectResult,
@@ -312,6 +313,12 @@ const api: PraxisApi = {
       ipcRenderer.invoke('source:popout', root, source),
     closeWindow: (): Promise<void> => ipcRenderer.invoke('source:close-window'),
     tree: (root: string): Promise<string[]> => ipcRenderer.invoke('source:tree', root),
+    createFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:create-file', root, path),
+    renameFile: (root: string, from: string, to: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:rename-file', root, from, to),
+    deleteFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:delete-file', root, path),
     onNavigate: (cb: (source: string) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, source: string): void => cb(source)
       ipcRenderer.on('editor:navigate', listener)
@@ -391,8 +398,15 @@ const api: PraxisApi = {
       sessionKey: string
     ): Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }> =>
       ipcRenderer.invoke('agent:close-chat', root, sessionKey),
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('agent:rename-chat', sessionKey, title),
     send: (text: string, images?: ImageAttachment[]): Promise<void> =>
       ipcRenderer.invoke('agent:send', text, images),
+    saveAttachment: (image: ImageAttachment, name?: string): Promise<string> =>
+      ipcRenderer.invoke('attachments:save', image, name),
     setModel: (model: string): Promise<void> => ipcRenderer.invoke('agent:set-model', model),
     setPermissionMode: (mode: PermissionMode): Promise<void> =>
       ipcRenderer.invoke('agent:set-permission-mode', mode),
@@ -439,6 +453,11 @@ const api: PraxisApi = {
   sessions: {
     list: (root: string): Promise<SessionRecord[]> => ipcRenderer.invoke('sessions:list', root),
     get: (id: string): Promise<SessionRecord | null> => ipcRenderer.invoke('sessions:get', id),
+    rename: (
+      id: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('sessions:rename', id, title),
     remove: (id: string): Promise<void> => ipcRenderer.invoke('sessions:remove', id)
   },
   feedback: {

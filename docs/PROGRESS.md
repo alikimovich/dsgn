@@ -31,6 +31,275 @@ progress chip, single-select picks auto-advance, multi-select advances via
 Next, Back revisits (picks kept), the last step Sends, Skip still dismisses
 the whole request. Single-question requests are pixel-identical to before
 (existing tests untouched). Wizard scenario added to `test/questions.mjs`.
+## 2026-08-05 — A shared image now comes with its path, not just its pixels (LKM-67)
+
+A non-image file dropped into the composer already rode along as an absolute
+path the agent could read. An image didn't: it became a base64 vision block and
+nothing else. So the model could *see* the screenshot perfectly and still had no
+file to copy into the repo — it would answer "I need the file path on your
+computer, could you tell me where this is saved?", which is an absurd question
+to ask about an image the user just handed it.
+
+Both kinds of image now carry a path, and `send` names it in the same hidden
+context block the file attachments use:
+
+- **Dropped from Finder** — it already has one. `addImageFiles` calls the same
+  `pathForFile` preload seam `addFiles` does, so the real location rides along.
+- **Pasted from the clipboard** — there is no file anywhere; it's bytes in
+  memory. `attachments:save` writes them into
+  `<userData>/praxis/attachments/<stamp>-<name>.<ext>` and hands back that path.
+
+The save happens at **send**, not at paste: an attachment the user thinks better
+of and removes should never touch the disk. It's also best-effort — a refused or
+failed save just yields no path, which is exactly today's behavior (vision block
+alone), never a broken turn. `src/main/attachments.ts` holds the naming/writing/
+pruning (pure, fs-only, so `test/attachments.mjs` covers it); the media type
+picks the extension from a fixed table and the browser-supplied filename is
+reduced to a bare stem, so a name like `../../etc/passwd` can only ever produce
+`<stamp>-passwd.png` inside the attachments dir. Saved copies older than a week
+are swept on the next save — these are scratch copies of clipboard bytes, not
+app state.
+
+The composer chip's tooltip now shows that path for images too (it already did
+for file cards), so "what exactly am I sending?" is answerable before sending.
+## 2026-08-05 — Composer attachments line up with the prompt text (LKM-66)
+
+A pasted image (or dropped file) chip floated in the middle of the composer
+instead of sitting above the caret. The row wasn't styled centred — shadcn's
+`InputGroup` is `flex items-center`, and the block-end addon (the model/permission
+bar) flips it to `flex-col` via `has-[>[data-align=block-end]]:flex-col`, so every
+direct child without `w-full` shrinks to fit and centres on the cross axis. The
+chip row now takes `w-full` and the textarea's own 14px left padding, which is the
+same fix `Inspector` (the selection pill row) already carried. `test/chat-render.mjs`
+asserts the numbers — chip's left edge == where the placeholder starts, row width
+== the textarea's — since the alignment IS the requirement.
+
+## 2026-08-05 — Rail chats got a status dot and an inline rename (LKM-65)
+
+The rail listed a project's chats as bare names, so nothing distinguished a chat
+still thinking from one that had finished and was waiting to be read — the whole
+point of running several at once. Each chat row now leads with a dot:
+
+- **hollow ring** — stale: nothing in flight, nothing new. Every past chat, and
+  every live one you've already read.
+- **filled grey, blinking** — a turn is in flight.
+- **filled green** — a turn finished while you were looking at a *different*
+  chat. `finish` sets `needsReview` only when the key it's given isn't the
+  active one and that chat was actually running (the bare `finish()` calls that
+  clear a reopened session's stale flag must not light it), and `setActiveChat`
+  clears it: opening a chat IS reading it. A turn that lands on screen never
+  goes green — you watched it happen.
+
+The dot sits in a 16px slot with the project row's own padding (8) and gap (7),
+which is the project glyph's geometry exactly — so dots centre on the folder
+icon above them while the names still start at 31px, the project name's indent.
+`test/rail-chat-status.mjs` asserts both numerically rather than by screenshot,
+since the alignment is the requirement. The spawn rows' old inline 5px
+`.rail__sdot` folded into the same slot (queued → idle, running → working),
+which also stops a background agent's name sitting 11px right of every other.
+
+Renaming is a hover pencil that swaps the row for an input (Enter/blur commits,
+Escape reverts, an empty or unchanged name is a cancel). Main stays the only
+writer of a name: `agent:rename-chat` writes it onto the LIVE session's record —
+which is what makes it persist on teardown, survive a reload through the
+workspace snapshot, and permanently block `maybeGenerateTitle` (it skips any
+chat whose record already has a name) — then re-broadcasts it as the usual
+`title` event. `sessions:rename` does the same for a past record. Both normalise
+the input (one line, collapsed whitespace, 120 cap) and the renderer adopts what
+main echoes back rather than the raw keystrokes.
+
+`Rail.tsx` was already near the size limit, so the row itself moved to
+`RailChatRow.tsx` and now renders all three kinds (live, spawn, past).
+
+## 2026-08-05 — A pasted link no longer drags the chat bubble off the pane (LKM-64)
+
+Paste a Figma embed URL into an ask and the bubble hung off the LEFT edge of
+the chat pane, its first half unreadable. Two causes, both fixed:
+
+- **The bubble is sized to its content** (`w-fit`) and a URL is a single
+  unbreakable token, so `fit-content` resolved to the width of the whole link.
+  `.msg__text` now sets `overflow-wrap: anywhere` — deliberately not
+  `break-word`: both wrap an over-long token, but only `anywhere` also shrinks
+  the element's *min-content* width, which is the number `w-fit` is measured
+  against. `break-word` alone would still have measured the unbroken link and
+  spilled. `max-w-full` caps it as a backstop, and `.markdown` got the same
+  wrap so an assistant turn printing a long URL can't widen the pane either.
+- **The clamp is vertical only.** `ClampedUserText`'s 5-line cap does nothing
+  about width, and even a wrapped link is three lines of query-string noise.
+  `src/renderer/src/lib/elide-url.ts` (new, pure — `test/elide-url.mjs`) splits
+  an ask into text/link runs and shortens each link to the two parts a human
+  reads: `embed.figma.com/…/portfolio`. The ellipsis is placed where content
+  was actually dropped (mid-path when segments were skipped, trailing when only
+  the query went — never both), a last segment too long for the remaining
+  budget is truncated rather than dropped (`linear.app/…/long-links-make-bu…`,
+  since the slug is usually the only part that identifies the link), and the
+  full URL lives on the `title` tooltip.
+
+The elided run is a `<span>`, not an `<a>`: an ask is displayed text, not a
+click surface, and turning user-typed strings into live links would be a new
+navigation surface in the renderer window. Detection needs a scheme or `www.`
+— guessing TLDs would elide ordinary prose. Trailing `.`/`,`/`)` are given back
+to the sentence unless the URL opened the paren itself.
+
+## 2026-08-05 — The editor's file tree became a file MANAGER (new / rename / delete)
+
+The pop-out editor's sidebar could only ever open what already existed. It now
+creates, renames and deletes files: a `＋` / pencil / trash toolbar above the
+tree, and Finder's click-the-selected-file-again to rename.
+
+`src/main/file-ops.ts` (new, pure — fs + path only, `test/file-ops.mjs`) holds
+the three ops behind `source:create-file` / `source:rename-file` /
+`source:delete-file`. Every path arrives from the renderer, so each op
+re-validates it from scratch through one gate (`normalizeRelPath`): repo-relative
+POSIX only, no `..`, no absolute/drive paths, no NUL, and nothing at any depth
+inside `.git`, `.praxis`, `.dsgn` (the pre-rename sidecar the agent's write-deny
+also covers) or `node_modules`. Create never clobbers (`flag: 'wx'`), rename
+never overwrites, and both are file-only — directories are made implicitly by a
+nested path and are never renamed or deleted.
+
+Two details worth keeping:
+
+- **Delete goes to the OS trash.** The undo history (`edit-history.ts`) is
+  content-diff based: it reads a file, compares it to the text it last wrote, and
+  writes the other side. There is no representation of "this file used to exist",
+  so a delete can never be a Cmd+Z. `shell.trashItem` is the only undo there is —
+  injected from `index.ts` rather than imported, so `file-ops.ts` stays pure and
+  testable. If trashing throws (no desktop session, unsupported fs) it falls back
+  to removing the file: the user asked for it gone.
+- **A case-only rename is allowed.** On a case-insensitive filesystem
+  `Foo.tsx` → `foo.tsx` reports the target as already existing, and the
+  no-clobber guard would make case fixes impossible. It compares the two paths
+  case-folded and lets that one through.
+
+`FileTreePanel.tsx` keeps all the new chrome OUTSIDE the tree widget, which owns
+its own shadow DOM: the toolbar and the name field are our own React above it,
+and each successful op rebuilds the tree from a fresh `source:tree` listing
+(there's no incremental add/remove we can lean on) then re-selects the path the
+op landed on. The name field takes a whole relative path, so a rename doubles as
+a move and "new file" seeded with the selected file's directory is one word of
+typing. A rename follows the file if it was the one on screen; a delete closes
+the drawer if it was.
+
+**Rename-on-second-click, and why there are two triggers.** Clicking the
+already-selected file is the natural gesture, but from outside the widget it's
+indistinguishable from the programmatic mirror-select that Cmd+click navigation
+and back/forward do — both surface as "selection changed to the file that's
+already open". So the selection callback only treats it as a rename when a real
+`pointerdown` landed on the tree in the last 600ms. A `dblclick` fallback covers
+the case where the widget doesn't re-fire a selection change for a row that was
+already selected; it ignores double-clicks while focus is in the tree's own
+search box (found by descending `activeElement` through shadow roots — the
+document only ever reports the host). Both paths just open the same field, so
+firing both is harmless.
+
+Verified: `test:file-ops` (44/44 unit tier green), typecheck + build green. The
+Electron tier still can't launch a window on this machine — `test:codedrawer`
+dies at `.empty__open` at HEAD too — so the sidebar's new chrome hasn't been
+seen rendered; it wants a manual `bun run dev` pass.
+
+## 2026-08-05 — The status line shows tokens + working time, not the tool caption
+
+The line beside the running cat used to echo the current tool step ("Edit ·
+src/components/Hero.tsx", or "Working…" before the first one). That caption is
+already on screen: every step is listed in the turn's own `StepDisclosure` a few
+lines above, latest step first. So the one strip that's visible for the WHOLE
+turn was spending itself on a duplicate, and told the user nothing about what
+the turn was costing. It now reads `↑ 12k  ↓ 830  1:23` — tokens in, tokens out,
+and how long this chat has been working.
+
+New `src/shared/run-stats.ts` (pure, `test/run-stats.mjs`) holds all of it:
+`readUsage` normalizes a provider's loosely-typed usage payload, `usageDelta`
+turns the repeated cumulative readings into an increment, `formatTokens` /
+`formatDuration` render them. New `usage` `AgentEvent` carries the DELTA (never a
+total), the store sums it per chat slice, `RunStats.tsx` renders the active
+chat's.
+
+**Two things were easy to get wrong here.** (1) *Double counting.* The Claude SDK
+reports one request's usage three times — `message_start` (input side),
+`message_delta` (running output total), then the complete `assistant` message —
+so `claude.ts` keeps the running maximum it has already emitted per request and
+sends only the difference (reset at `message_start`; a field the payload omits
+reads as 0 and can't claw tokens back). (2) *The providers disagree about cached
+tokens*: Anthropic reports cache reads/writes ALONGSIDE `input_tokens`, Codex
+reports `cached_input_tokens` as a subset OF its `input_tokens`. `readUsage`
+normalizes both to "all input tokens, of which this many were cached", so `↑`
+means the same thing on either backend. Both cases are pinned by the unit test.
+
+Codex only reports usage once, at `turn.completed`, so its counters step at the
+end of a turn instead of during it; Gemini (experimental, unwired) reports none
+and its counters stay at zero.
+
+Time is WORKING time — the sum of finished turns plus the one in flight — not
+wall clock since the chat opened, which would mostly measure how long the user
+was at lunch. It lives on the chat slice (`workedMs` + `turnStartedAt`), so each
+chat has its own. Neither the transcript nor the live snapshot records tokens or
+timing, so a resumed/reloaded chat's counters start from zero and describe this
+app run's work on it; a reattached in-flight turn times from the reattach.
+
+Small knock-ons: the status row lost its `aria-live` (a clock ticking into a live
+region is announced every second — the cat's own `role="img"` label already says
+whether a turn is running, and the readout carries the full sentence as sr-only
+text + a `title` breakdown with exact counts). The row is `pointer-events: none`,
+so the readout opts back in — a native tooltip needs hover — which is safe
+because the scroll-to-bottom button paints above it. `.chat__status-text` and its
+pulse keyframes are gone.
+
+## 2026-08-05 — Every turn is a commit on the user's own checkout
+
+User request: "if things were changed, commits should be made on every turn, so
+that I can easily revert or follow the progress." Until now only the chat's
+`praxis/chat-*` worktree branch got commits — the merge back onto the LIVE
+checkout was a plain file write (`autoApplyWorktree`), so the user's repo
+accumulated one giant uncommitted diff until Publish. `git log` showed nothing;
+reverting a single turn meant hand-picking hunks.
+
+New `src/main/live-commit.ts` (pure, unit-tested): `commitLiveTurn(root, files,
+{title, body})` lands the turn's files as ONE commit on whatever branch the live
+checkout is on. Called from `chat-isolation.ts` on every merged turn
+(`afterTurn`), on the parked-chat Apply and the AI conflict-resolve, on
+`releaseChat`'s final salvage merge, and from `agent.ts`'s comment-spawn
+finalizer. Commit subject = the turn's prompt (first line, whitespace-collapsed,
+capped at 72); body = `Praxis turn N (praxis/chat-<id>).`
+
+**Deliberately narrow, because this writes into the user's repo.** Only the
+files that turn touched are staged — never `add -A`, so concurrent hand edits
+elsewhere stay uncommitted and a `git revert` of a turn can't take them along.
+It's a PATHSPEC (partial) commit, so anything the user had staged for their own
+commit stays staged and out of ours (asserted in the test). `.praxis/` is
+filtered like `commitWorktree` does. Non-repo-ROOT projects are skipped — for a
+subdirectory project a commit would sweep the enclosing repo, the exact surprise
+`isRepoRoot` exists to prevent. Identity is forced (`Praxis <praxis@local>`) and
+`--no-verify` set, same reasoning as `commitWorktree`: a target repo's husky
+hook must not be able to abort a turn. Any git failure returns
+`committed: false` and never throws — the change is already in the working tree,
+so a failed commit is exactly the old behavior, not lost work.
+
+**Knock-on fixed in the same pass:** `publishToPr`'s `changedSince` diffed vs
+`HEAD`, which now reports NOTHING for a session whose turns all committed — the
+notes handoff would have said "Nothing to publish" and shipped an empty file
+list in the PR body. It now diffs vs the merge base with the default branch
+(two-dot, so uncommitted edits still count) and falls back to HEAD; the
+"nothing staged" abort inside is now "nothing staged AND nothing ahead of base",
+and the handoff commit is skipped when there's nothing to stage. `shipToMain`
+needed no change (it already counted `base..branch`) and now shares the same
+`defaultBase`. Those three git questions moved to a new pure
+`src/main/publish-scope.ts` purely so they're testable: `annotations.ts` imports
+`electron`, and a bun test can't load it (`SyntaxError: Export named 'ipcMain'
+not found`) — the same reason `chat-worktrees.ts` was split from
+`chat-isolation.ts`.
+
+`test/live-commit.mjs` (unit tier) covers the helper against real temp repos —
+plus a section that drives `chat-isolation.ts` itself with its window/store seam
+injected (no Electron), running two real turns through a worktree and asserting
+two live commits and a CLEAN live checkout between them. Fixture gotcha it cost
+an hour: `createWorktree` symlinks `node_modules`/`.env` unconditionally, so a
+temp repo WITHOUT a `.gitignore` gets those symlinks committed onto the branch —
+`autoApplyWorktree` then can't read them, refuses the whole batch, and every
+turn parks. Temp-repo fixtures must gitignore both (as `chat-worktrees.mjs`
+already did).
+
+Also told the agent about it in `rules.ts` ("commits it there as ONE commit per
+turn") so a chat doesn't mistake its own turn commits for someone else's work.
 
 ## 2026-08-04 — Rail chat list capped at 5 + hide-UI button gets expand arrows
 

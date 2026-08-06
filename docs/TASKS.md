@@ -58,6 +58,20 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       the real `applyStyleEdit` in node (PROGRESS 2026-07-30 has the details).
       Worth making permanent if the Electron tier stays unrunnable.
 
+## Rail chat statuses + rename (2026-08-05, user-requested) — SHIPPED
+
+- [x] **A status dot per chat row + inline rename.** ✅ 2026-08-05 — hollow ring
+      = stale, filled grey and blinking = a turn in flight, filled green = a turn
+      finished while you were on another chat. Dots occupy the project row's own
+      16px folder-glyph slot, so they share its centre line while the chat names
+      keep their indent. New `needsReview` on the chat slice (set by `finish`
+      only for a chat that isn't on screen, cleared by `setActiveChat`). Rename
+      goes through main, the only writer of a chat's name:
+      `agent:rename-chat` for a live chat (it also blocks the auto-namer),
+      `sessions:rename` for a past one. New
+      `src/renderer/src/components/RailChatRow.tsx`,
+      `test/rail-chat-status.mjs`. See PROGRESS 2026-08-05.
+
 ## Layers panel (2026-07-29, user-requested) — SHIPPED
 
 - [x] **DOM tree + click-select + drag-to-reorder.** ✅ 2026-07-29 — a tree of
@@ -131,6 +145,21 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       project (git ls-files, fs-walk fallback). `test/file-tree.mjs`. Also renamed
       the toolbar "Editor" button → "IDE" and dropped the pop-out's redundant
       close button (native traffic lights close it).
+- [x] **Phase 5 — the sidebar became a file manager.** ✅ 2026-08-05
+      (user-requested) — new file / rename / delete from the tree: a toolbar above
+      it plus Finder's click-the-selected-file-again to rename. New
+      `src/main/file-ops.ts` (pure) behind `source:create-file`/`rename-file`/
+      `delete-file`; every renderer path is re-validated (no traversal, no
+      `.git`/`.praxis`/`.dsgn`/`node_modules`), create/rename never clobber, and
+      delete goes to the OS trash because the content-diff undo history can't
+      represent a deleted file. `test/file-ops.mjs`. See PROGRESS 2026-08-05.
+      Deliberately out of scope: directory create/rename/delete (a nested path
+      makes dirs implicitly; git doesn't track empty ones anyway) and drag-to-move.
+- [ ] **Follow-up:** see the sidebar's new chrome rendered. The Electron tier
+      can't launch a window here (`test:codedrawer` dies at `.empty__open`, at
+      HEAD too), so the toolbar / rename field / delete confirm are unverified
+      visually, as is whether the tree widget re-fires a selection change for an
+      already-selected row (the `dblclick` fallback exists because it might not).
 
 ## Per-chat worktree isolation (2026-07-16, concurrent-chat safety) — SHIPPED
 
@@ -154,6 +183,18 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       active session; `src/renderer/src/components/ConflictCard.tsx`;
       `stageResolve` + `resolveParkedChat`/`discardParkedChat`; extended
       `test/chat-worktrees.mjs`.
+- [x] **One commit per turn on the LIVE checkout.** ✅ 2026-08-05 (user-requested
+      — "so that I can easily revert or follow the progress") — the merge back
+      onto the live tree is now also committed there, one commit per turn, with
+      the prompt as the subject. Only the turn's own files are staged and it's a
+      partial (pathspec) commit, so the user's unrelated dirty/staged work is
+      untouched; non-repo-root projects are skipped. `src/main/live-commit.ts`,
+      wired from `chat-isolation.ts` + `agent.ts`'s spawn finalizer;
+      `publishToPr`'s file list now diffs vs the default branch instead of HEAD
+      (extracted to `src/main/publish-scope.ts`).
+      `test/live-commit.mjs`. See PROGRESS 2026-08-05.
+      Not done deliberately: no user-facing toggle (the whole point is that it's
+      always on) and no UI surfacing of the commit sha — `git log` is the UI.
 
 ## v10 — Styles tab + AI-surfaced control panels (2026-07-18, user-requested) — SHIPPED
 

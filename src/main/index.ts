@@ -25,6 +25,7 @@ import { registerControlsIpc } from './control-panels'
 import { registerDevServerIpc } from './devserver'
 import { registerDiagnoseIpc } from './diagnose'
 import { registerFeedbackIpc } from './feedback'
+import { createProjectFile, deleteProjectFile, renameProjectFile } from './file-ops'
 import { listProjectFiles } from './file-tree'
 import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
 import { registerGithubIpc } from './github'
@@ -736,6 +737,18 @@ function registerEditorIpc(): void {
   })
   // The pop-out editor's file-tree sidebar: repo-relative file paths for `root`.
   ipcMain.handle('source:tree', (_e, root: string) => listProjectFiles(root))
+  // …and its file-manager ops. Every path is re-validated inside file-ops.ts —
+  // the renderer's is untrusted. Delete goes to the OS trash: these aren't
+  // content edits, so the undo history can't take them back.
+  ipcMain.handle('source:create-file', (_e, root: string, path: string) =>
+    createProjectFile(root, path)
+  )
+  ipcMain.handle('source:rename-file', (_e, root: string, from: string, to: string) =>
+    renameProjectFile(root, from, to)
+  )
+  ipcMain.handle('source:delete-file', (_e, root: string, path: string) =>
+    deleteProjectFile(root, path, (abs) => shell.trashItem(abs))
+  )
   // Close the editor window that sent this (a popped-out editor closing itself).
   ipcMain.handle('source:close-window', (e) => {
     BrowserWindow.fromWebContents(e.sender)?.close()

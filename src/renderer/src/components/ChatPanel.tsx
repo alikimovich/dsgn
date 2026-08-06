@@ -1,4 +1,11 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import {
   agentOptionsFor,
   type ChatAgentSettings,
@@ -51,6 +58,7 @@ import { useStickToBottomContext } from "use-stick-to-bottom";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { splitUrls } from "@/lib/elide-url";
 import {
   ArrowUp,
   Check,
@@ -67,12 +75,25 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import CatLoader from "./CatLoader";
+import RunStats from "./RunStats";
 
 // A pending composer attachment. Images carry base64 bytes + a data URL for the
 // thumbnail (sent as a vision block); files carry only their name + absolute path
-// (folded into the prompt text so the agent reads them itself).
+// (folded into the prompt text so the agent reads them itself). An image ALSO
+// carries a path when it came from one — dropped from Finder, that's its real
+// location; pasted from the clipboard, `path` is empty until `send` materializes
+// the bytes (see saveAttachment). Either way the path is named in the prompt, so
+// the agent can copy/move the actual file instead of asking where it lives.
 type Attachment =
-  | { id: string; kind: "image"; mediaType: string; data: string; url: string }
+  | {
+      id: string;
+      kind: "image";
+      mediaType: string;
+      data: string;
+      url: string;
+      name: string;
+      path: string;
+    }
   | { id: string; kind: "file"; name: string; path: string };
 
 // The model picker is per-backend: Claude's own models vs. the models the
@@ -190,6 +211,12 @@ function StepDisclosure({
  * vs `clientHeight`) rather than a line/character count, so it only ever
  * kicks in when the bubble truly exceeds the cap — short messages get no
  * fade, no pointer cursor, no click handler.
+ *
+ * That cap is vertical only, so long URLs got their own treatment (LKM-64):
+ * a pasted link is one unbreakable token, and the bubble is sized to its
+ * content, so a link wider than the pane used to drag the whole bubble off
+ * the left edge. Links now render elided (`splitUrls`) with the full URL on
+ * the tooltip, and `.msg__text` breaks anything still too long to fit.
  */
 function ClampedUserText({
   text,
@@ -206,6 +233,7 @@ function ClampedUserText({
   // ClampedUserText renders inside <Conversation>, so it can reach the
   // stick-to-bottom context directly — no prop plumbing needed.
   const { stopScroll } = useStickToBottomContext();
+  const runs = useMemo(() => splitUrls(text), [text]);
 
   // Only measurable while collapsed (the clamp's max-height is what makes
   // scrollHeight > clientHeight meaningful); once we've learned a bubble
@@ -242,7 +270,7 @@ function ClampedUserText({
     <div
       ref={ref}
       className={cn(
-        "msg__text w-fit rounded-lg border border-[var(--border-prominent)] bg-muted px-3 py-2 text-sm",
+        "msg__text w-fit max-w-full rounded-lg border border-[var(--border-prominent)] bg-muted px-3 py-2 text-sm",
         !expanded && "msg__text--clamp",
         clickable && "cursor-pointer",
       )}
@@ -260,7 +288,17 @@ function ClampedUserText({
           : undefined
       }
     >
-      {text}
+      {runs.map((run, i) =>
+        run.kind === "link" ? (
+          // Elided to host + last segment; the full URL stays in the tooltip.
+          // Not an anchor — a user's ask is plain text, not a link surface.
+          <span key={i} className="msg__link" title={run.href}>
+            {run.label}
+          </span>
+        ) : (
+          <Fragment key={i}>{run.text}</Fragment>
+        ),
+      )}
       {!expanded && overflows && (
         <div className="msg__text-fade" aria-hidden="true" />
       )}
@@ -399,6 +437,7 @@ export default function ChatPanel(): React.JSX.Element {
     startAssistant,
     appendDelta,
     appendStatus,
+    addUsage,
     finish,
   } = useChat();
   const { model, provider, slashCommands, projectRoot, setModel, setProvider } =
@@ -581,6 +620,13 @@ export default function ChatPanel(): React.JSX.Element {
         useChat.getState().setTitle(key, event.title);
       } else if (event.type === "status") {
         appendStatus(event.text, key);
+      } else if (event.type === "usage") {
+        // Token deltas from the backend (already deduped in main) — they sum into
+        // the chat's totals for the status line.
+        addUsage(
+          { input: event.input, output: event.output, cached: event.cached },
+          key,
+        );
       } else if (event.type === "error") {
         // A Claude auth failure gets a short line pointing at the (Claude-specific)
         // onboarding banner. Non-Claude backends (Codex/Gemini) have no such banner
@@ -647,7 +693,7 @@ export default function ChatPanel(): React.JSX.Element {
         }
       }
     });
-  }, [appendDelta, appendStatus, finish]);
+  }, [appendDelta, appendStatus, addUsage, finish]);
 
   // "/" slash-command menu state. The menu reads the "/" token containing the
   // caret, so it triggers anywhere in the message — at the very start or after a
@@ -855,18 +901,29 @@ export default function ChatPanel(): React.JSX.Element {
     [],
   );
 
-  // Read image files (paste/drop) into base64 attachments + a preview URL.
+  // Read image files (paste/drop) into base64 attachments + a preview URL. A
+  // dropped image also keeps its on-disk path (recovered in the preload); a
+  // pasted one has none, and gets one written for it at send time.
   const addImageFiles = (files: File[]): void => {
     let nextId = Date.now();
     for (const file of files) {
       if (!file.type.startsWith("image/")) continue;
+      const path = window.api.pathForFile(file);
       const reader = new FileReader();
       reader.onload = () => {
         const url = String(reader.result); // data:<mime>;base64,<data>
         const data = url.slice(url.indexOf(",") + 1);
         setAttachments((a) => [
           ...a,
-          { id: `att${nextId++}`, kind: "image", mediaType: file.type, data, url },
+          {
+            id: `att${nextId++}`,
+            kind: "image",
+            mediaType: file.type,
+            data,
+            url,
+            name: file.name,
+            path,
+          },
         ]);
       };
       reader.readAsDataURL(file);
@@ -915,9 +972,13 @@ export default function ChatPanel(): React.JSX.Element {
   const send = (raw: string = input): void => {
     const text = raw.trim();
     if ((!text && attachments.length === 0) || isRunning) return;
-    const images = attachments
-      .filter((a) => a.kind === "image")
-      .map((a) => ({ mediaType: a.mediaType, data: a.data }));
+    const imageAtts = attachments.flatMap((a) =>
+      a.kind === "image" ? [a] : [],
+    );
+    const images = imageAtts.map((a) => ({
+      mediaType: a.mediaType,
+      data: a.data,
+    }));
     const files = attachments.filter((a) => a.kind === "file");
     // File attachments ride as hidden context (like the selection pill below):
     // the agent gets each absolute path prepended so it can read the file with
@@ -939,9 +1000,11 @@ export default function ChatPanel(): React.JSX.Element {
       ? `📎 ${files.map((f) => f.name).join(", ")}`
       : "";
     appendUser(text || fileSummary, undefined, {
-      attachments: attachments
-        .filter((a) => a.kind === "image")
-        .map((a) => ({ id: a.id, mediaType: a.mediaType, url: a.url })),
+      attachments: imageAtts.map((a) => ({
+        id: a.id,
+        mediaType: a.mediaType,
+        url: a.url,
+      })),
       selection: selected ? selectionForBubble(selected) : undefined,
     });
     startAssistant();
@@ -951,10 +1014,33 @@ export default function ChatPanel(): React.JSX.Element {
     // A newly-sent ask becomes the pinned message — any previously-expanded
     // ask should collapse back to its clamp instead of hanging around full-height.
     setExpandedUserMsgs(new Set());
-    void window.api.agent.send(
-      fileCtx + ctx + text,
-      images.length ? images : undefined,
-    );
+    // Images ride as vision blocks, but the agent also needs to know WHERE each
+    // one is: without a path it can see a screenshot and still have to ask the
+    // user to find it before it can copy it into the repo. Dropped images
+    // already have their real path; pasted ones are only clipboard bytes, so
+    // main writes them out first (at send, not at paste — an attachment the user
+    // removes again should never hit the disk). A save that fails just yields no
+    // path, leaving that image vision-only as before.
+    void (async () => {
+      const paths = await Promise.all(
+        imageAtts.map((a) =>
+          a.path
+            ? Promise.resolve(a.path)
+            : window.api.agent
+                .saveAttachment({ mediaType: a.mediaType, data: a.data }, a.name)
+                .catch(() => ""),
+        ),
+      );
+      const imageCtx = paths.some(Boolean)
+        ? `[Attached images — the image(s) in this message are on disk at]\n${paths
+            .filter(Boolean)
+            .join("\n")}\n\n`
+        : "";
+      await window.api.agent.send(
+        fileCtx + imageCtx + ctx + text,
+        images.length ? images : undefined,
+      );
+    })();
     if (selected) setSelected(null);
   };
 
@@ -1280,16 +1366,14 @@ export default function ChatPanel(): React.JSX.Element {
         />
       </Conversation>
 
-      {/* Live status line — a cat that runs (with the current step, like a
-          terminal "Architecting…" indicator) while a turn is in flight and
-          settles on the idle sprite while waiting for input. */}
-      <div className="chat__status" aria-live="polite">
+      {/* Live status line — a cat that runs while a turn is in flight and settles
+          on the idle sprite while waiting for input, alongside what the chat has
+          spent (tokens in/out) and how long it has been working. No aria-live: the
+          clock ticks every second, and announcing that on a loop is noise — the
+          cat's own role="img" label already says whether a turn is running. */}
+      <div className="chat__status">
         <CatLoader running={isRunning} />
-        {isRunning && (
-          <span className="chat__status-text">
-            {messages[messages.length - 1]?.statuses.at(-1) ?? "Working…"}
-          </span>
-        )}
+        <RunStats />
       </div>
 
       <div className="composer">
@@ -1354,11 +1438,15 @@ export default function ChatPanel(): React.JSX.Element {
             <Inspector element={selected} onClear={() => setSelected(null)} />
           )}
           {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-2 pt-2">
+            /* w-full: the InputGroup is a flex COLUMN with `items-center`, so a
+               shrink-to-fit row would sit centered above the textarea. Full
+               width + the textarea's own 14px left padding lines the chips up
+               with the prompt text (same trick as Inspector's pill row). */
+            <div className="composer__attachments flex w-full flex-wrap gap-1.5 pl-[14px] pr-3 pt-2">
               {attachments.map((a) => (
                 <div
                   key={a.id}
-                  title={a.kind === "file" ? a.path : undefined}
+                  title={a.path || undefined}
                   className={
                     a.kind === "image"
                       ? "relative h-12 w-12 overflow-hidden rounded-md border border-border"

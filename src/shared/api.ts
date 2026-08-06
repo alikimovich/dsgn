@@ -214,6 +214,11 @@ export type AgentEvent = (
   | { type: 'question-request'; request: QuestionRequest }
   /** A pending question was resolved (answered elsewhere / abort / session change) — dismiss its card. */
   | { type: 'question-resolved'; id: string }
+  /** Tokens the backend just reported, as a DELTA to add to the chat's running
+   *  totals (main dedupes the providers' repeated cumulative readings — see
+   *  `shared/run-stats.ts`). Drives the status line's ↑/↓ counters. `cached` is
+   *  the share of `input` served from the prompt cache, not an extra amount. */
+  | { type: 'usage'; input: number; output: number; cached: number }
   | { type: 'done' }
   | { type: 'error'; message: string }
   /** An auto-generated name for this chat, summarising what the conversation is
@@ -492,6 +497,18 @@ export interface SourceWriteResult {
   /** The file drifted on disk since the drawer loaded it — refused to clobber. */
   conflict?: boolean
   /** Human-readable failure (unresolved path, write error). */
+  error?: string
+}
+
+/**
+ * Result of a create / rename / delete from the editor's file-tree sidebar.
+ * `path` is the repo-relative POSIX path the op landed on (the new path for a
+ * rename), so the renderer can re-select it once the tree reloads.
+ */
+export interface FileOpResult {
+  ok: boolean
+  path?: string
+  /** Human-readable failure (bad path, name taken, fs error). */
   error?: string
 }
 
@@ -1179,6 +1196,12 @@ export interface PraxisApi {
     closeWindow: () => Promise<void>
     /** Repo-relative file paths for the pop-out editor's file-tree sidebar. */
     tree: (root: string) => Promise<string[]>
+    /** File-tree sidebar: create an empty file (parent dirs created as needed). */
+    createFile: (root: string, path: string) => Promise<FileOpResult>
+    /** File-tree sidebar: rename/move a file. Never overwrites an existing path. */
+    renameFile: (root: string, from: string, to: string) => Promise<FileOpResult>
+    /** File-tree sidebar: delete a file (to the OS trash where that's available). */
+    deleteFile: (root: string, path: string) => Promise<FileOpResult>
     /** Standalone editor window: retarget event when a second pop-out reuses it. */
     onNavigate: (cb: (source: string) => void) => () => void
   }
@@ -1254,6 +1277,16 @@ export interface PraxisApi {
       root: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; sessionKey?: string; error?: string }>
+    /**
+     * Rename one LIVE chat (rail inline rename). Replaces the record's name — the
+     * one main auto-generates — so the chosen name survives into the chat's
+     * persisted history record and blocks any later auto-naming. `ok:false` when
+     * that sessionKey has no live session or the name is empty.
+     */
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     /** Restart one live chat with startup-only options (such as a Codex model)
      * without touching any of its sibling chats. */
     restartChat: (
@@ -1288,6 +1321,11 @@ export interface PraxisApi {
       sessionKey: string
     ) => Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }>
     send: (text: string, images?: ImageAttachment[]) => Promise<void>
+    /** Write a pasted image (clipboard bytes, no on-disk origin) into the app's
+     *  attachments dir and return its absolute path — so the turn can tell the
+     *  agent WHERE the image it can see actually lives. '' if it couldn't be
+     *  written; a dropped image needs no call (it already has a path). */
+    saveAttachment: (image: ImageAttachment, name?: string) => Promise<string>
     setModel: (model: string) => Promise<void>
     /** Change the permission posture live (drives the SDK's setPermissionMode). */
     setPermissionMode: (mode: PermissionMode) => Promise<void>
@@ -1339,6 +1377,12 @@ export interface PraxisApi {
     /** Past sessions for a project, newest first (excludes the live one). */
     list: (root: string) => Promise<SessionRecord[]>
     get: (id: string) => Promise<SessionRecord | null>
+    /** Rename a past session (rail inline rename). `ok:false` for an unknown
+     *  record or an empty name. */
+    rename: (
+      id: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     remove: (id: string) => Promise<void>
   }
   /** In-app feedback → a GitHub issue on Praxis's own repo (LKM-27). */
