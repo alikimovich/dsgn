@@ -86,6 +86,7 @@ const ELECTRON = [
   'chat-hide',
   'editor-search',
   'rail-chat-overflow',
+  'rail-chat-status',
   'devserver-multi',
   'static-serve',
   'agent-multi',

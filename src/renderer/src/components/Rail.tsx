@@ -18,6 +18,7 @@ import {
   useUpdate,
   useWorkspace,
 } from "../store";
+import RailChatRow, { type ChatStatus } from "./RailChatRow";
 
 interface Props {
   /** Switch to an already-open project. */
@@ -49,15 +50,27 @@ const firstUserText = (
  *  rest sit behind a "Show N more" row. */
 const MAX_CHAT_ROWS = 5;
 
+/** Rename a LIVE chat: main owns the name (it persists it onto the session record
+ *  and re-broadcasts it as a `title` event), but paint it immediately so the row
+ *  doesn't lag a round-trip behind the input. */
+const renameLiveChat = (sessionKey: string, name: string): void => {
+  useChat.getState().setTitle(sessionKey, name);
+  void window.api.agent.renameChat(sessionKey, name).then((res) => {
+    if (res?.ok && res.title) useChat.getState().setTitle(sessionKey, res.title);
+  });
+};
+
 /**
  * v5 left rail (Cursor-style) — the open projects, each led by a folder icon
  * (open when it's the active project, closed otherwise). The active project
  * expands to a flat, left-aligned list of its chats: first its live/open chats
  * (the active one highlighted), then its **previous chats** (v5-D persisted
  * sessions, one row per chat with a trailing "time ago"). Chat names are
- * auto-generated from each chat's opening prompt. No status dots on chat rows —
- * the text sits flush-left, at the project name's level. Clicking a project
- * switches; × closes; clicking a chat opens/reviews it.
+ * auto-generated from each chat's opening prompt and renameable in place (the
+ * hover pencil — see RailChatRow). Each chat row leads with a status dot that
+ * sits in the same 16px slot the project's folder icon occupies, so dots and
+ * folders share a centre line; the names stay flush-left at the project name's
+ * level. Clicking a project switches; × closes; clicking a chat opens/reviews it.
  *
  * The collapse/expand toggle no longer lives here — it floats by the traffic lights
  * (see App's `.sidebar-toggle`) so it stays reachable once the rail is gone. When
@@ -246,106 +259,90 @@ export default function Rail({
                         byKey[sk]?.title ??
                         chatTitle(firstUserText(byKey[sk]?.messages ?? []));
                       const parked = byKey[sk]?.isolation === "parked";
+                      const status: ChatStatus = byKey[sk]?.isRunning
+                        ? "working"
+                        : byKey[sk]?.needsReview
+                          ? "done"
+                          : "idle";
                       return (
-                        <li key={sk} className="rail__chat-item">
-                          <button
-                            className={`rail__chat ${isActiveChat ? "rail__chat--active" : ""}`}
-                            onClick={() => onSwitchSession(p.key, sk)}
-                            aria-current={isActiveChat}
-                            title={
-                              parked
-                                ? `${name} — changes couldn't be merged; open to resolve`
-                                : name
-                            }
-                          >
-                            <span className="rail__chat-name">{name}</span>
-                            {parked && (
-                              <span
-                                className="rail__chat-badge"
-                                title="Changes couldn't be merged"
-                              >
-                                conflict
-                              </span>
-                            )}
-                          </button>
-                          <button
-                            className="rail__chat-x"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onCloseChat(p.key, sk);
-                            }}
-                            aria-label={`Close chat ${name}`}
-                            title="Close chat"
-                          >
-                            ×
-                          </button>
-                        </li>
+                        <RailChatRow
+                          key={sk}
+                          name={name}
+                          status={status}
+                          active={isActiveChat}
+                          title={
+                            parked
+                              ? `${name} — changes couldn't be merged; open to resolve`
+                              : name
+                          }
+                          onOpen={() => onSwitchSession(p.key, sk)}
+                          onRename={(next) => renameLiveChat(sk, next)}
+                          onClose={() => onCloseChat(p.key, sk)}
+                        >
+                          {parked && (
+                            <span
+                              className="rail__chat-badge"
+                              title="Changes couldn't be merged"
+                            >
+                              conflict
+                            </span>
+                          )}
+                        </RailChatRow>
                       );
                     })}
-                    {/* v8 F1: comment-spawned background agents working (or queued). */}
+                    {/* v8 F1: comment-spawned background agents working (or queued).
+                      A queued one isn't thinking yet, so it rests on the idle dot. */}
                     {working.map((sp) => (
-                      <li
+                      <RailChatRow
                         key={sp.id}
-                        className="rail__chat-item"
+                        spawn
+                        name={
+                          sp.status === "queued"
+                            ? `${sp.label} · queued`
+                            : sp.label
+                        }
+                        status={sp.status === "queued" ? "idle" : "working"}
                         title={sp.label}
-                      >
-                        <span className="rail__chat rail__chat--spawn">
-                          <span
-                            className={`rail__sdot ${sp.status === "queued" ? "rail__sdot--queued" : "rail__sdot--working"}`}
-                            aria-hidden="true"
-                          />
-                          <span className="rail__chat-name">
-                            {sp.status === "queued"
-                              ? `${sp.label} · queued`
-                              : sp.label}
-                          </span>
-                        </span>
-                        <button
-                          className="rail__chat-x"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            void window.api.agent.spawnInterrupt(sp.id);
-                          }}
-                          aria-label="Cancel agent"
-                          title="Cancel this agent"
-                        >
-                          ×
-                        </button>
-                      </li>
+                        onClose={() =>
+                          void window.api.agent.spawnInterrupt(sp.id)
+                        }
+                        closeLabel="Cancel agent"
+                        closeTitle="Cancel this agent"
+                      />
                     ))}
-                    {/* Previous chats for this project (newest first, capped). */}
+                    {/* Previous chats for this project (newest first, capped). A
+                      finished chat is by definition stale — the idle dot. */}
                     {pastVisible.map((rec) => {
                       const name =
                         rec.title ?? chatTitle(firstUserText(rec.transcript));
                       return (
-                        <li key={rec.id} className="rail__chat-item">
-                          <button
-                            className="rail__chat"
-                            onClick={() => onReview(rec)}
-                            title={`${name} — ${rec.filesTouched.length} file(s)`}
-                          >
-                            <span className="rail__chat-name">{name}</span>
-                            <span className="rail__chat-time">
-                              {shortAgo(rec.startedAt)}
-                            </span>
-                          </button>
-                          <button
-                            className="rail__chat-x"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              void useHistory
-                                .getState()
-                                .remove(rec.projectRoot, rec.id);
-                            }}
-                            aria-label="Delete chat"
-                            title="Delete from history"
-                          >
-                            ×
-                          </button>
-                        </li>
+                        <RailChatRow
+                          key={rec.id}
+                          name={name}
+                          status="idle"
+                          title={`${name} — ${rec.filesTouched.length} file(s)`}
+                          onOpen={() => onReview(rec)}
+                          onRename={(next) =>
+                            void useHistory
+                              .getState()
+                              .rename(rec.projectRoot, rec.id, next)
+                          }
+                          onClose={() =>
+                            void useHistory
+                              .getState()
+                              .remove(rec.projectRoot, rec.id)
+                          }
+                          closeLabel="Delete chat"
+                          closeTitle="Delete from history"
+                        >
+                          <span className="rail__chat-time">
+                            {shortAgo(rec.startedAt)}
+                          </span>
+                        </RailChatRow>
                       );
                     })}
-                    {/* Overflow toggle — only when the history spills past the cap. */}
+                    {/* Overflow toggle — only when the history spills past the cap.
+                      The empty status slot keeps its label on the chats' indent. */}
                     {past.length > pastCapacity && (
                       <li className="rail__chat-item">
                         <button
@@ -359,6 +356,7 @@ export default function Rail({
                             })
                           }
                         >
+                          <span className="rail__chat-status" aria-hidden="true" />
                           <span className="rail__chat-name">
                             {showAllPast ? "Show less" : `Show ${hiddenPast} more`}
                           </span>

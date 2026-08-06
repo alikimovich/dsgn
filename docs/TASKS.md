@@ -58,6 +58,20 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       the real `applyStyleEdit` in node (PROGRESS 2026-07-30 has the details).
       Worth making permanent if the Electron tier stays unrunnable.
 
+## Rail chat statuses + rename (2026-08-05, user-requested) — SHIPPED
+
+- [x] **A status dot per chat row + inline rename.** ✅ 2026-08-05 — hollow ring
+      = stale, filled grey and blinking = a turn in flight, filled green = a turn
+      finished while you were on another chat. Dots occupy the project row's own
+      16px folder-glyph slot, so they share its centre line while the chat names
+      keep their indent. New `needsReview` on the chat slice (set by `finish`
+      only for a chat that isn't on screen, cleared by `setActiveChat`). Rename
+      goes through main, the only writer of a chat's name:
+      `agent:rename-chat` for a live chat (it also blocks the auto-namer),
+      `sessions:rename` for a past one. New
+      `src/renderer/src/components/RailChatRow.tsx`,
+      `test/rail-chat-status.mjs`. See PROGRESS 2026-08-05.
+
 ## Layers panel (2026-07-29, user-requested) — SHIPPED
 
 - [x] **DOM tree + click-select + drag-to-reorder.** ✅ 2026-07-29 — a tree of

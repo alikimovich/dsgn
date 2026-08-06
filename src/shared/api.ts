@@ -1277,6 +1277,16 @@ export interface PraxisApi {
       root: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; sessionKey?: string; error?: string }>
+    /**
+     * Rename one LIVE chat (rail inline rename). Replaces the record's name — the
+     * one main auto-generates — so the chosen name survives into the chat's
+     * persisted history record and blocks any later auto-naming. `ok:false` when
+     * that sessionKey has no live session or the name is empty.
+     */
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     /** Restart one live chat with startup-only options (such as a Codex model)
      * without touching any of its sibling chats. */
     restartChat: (
@@ -1362,6 +1372,12 @@ export interface PraxisApi {
     /** Past sessions for a project, newest first (excludes the live one). */
     list: (root: string) => Promise<SessionRecord[]>
     get: (id: string) => Promise<SessionRecord | null>
+    /** Rename a past session (rail inline rename). `ok:false` for an unknown
+     *  record or an empty name. */
+    rename: (
+      id: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     remove: (id: string) => Promise<void>
   }
   /** In-app feedback → a GitHub issue on Praxis's own repo (LKM-27). */

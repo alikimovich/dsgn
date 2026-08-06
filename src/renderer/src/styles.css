@@ -136,7 +136,7 @@
 .rounded-full,
 .composer__send,
 .composer__spinner,
-.rail__sdot {
+.rail__chat-status::before {
     -electron-corner-smoothing: 0%;
 }
 
@@ -779,10 +779,11 @@ body.is-fullscreen .sidebar-toggle {
 }
 
 /* Chats under the active project (Cursor-style): a flat list of full-width
-   rows whose text is flush-left, aligned under the project name (the row's
-   left padding matches the project glyph + gap). Live chats sit first (active
-   one highlighted), then previous chats. No status dots — just the auto-name
-   and, for a past chat, a trailing "time ago". */
+   rows whose text is flush-left, aligned under the project name. Each row leads
+   with a status dot sized/spaced exactly like the project row's folder glyph
+   (8px padding + 16px slot + 7px gap), so the dots centre on the folder icon
+   while the names keep their old indent. Live chats sit first (active one
+   highlighted), then previous chats — the latter with a trailing "time ago". */
 .rail__chats {
     list-style: none;
     margin: 1px 0 4px;
@@ -803,11 +804,11 @@ body.is-fullscreen .sidebar-toggle {
     flex: 1 1 auto;
     display: flex;
     align-items: center;
-    gap: 6px;
+    /* Same gap as .rail__open, so the name still starts at 31px
+       (padding 8 + status slot 16 + gap 7) — the project name's indent. */
+    gap: 7px;
     min-width: 0;
-    /* Left padding lines the chat name up with the project name above
-       (rail__open padding 8 + folder icon 16 + gap 7). */
-    padding: 5px 8px 5px 31px;
+    padding: 5px 8px;
     border: none;
     border-radius: 6px;
     background: none;
@@ -816,6 +817,39 @@ body.is-fullscreen .sidebar-toggle {
     font: inherit;
     font-size: 12px;
     text-align: left;
+}
+/* Status slot — the folder icon's 16px box, so every dot centres on the folder
+   above it. Bare (no modifier) it's an empty spacer, which is what keeps the
+   "Show N more" row on the same indent. */
+.rail__chat-status {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.rail__chat-status--idle::before,
+.rail__chat-status--working::before,
+.rail__chat-status--done::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+}
+/* Stale: a hollow ring — the chat is idle with nothing new to look at. */
+.rail__chat-status--idle::before {
+    box-shadow: inset 0 0 0 1px var(--text-muted);
+    opacity: 0.55;
+}
+/* Thinking: filled + grey, blinking (shares the spawn dots' pulse). */
+.rail__chat-status--working::before {
+    background: var(--text-muted);
+    animation: rail-pulse 1.1s ease-in-out infinite;
+}
+/* Finished while the user was elsewhere — green until they open the chat. */
+.rail__chat-status--done::before {
+    background: #22c55e;
 }
 .rail__chat-name {
     flex: 1 1 auto;
@@ -881,26 +915,46 @@ body.is-fullscreen .sidebar-toggle {
     background: var(--bg);
     color: var(--text);
 }
-
-/* v8 F1: comment-spawned background agents surface as chat rows with a small
-   status dot instead of a name-time; the dot keeps its working/queued meaning. */
-.rail__sdot {
+/* Rename affordance — same quiet, hover-revealed treatment as the close ×, so
+   the two read as one pair of row actions. */
+.rail__chat-rename {
     flex: 0 0 auto;
-    width: 5px;
-    height: 5px;
-    border-radius: 50%;
-    background: var(--text-muted);
-    opacity: 0.5;
+    width: 16px;
+    height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: 4px;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    opacity: 0;
 }
-.rail__sdot--working {
-    background: #f59e0b;
+.rail__chat-item:hover .rail__chat-rename {
     opacity: 1;
-    animation: rail-pulse 1.1s ease-in-out infinite;
 }
-.rail__sdot--queued {
-    background: var(--text-muted);
-    opacity: 0.55;
+.rail__chat-rename:hover {
+    background: var(--bg);
+    color: var(--text);
 }
+/* Inline rename input — occupies the name's exact slot so the row doesn't shift
+   when it swaps in. */
+.rail__chat-item--editing {
+    background: rgb(from var(--rail-text) r g b / 0.075);
+}
+.rail__chat-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 12px;
+    outline: none;
+}
+
 @keyframes rail-pulse {
     0%,
     100% {

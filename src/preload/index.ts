@@ -398,6 +398,11 @@ const api: PraxisApi = {
       sessionKey: string
     ): Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }> =>
       ipcRenderer.invoke('agent:close-chat', root, sessionKey),
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('agent:rename-chat', sessionKey, title),
     send: (text: string, images?: ImageAttachment[]): Promise<void> =>
       ipcRenderer.invoke('agent:send', text, images),
     setModel: (model: string): Promise<void> => ipcRenderer.invoke('agent:set-model', model),
@@ -446,6 +451,11 @@ const api: PraxisApi = {
   sessions: {
     list: (root: string): Promise<SessionRecord[]> => ipcRenderer.invoke('sessions:list', root),
     get: (id: string): Promise<SessionRecord | null> => ipcRenderer.invoke('sessions:get', id),
+    rename: (
+      id: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('sessions:rename', id, title),
     remove: (id: string): Promise<void> => ipcRenderer.invoke('sessions:remove', id)
   },
   feedback: {
