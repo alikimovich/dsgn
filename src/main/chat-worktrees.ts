@@ -158,13 +158,26 @@ export interface ResolvePrep {
 export async function stageResolve(liveRoot: string, wt: Worktree): Promise<ResolvePrep> {
   const patch = await diffWorktree(wt) // chat's cumulative changes — capture before reset
   const files = await changedFiles(wt)
+  const tip = await revParse(wt.path, 'HEAD') // the parked squash — sole restore point
+  const oldBase = wt.baseSha
   const indexFile = join(dirname(wt.path), `.index-resolve-${wt.id}`)
   const live = await captureBase(liveRoot, indexFile) // snapshot the user's live tree
   await git(wt.path, ['clean', '-fd'])
   await git(wt.path, ['reset', '--hard', live]) // worktree := live
   wt.baseSha = live
   const tmpDir = join(dirname(wt.path), '.resolve-tmp')
-  await applyToWorkingTree(wt.path, patch, tmpDir) // re-lay chat changes (leaves 3-way markers)
+  const laid = await applyToWorkingTree(wt.path, patch, tmpDir) // re-lay chat changes (3-way markers ok)
+  if (!laid.ok && !laid.conflict) {
+    // Hard apply failure (not a marker-conflict): the reset above already moved
+    // the branch to the live snapshot, so without restoring, the parked work
+    // would exist NOWHERE. Put the branch back and report instead of returning
+    // a bogus "clean" that would silently merge nothing.
+    await git(wt.path, ['reset', '--hard', tip]).catch(() => {})
+    wt.baseSha = oldBase
+    throw new Error(
+      `couldn't re-apply this chat's changes onto the current project state${laid.error ? `: ${laid.error.slice(0, 200)}` : ''}`
+    )
+  }
   const conflicted: string[] = []
   for (const rel of files) {
     let text = ''

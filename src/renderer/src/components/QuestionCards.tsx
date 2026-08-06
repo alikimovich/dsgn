@@ -14,10 +14,13 @@ const OTHER = '__other__'
 /**
  * Interactive multiple-choice cards for questions the agent asks the user (the
  * SDK's AskUserQuestion tool) — distinct from the approve/deny permission cards.
- * Shown above the composer while a turn awaits the answer. Single-choice questions
- * submit on click; multi-select / multi-question requests collect picks and submit
- * via "Send". "Skip" dismisses without answering. Class hooks (`.question*`) drive
- * the test harness.
+ * Shown above the composer while a turn awaits the answer. A single single-select
+ * question submits on click; multi-select collects picks and submits via "Send".
+ * A MULTI-question request runs as a step-by-step wizard (one question at a
+ * time, "1/3" progress, Back to revisit; a single-select pick auto-advances,
+ * multi-select advances via Next, the last step Sends) — all-at-once was a wall
+ * of options. "Skip" always dismisses the whole request without answering.
+ * Class hooks (`.question*`) drive the test harness.
  */
 export default function QuestionCards({ requests, onRespond }: Props): React.JSX.Element | null {
   if (requests.length === 0) return null
@@ -41,6 +44,12 @@ function QuestionCard({
   const [sel, setSel] = useState<Record<number, string[]>>({})
   // Free text typed for the "Other…" choice, per question.
   const [other, setOther] = useState<Record<number, string>>({})
+  // Wizard cursor — which question is on screen (always 0 for single-question).
+  const [step, setStep] = useState(0)
+
+  const total = req.questions.length
+  const wizard = total > 1
+  const last = step === total - 1
 
   const answerFor = (qi: number): string =>
     (sel[qi] ?? [])
@@ -51,7 +60,7 @@ function QuestionCard({
   const allAnswered = req.questions.every((_q, qi) => answerFor(qi).length > 0)
   // Auto-submit-on-click only applies to the simple single-question single-select
   // case; everything else collects picks and submits with the Send button.
-  const oneShot = req.questions.length === 1 && !req.questions[0].multiSelect
+  const oneShot = total === 1 && !req.questions[0].multiSelect
 
   const submitAll = (): void => {
     const answers: QuestionAnswers = {}
@@ -71,16 +80,26 @@ function QuestionCard({
     })
     // A concrete pick on the single single-select question answers immediately.
     if (oneShot && value !== OTHER) onRespond(req.id, { [q.question]: value })
+    // Wizard: a concrete single-select pick answers this step — flow onward.
+    if (wizard && !q.multiSelect && value !== OTHER && qi < total - 1) setStep(qi + 1)
   }
 
   return (
     <div className="question flex flex-col gap-2 rounded-lg border border-blue-200 bg-blue-50 p-2.5 dark:border-blue-900/50 dark:bg-blue-950/30">
       {req.questions.map((q, qi) => {
+        if (wizard && qi !== step) return null // one question at a time
         const chosen = sel[qi] ?? []
         return (
           <div key={qi} className="question__item flex flex-col gap-1.5" role="group" aria-label={q.header}>
-            <div className="question__header w-fit rounded bg-blue-100 px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-blue-800 dark:bg-blue-900/50 dark:text-blue-200">
-              {q.header}
+            <div className="question__headrow flex items-center justify-between">
+              <div className="question__header w-fit rounded bg-blue-100 px-1.5 py-0.5 text-[10.5px] font-semibold uppercase tracking-wide text-blue-800 dark:bg-blue-900/50 dark:text-blue-200">
+                {q.header}
+              </div>
+              {wizard && (
+                <span className="question__progress text-[10.5px] font-medium tabular-nums text-blue-600 dark:text-blue-300/80">
+                  {step + 1}/{total}
+                </span>
+              )}
             </div>
             <div className="question__text text-[13px] font-medium text-blue-950 dark:text-blue-100">
               {q.question}
@@ -129,10 +148,12 @@ function QuestionCard({
                   value={other[qi] ?? ''}
                   onChange={(e) => setOther((s) => ({ ...s, [qi]: e.target.value }))}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && allAnswered) {
-                      e.preventDefault()
-                      submitAll()
-                    }
+                    if (e.key !== 'Enter') return
+                    e.preventDefault()
+                    // Mid-wizard: Enter on an answered "Other" advances; on the
+                    // final (or only) question it sends once everything is in.
+                    if (wizard && !last && answerFor(qi).length > 0) setStep(qi + 1)
+                    else if (allAnswered) submitAll()
                   }}
                 />
               )}
@@ -149,14 +170,30 @@ function QuestionCard({
         >
           Skip
         </Button>
-        <Button
-          size="sm"
-          className="question__send"
-          disabled={!allAnswered}
-          onClick={submitAll}
-        >
-          Send
-        </Button>
+        {wizard && step > 0 && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="question__back"
+            onClick={() => setStep(step - 1)}
+          >
+            Back
+          </Button>
+        )}
+        {wizard && !last ? (
+          <Button
+            size="sm"
+            className="question__next"
+            disabled={answerFor(step).length === 0}
+            onClick={() => setStep(step + 1)}
+          >
+            Next
+          </Button>
+        ) : (
+          <Button size="sm" className="question__send" disabled={!allAnswered} onClick={submitAll}>
+            Send
+          </Button>
+        )}
       </div>
     </div>
   )

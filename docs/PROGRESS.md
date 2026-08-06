@@ -2,6 +2,36 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-06 — "Resolve it" no longer loops; questions run as a wizard
+
+**Conflict resolve loop (user-reported, radial-portfolio).** Pressing the
+conflict card's "Resolve it" spun and returned to the same card, forever.
+Root cause in `resolveParkedChat`'s clean path: when the post-stage
+`completeTurn` came back 'parked' AGAIN (autoApplyWorktree only file-copies
+text files — a DELETED or binary file in the chat's diff refuses the whole
+batch every time) or 'noop', the chat stayed parked but the IPC returned
+`ok:true, conflicted:[]` — the renderer read "merged cleanly" while the card
+re-rendered from the still-parked state. Three fixes: 'noop' now unparks
+(staging proved the live tree already contains the work); 'parked' falls back
+to `applyParked` — the review modal's explicit 3-way `git apply`, which
+handles deletions/binary/modes (no per-file undo entries, same trade-off as
+the modal) — and unparks on success; any remaining failure returns
+`ok:false` + error so the card's note says WHY instead of silently resetting.
+Plus a data-loss guard in `stageResolve`: it reset --hard'ed the branch to
+the live snapshot BEFORE re-applying the chat's patch and ignored the apply
+result — a hard apply failure left the parked work existing nowhere. Now the
+pre-reset tip is captured and restored on hard failure, and the error
+propagates. repo7 scenario in `test/chat-worktrees.mjs` covers the
+parked-deletion chain end-to-end.
+
+**Step-by-step questions.** A multi-question AskUserQuestion request rendered
+every question at once — a wall of options. `QuestionCards` now runs
+multi-question requests as a wizard: one question at a time with an "n/N"
+progress chip, single-select picks auto-advance, multi-select advances via
+Next, Back revisits (picks kept), the last step Sends, Skip still dismisses
+the whole request. Single-question requests are pixel-identical to before
+(existing tests untouched). Wizard scenario added to `test/questions.mjs`.
+
 ## 2026-08-04 — Rail chat list capped at 5 + hide-UI button gets expand arrows
 
 Two user requests. (1) A project's rail chat list showed EVERY previous chat
