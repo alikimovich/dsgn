@@ -52,6 +52,7 @@ const UNIT = [
   'live-commit',
   'file-tree',
   'file-ops',
+  'attachments',
   'rules',
   'tw-classes',
   'tw-styles',

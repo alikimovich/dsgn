@@ -19,7 +19,6 @@ import {
   createChatWorktree,
   syncFromLive,
   completeTurn,
-  completeResolve,
   applyParked,
   discardParked,
   stageResolve
@@ -246,41 +245,77 @@ try {
   )
 
   // ============================================================================
-  // repo7 — stageResolve on a BINARY conflict (a `<<<<<<<` marker can never appear in a
-  //         PNG) resolves by policy to the chat's own version instead of silently
-  //         keeping the drifted live bytes, and completeResolve lands it (unlike
-  //         completeTurn, which would refuse the whole batch and re-park forever)
+  // repo7 — a parked DELETION can actually resolve. completeTurn's file-copy
+  //         merge refuses deletes FOREVER (readFile on the missing file), which
+  //         used to make the conflict card's "Resolve it" a silent infinite
+  //         loop; resolveParkedChat now falls back to applyParked (3-way
+  //         `git apply`) — this is that exact chain at the primitive level.
   // ============================================================================
-  const repo7 = makeRepo('repo7', {})
-  const baseImg = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3])
-  writeFileSync(join(repo7, 'plugin.png'), baseImg)
-  g(repo7, 'add', '-A')
-  g(repo7, 'commit', '-q', '-m', 'add image')
+  const repo7 = makeRepo('repo7', { 'README.md': 'base\n', 'Doomed.tsx': 'delete me\n' })
   const wt7 = await createChatWorktree(repo7, 'chatseven', worktreesDir)
-  const chatImg = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 9, 9, 9]) // chat replaces the image
-  writeFileSync(join(wt7.path, 'plugin.png'), chatImg)
-  const userImg = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 5, 5, 5]) // user ALSO replaces it live (drift)
-  writeFileSync(join(repo7, 'plugin.png'), userImg)
-  const p7 = await completeTurn(repo7, wt7, 'replace image')
-  ok(p7.outcome === 'parked', `repo7 binary drift parks: ${JSON.stringify(p7.outcome)}`)
-
+  // Chat deletes a file and edits README; the user concurrently edits README live → park.
+  rmSync(join(wt7.path, 'Doomed.tsx'))
+  writeFileSync(join(wt7.path, 'README.md'), 'chat version\n')
+  writeFileSync(join(repo7, 'README.md'), 'user version\n')
+  const p7 = await completeTurn(repo7, wt7, 'park with deletion')
+  ok(p7.outcome === 'parked', `deletion + drift parks: ${p7.outcome}`)
   const prep7 = await stageResolve(repo7, wt7)
+  ok(prep7.conflicted.includes('README.md'), `overlapping README carries markers: ${prep7.conflicted}`)
+  ok(!existsSync(join(wt7.path, 'Doomed.tsx')), 'the re-laid diff kept the deletion staged')
+  // The agent reconciles the markers…
+  writeFileSync(join(wt7.path, 'README.md'), 'user version + chat version\n')
+  const done7 = await completeTurn(repo7, wt7, 'resolve with deletion')
+  // …but the file-copy merge still refuses the deletion — the loop to escape.
+  ok(done7.outcome === 'parked', `file-copy merge still refuses a deletion: ${done7.outcome}`)
+  const ap7 = await applyParked(repo7, wt7)
+  ok(ap7.ok === true, `applyParked fallback lands it: ${JSON.stringify(ap7)}`)
+  ok(!existsSync(join(repo7, 'Doomed.tsx')), 'the deletion reached the live tree')
   ok(
-    prep7.clean && prep7.conflicted.length === 0,
-    `binary conflict reports clean (no text markers possible): ${JSON.stringify(prep7)}`
+    readFileSync(join(repo7, 'README.md'), 'utf8') === 'user version + chat version\n',
+    'the reconciled README landed on the live tree'
+  )
+
+  // ============================================================================
+  // repo8 — stageResolve on a BINARY conflict (a `<<<<<<<` marker can never appear in a
+  //         PNG) resolves by policy to the chat's own version instead of silently
+  //         keeping the drifted live bytes; completeTurn's file-copy merge still
+  //         refuses ANY binary content (same as a deletion), so the applyParked
+  //         fallback is what actually lands the resolved image on live.
+  // ============================================================================
+  const repo8 = makeRepo('repo8', {})
+  const baseImg = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3])
+  writeFileSync(join(repo8, 'plugin.png'), baseImg)
+  g(repo8, 'add', '-A')
+  g(repo8, 'commit', '-q', '-m', 'add image')
+  const wt8 = await createChatWorktree(repo8, 'chateight', worktreesDir)
+  const chatImg = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 9, 9, 9]) // chat replaces the image
+  writeFileSync(join(wt8.path, 'plugin.png'), chatImg)
+  const userImg = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 5, 5, 5]) // user ALSO replaces it live (drift)
+  writeFileSync(join(repo8, 'plugin.png'), userImg)
+  const p8 = await completeTurn(repo8, wt8, 'replace image')
+  ok(p8.outcome === 'parked', `repo8 binary drift parks: ${JSON.stringify(p8.outcome)}`)
+
+  const prep8 = await stageResolve(repo8, wt8)
+  ok(
+    prep8.clean && prep8.conflicted.length === 0,
+    `binary conflict reports clean (no text markers possible): ${JSON.stringify(prep8)}`
   )
   ok(
-    readFileSync(join(wt7.path, 'plugin.png')).equals(chatImg),
+    readFileSync(join(wt8.path, 'plugin.png')).equals(chatImg),
     "stageResolve resolved the binary conflict to the chat's own version, not the drifted live bytes"
   )
-  const r7done = await completeResolve(repo7, wt7, 'resolve merge')
-  ok(r7done.outcome === 'merged', `completeResolve lands a resolved binary conflict onto live: ${JSON.stringify(r7done.outcome)}`)
+  const done8 = await completeTurn(repo8, wt8, 'resolve merge')
+  // The file-copy merge still refuses binary content — same escape hatch as repo7's deletion.
+  ok(done8.outcome === 'parked', `file-copy merge still refuses binary content: ${done8.outcome}`)
+  const ap8 = await applyParked(repo8, wt8)
+  ok(ap8.ok === true, `applyParked fallback lands the resolved binary conflict: ${JSON.stringify(ap8)}`)
   ok(
-    readFileSync(join(repo7, 'plugin.png')).equals(chatImg),
+    readFileSync(join(repo8, 'plugin.png')).equals(chatImg),
     "the chat's resolved image landed on the live tree"
   )
 
-  if (failed === 0) console.log('CHAT-WORKTREES OK — fork/turn-merge/incremental/sync/park/apply/discard/resolve/binary-resolve')
+  if (failed === 0)
+    console.log('CHAT-WORKTREES OK — fork/turn-merge/incremental/sync/park/apply/discard/resolve/deletion-resolve/binary-resolve')
   else console.error(`CHAT-WORKTREES: ${failed} assertion(s) failed`)
   process.exitCode = failed === 0 ? 0 : 1
 } catch (err) {

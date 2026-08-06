@@ -145,7 +145,55 @@ try {
   })
   await win.waitForFunction(() => !document.querySelector('.question'), { timeout: 5000 })
 
-  console.log('QUESTIONS OK — single-select auto-submit, multi-select + Send, Skip, resolved-event clear')
+  // 5) A MULTI-question request runs as a step-by-step wizard: one question at a
+  // time with a progress chip; a single-select pick auto-advances; Back returns
+  // (keeping the pick); the last step Sends.
+  await win.evaluate(() => {
+    window.__praxisQuestions.getState().addRequest({
+      id: 'q_wizard',
+      questions: [
+        {
+          header: 'Layout',
+          question: 'Grid or list?',
+          multiSelect: false,
+          options: [
+            { label: 'Grid', description: 'Cards in a grid' },
+            { label: 'List', description: 'Stacked rows' }
+          ]
+        },
+        {
+          header: 'Density',
+          question: 'Compact or comfortable?',
+          multiSelect: false,
+          options: [
+            { label: 'Compact', description: 'Tight spacing' },
+            { label: 'Comfortable', description: 'Roomy spacing' }
+          ]
+        }
+      ]
+    })
+  })
+  await win.waitForSelector('.question', { timeout: 5000 })
+  const items = await win.$$eval('.question__item', (els) => els.length)
+  if (items !== 1) throw new Error(`wizard should show ONE question at a time, got ${items}`)
+  const prog = (await win.textContent('.question__progress'))?.trim()
+  if (prog !== '1/2') throw new Error(`progress chip reads "${prog}", expected 1/2`)
+  await win.screenshot({ path: join(artifacts, '11-question-wizard.png') })
+  // Picking on step 1 auto-advances to step 2.
+  await win.click('.question__option:has-text("Grid")')
+  const h2 = (await win.textContent('.question__header'))?.trim()
+  if (h2 !== 'Density') throw new Error(`step 2 header is "${h2}"`)
+  // Back returns to step 1 with the pick kept.
+  await win.click('.question__back')
+  const kept = await win.$$eval('.question__option.is-selected', (els) => els.length)
+  if (kept !== 1) throw new Error('Back lost the step-1 pick')
+  await win.click('.question__next')
+  // Final step: answer + Send submits the whole request.
+  await win.click('.question__option:has-text("Compact")')
+  await win.click('.question__send')
+  await win.waitForFunction(() => !document.querySelector('.question'), { timeout: 5000 })
+
+  console.log('QUESTIONS OK — single-select auto-submit, multi-select + Send, Skip, resolved-event clear, wizard steps')
 } catch (err) {
   console.error('QUESTIONS FAILED:', err?.message ?? err)
   process.exitCode = 1

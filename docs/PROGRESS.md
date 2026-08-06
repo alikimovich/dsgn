@@ -2,6 +2,36 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-06 — "Resolve it" no longer loops; questions run as a wizard
+
+**Conflict resolve loop (user-reported, radial-portfolio).** Pressing the
+conflict card's "Resolve it" spun and returned to the same card, forever.
+Root cause in `resolveParkedChat`'s clean path: when the post-stage
+`completeTurn` came back 'parked' AGAIN (autoApplyWorktree only file-copies
+text files — a DELETED or binary file in the chat's diff refuses the whole
+batch every time) or 'noop', the chat stayed parked but the IPC returned
+`ok:true, conflicted:[]` — the renderer read "merged cleanly" while the card
+re-rendered from the still-parked state. Three fixes: 'noop' now unparks
+(staging proved the live tree already contains the work); 'parked' falls back
+to `applyParked` — the review modal's explicit 3-way `git apply`, which
+handles deletions/binary/modes (no per-file undo entries, same trade-off as
+the modal) — and unparks on success; any remaining failure returns
+`ok:false` + error so the card's note says WHY instead of silently resetting.
+Plus a data-loss guard in `stageResolve`: it reset --hard'ed the branch to
+the live snapshot BEFORE re-applying the chat's patch and ignored the apply
+result — a hard apply failure left the parked work existing nowhere. Now the
+pre-reset tip is captured and restored on hard failure, and the error
+propagates. repo7 scenario in `test/chat-worktrees.mjs` covers the
+parked-deletion chain end-to-end.
+
+**Step-by-step questions.** A multi-question AskUserQuestion request rendered
+every question at once — a wall of options. `QuestionCards` now runs
+multi-question requests as a wizard: one question at a time with an "n/N"
+progress chip, single-select picks auto-advance, multi-select advances via
+Next, Back revisits (picks kept), the last step Sends, Skip still dismisses
+the whole request. Single-question requests are pixel-identical to before
+(existing tests untouched). Wizard scenario added to `test/questions.mjs`.
+
 ## 2026-08-05 — "Resolve it" couldn't actually resolve a binary conflict
 
 Reported live: a chat replaced an image the user had also replaced (a genuine
@@ -24,14 +54,62 @@ own target blob (read via `git show <chatHeadBeforeReset>:<path>`, captured
 before the live-snapshot reset erases the ref) and, when they differ and the
 blob is binary, resolves by policy — keep the chat's version, which is what the
 review UI already told the user Resolve does; there's no way to byte-merge two
-PNGs. A new `completeResolve` (used only by the explicit resolve path, not the
-ordinary turn-end auto-merge — that one *should* keep parking on first contact
-with a binary drift, so the user gets the review UI at all) commits the
-worktree and lands it via the binary-capable `applyParked` patch-apply instead
-of `autoApplyWorktree`. Covered by a new `repo7` case in
-`test/chat-worktrees.mjs`. Known follow-up, not fixed here: a turn that mixes a
+PNGs. Landed alongside the 2026-08-06 fix below (independent discovery of an
+overlapping bug — merged together): its `resolveParkedChat` → `applyParked`
+fallback is what actually lands the resolved binary content, since
+`autoApplyWorktree` refuses any batch containing binary regardless of who
+resolved it. Covered by a new `repo8` case in `test/chat-worktrees.mjs`
+(alongside that entry's `repo7` deletion case). Known follow-up, not fixed
+here: a turn that mixes a
 binary conflict with an overlapping *text* conflict still routes its post-agent
-merge through the ordinary `completeTurn` and would re-park on the binary file.
+merge through the ordinary `completeTurn` and would re-park on the binary file
+(the 2026-08-06 entry above fixes the *looping* half of that, generally, via
+an `applyParked` fallback in `resolveParkedChat` — this entry's `stageResolve`
+policy fix is what makes the specific binary case resolve to the right bytes
+instead of the wrong ones once that fallback runs).
+
+## 2026-08-05 — A shared image now comes with its path, not just its pixels (LKM-67)
+
+A non-image file dropped into the composer already rode along as an absolute
+path the agent could read. An image didn't: it became a base64 vision block and
+nothing else. So the model could *see* the screenshot perfectly and still had no
+file to copy into the repo — it would answer "I need the file path on your
+computer, could you tell me where this is saved?", which is an absurd question
+to ask about an image the user just handed it.
+
+Both kinds of image now carry a path, and `send` names it in the same hidden
+context block the file attachments use:
+
+- **Dropped from Finder** — it already has one. `addImageFiles` calls the same
+  `pathForFile` preload seam `addFiles` does, so the real location rides along.
+- **Pasted from the clipboard** — there is no file anywhere; it's bytes in
+  memory. `attachments:save` writes them into
+  `<userData>/praxis/attachments/<stamp>-<name>.<ext>` and hands back that path.
+
+The save happens at **send**, not at paste: an attachment the user thinks better
+of and removes should never touch the disk. It's also best-effort — a refused or
+failed save just yields no path, which is exactly today's behavior (vision block
+alone), never a broken turn. `src/main/attachments.ts` holds the naming/writing/
+pruning (pure, fs-only, so `test/attachments.mjs` covers it); the media type
+picks the extension from a fixed table and the browser-supplied filename is
+reduced to a bare stem, so a name like `../../etc/passwd` can only ever produce
+`<stamp>-passwd.png` inside the attachments dir. Saved copies older than a week
+are swept on the next save — these are scratch copies of clipboard bytes, not
+app state.
+
+The composer chip's tooltip now shows that path for images too (it already did
+for file cards), so "what exactly am I sending?" is answerable before sending.
+## 2026-08-05 — Composer attachments line up with the prompt text (LKM-66)
+
+A pasted image (or dropped file) chip floated in the middle of the composer
+instead of sitting above the caret. The row wasn't styled centred — shadcn's
+`InputGroup` is `flex items-center`, and the block-end addon (the model/permission
+bar) flips it to `flex-col` via `has-[>[data-align=block-end]]:flex-col`, so every
+direct child without `w-full` shrinks to fit and centres on the cross axis. The
+chip row now takes `w-full` and the textarea's own 14px left padding, which is the
+same fix `Inspector` (the selection pill row) already carried. `test/chat-render.mjs`
+asserts the numbers — chip's left edge == where the placeholder starts, row width
+== the textarea's — since the alignment IS the requirement.
 
 ## 2026-08-05 — Rail chats got a status dot and an inline rename (LKM-65)
 

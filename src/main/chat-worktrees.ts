@@ -151,24 +151,6 @@ export async function applyParked(liveRoot: string, wt: Worktree): Promise<Apply
   return { ok: false, conflict: res.conflict, files, error: res.error }
 }
 
-/**
- * Turn-end commit + merge for the EXPLICIT "Resolve it" path (post-`stageResolve`):
- * identical in shape to `completeTurn`, but merges via the binary-capable patch apply
- * (`applyParked`) instead of `autoApplyWorktree`'s plain-file-write path — a resolved
- * binary conflict can't round-trip through `autoApplyWorktree`'s UTF-8 read, which
- * unconditionally refuses any batch containing a NUL byte and would otherwise re-park
- * the chat right after the user asked Praxis to resolve it. Safe to apply directly (no
- * drift caution needed) because `stageResolve` just reset the worktree onto a live
- * snapshot moments earlier, so this diffs and applies against exactly that snapshot.
- */
-export async function completeResolve(liveRoot: string, wt: Worktree, message: string): Promise<TurnOutcome> {
-  const { committed, files } = await commitWorktree(wt, message)
-  if (!committed) return { outcome: 'noop', files: [], edits: [] }
-  const res = await applyParked(liveRoot, wt)
-  if (res.ok) return { outcome: 'merged', files: res.files, edits: [], newBase: res.newBase }
-  return { outcome: 'parked', files, edits: [] }
-}
-
 export interface ResolvePrep {
   /** Files left carrying `<<<<<<<` conflict markers — the agent must reconcile these.
    *  Empty ⇒ the two sides merged with no textual overlap (no agent turn needed). */
@@ -202,13 +184,26 @@ export async function stageResolve(liveRoot: string, wt: Worktree): Promise<Reso
   const chatHead = await revParse(wt.path, 'HEAD') // the chat's own cumulative work, before we move the ref
   const patch = await diffWorktree(wt) // chat's cumulative changes — capture before reset
   const files = await changedFiles(wt)
+  const tip = await revParse(wt.path, 'HEAD') // the parked squash — sole restore point
+  const oldBase = wt.baseSha
   const indexFile = join(dirname(wt.path), `.index-resolve-${wt.id}`)
   const live = await captureBase(liveRoot, indexFile) // snapshot the user's live tree
   await git(wt.path, ['clean', '-fd'])
   await git(wt.path, ['reset', '--hard', live]) // worktree := live
   wt.baseSha = live
   const tmpDir = join(dirname(wt.path), '.resolve-tmp')
-  await applyToWorkingTree(wt.path, patch, tmpDir) // re-lay chat changes (leaves 3-way markers)
+  const laid = await applyToWorkingTree(wt.path, patch, tmpDir) // re-lay chat changes (3-way markers ok)
+  if (!laid.ok && !laid.conflict) {
+    // Hard apply failure (not a marker-conflict): the reset above already moved
+    // the branch to the live snapshot, so without restoring, the parked work
+    // would exist NOWHERE. Put the branch back and report instead of returning
+    // a bogus "clean" that would silently merge nothing.
+    await git(wt.path, ['reset', '--hard', tip]).catch(() => {})
+    wt.baseSha = oldBase
+    throw new Error(
+      `couldn't re-apply this chat's changes onto the current project state${laid.error ? `: ${laid.error.slice(0, 200)}` : ''}`
+    )
+  }
   const conflicted: string[] = []
   for (const rel of files) {
     let text = ''

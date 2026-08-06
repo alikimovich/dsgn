@@ -478,6 +478,33 @@ try {
   await win.waitForSelector('.composer__input ~ * img, .composer img', { timeout: 5000 }).catch(() => {})
   const thumb = await win.$('img[alt="attachment"]')
   if (!thumb) throw new Error('pasted image should add a thumbnail attachment')
+  // LKM-66: the chip row is left-aligned with the prompt text, not centered
+  // (the InputGroup is a flex column with items-center, so a shrink-to-fit row
+  // would float to the middle).
+  const attachAlign = await win.evaluate(() => {
+    const row = document.querySelector('.composer__attachments')
+    const chip = row?.firstElementChild
+    const ta = document.querySelector('.composer__input')
+    if (!row || !chip || !ta) return null
+    const style = getComputedStyle(ta)
+    return {
+      chipLeft: chip.getBoundingClientRect().left,
+      textLeft: ta.getBoundingClientRect().left + parseFloat(style.paddingLeft),
+      rowWidth: row.getBoundingClientRect().width,
+      inputWidth: ta.getBoundingClientRect().width,
+    }
+  })
+  if (!attachAlign) throw new Error('attachment chip row should be in the composer')
+  if (Math.abs(attachAlign.chipLeft - attachAlign.textLeft) > 1) {
+    throw new Error(
+      `attachment chip should start at the prompt text (${attachAlign.textLeft}), got ${attachAlign.chipLeft}`
+    )
+  }
+  if (Math.abs(attachAlign.rowWidth - attachAlign.inputWidth) > 1) {
+    throw new Error(
+      `attachment row should span the composer like the textarea (${attachAlign.inputWidth}), got ${attachAlign.rowWidth}`
+    )
+  }
   // Removing it clears the chip.
   await win.click('button[aria-label="Remove image"]')
   await win.waitForFunction(() => !document.querySelector('img[alt="attachment"]'), { timeout: 5000 })
@@ -514,6 +541,43 @@ try {
   // Removing it clears the card.
   await win.click('button[aria-label="Remove dropped-notes.txt"]')
   await win.waitForFunction((p) => !document.querySelector(`[title="${p}"]`), droppedPath, {
+    timeout: 5000
+  })
+
+  // Drop an IMAGE file → it becomes a vision thumbnail as before, but it ALSO
+  // keeps the file's real on-disk path (LKM-67), which the turn hands to the
+  // agent so it can copy/point at the actual file instead of asking where it
+  // lives. Same real-preload seam as the file card above.
+  const droppedImage = join(artifacts, 'dropped-shot.png')
+  writeFileSync(
+    droppedImage,
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64'
+    )
+  )
+  await win.evaluate(() => {
+    const fi = document.createElement('input')
+    fi.type = 'file'
+    fi.id = '__test_image_input'
+    fi.style.display = 'none'
+    document.body.appendChild(fi)
+  })
+  await win.setInputFiles('#__test_image_input', droppedImage)
+  await win.evaluate(() => {
+    const fi = document.getElementById('__test_image_input')
+    const dt = new DataTransfer()
+    dt.items.add(fi.files[0])
+    const ta = document.querySelector('.composer__input')
+    ta.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+    fi.remove()
+  })
+  const imageChip = await win.waitForSelector(`[title="${droppedImage}"]`, { timeout: 5000 })
+  if (!(await imageChip.$('img[alt="attachment"]'))) {
+    throw new Error('a dropped image should still render as a thumbnail, not a file card')
+  }
+  await win.click('button[aria-label="Remove image"]')
+  await win.waitForFunction((p) => !document.querySelector(`[title="${p}"]`), droppedImage, {
     timeout: 5000
   })
 
