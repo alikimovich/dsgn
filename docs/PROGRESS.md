@@ -2,6 +2,198 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-07 — A project's fold in the rail is its own state, not "am I active"
+
+User-reported: switching projects collapsed the one you left. The rail computed
+`expanded = active && !p.chatsCollapsed`, so `chatsCollapsed` — a real per-project
+field, persisted with the entry — only ever mattered for the one project that
+happened to be on screen. Every other project rendered as a bare row whatever the
+user had done to its chevron, and the fold "reset" on every switch.
+
+`expanded` is now just `!p.chatsCollapsed`. The chevron is the only thing that
+folds a project; switching leaves every other project exactly as it was. Three
+follow-ons the change forces:
+
+- **The glyph button always toggles.** It used to switch projects when the row
+  wasn't active (there was nothing to expand). Now it folds this project's list
+  and nothing else — switching stays with the name button, so a fold never drags
+  the preview with it.
+- **Only the active project paints an active chat row.** `isActiveChat` gained an
+  `active &&`; without it every expanded background project would highlight its
+  own `activeSessionKey` and the rail would show several "current" chats at once.
+- **Chat rows under a background project have to go somewhere.** Clicking one
+  now brings its project forward (`switchSession` records the choice on the entry
+  first, then hands off to `switchTo`, which opens whatever the entry names);
+  resuming a past chat from another project does the same. Both used to be
+  no-ops for a non-active project because neither was reachable.
+
+Their previous-chats lists also have to be loaded now: App only fetches history
+for the project it opens/switches to, so a boot-restored sibling had none. Rail
+pulls it for any expanded project that hasn't got one yet (guarded on the store's
+`byKey`/`loading`, so a project with no history doesn't re-fetch). An expanded
+project with nothing to list still renders the (empty) `<ul>` — `rail-chat-status`
+waits on it as its "the project is open" signal — but `.rail__chats:empty` now
+drops its margin, so the 5px phantom gap doesn't repeat down the rail.
+
+`src/renderer/src/components/Rail.tsx`, `App.tsx` (`switchSession`,
+`resumeRecord`), `store.ts` (doc only), `test/rail.mjs` — which now asserts B's
+chats survive a switch to A, and that folding B keeps it folded when B becomes
+active again.
+
+## 2026-08-07 — Codex's token counters: live during the turn, and no longer double-counted
+
+User-reported: "doesn't show tokens when I use Codex" — a screenshot of `↑ 0
+↓ 0 2:31`, i.e. two and a half minutes into a turn with nothing to show for it.
+
+Two separate problems, both found by running the real CLI
+(`codex exec --experimental-json`) and reading what it actually emits.
+
+**1. The counters were dead for the whole turn.** The SDK's `ThreadEvent` union
+has no incremental usage member (verified against the event names compiled into
+the CLI binary: `thread.started`, `turn.started`, `turn.completed`,
+`turn.failed`, `item.*`, `error` — that's all of them), so the one reading
+arrives at `turn.completed`. The status line is on screen for exactly the
+period in which there is nothing to report.
+
+The CLI *does* record the counts as it goes, just not on that stream: every
+model response appends a `token_count` record to the thread's rollout at
+`$CODEX_HOME/sessions/<YYYY>/<MM>/<DD>/rollout-<timestamp>-<threadId>.jsonl`.
+New `src/main/codex-usage.ts` tails it — resolve the path once (a bounded
+newest-first walk of the date dirs; a heavy user's session tree is large), then
+one stat + a tail read per second while a turn is in flight. It's read-only, it
+only runs during a turn, and if the file can't be found the behavior is exactly
+what it was: `turn.completed` still delivers the full amount. A half-written
+record at the tail is left for the next poll rather than parsed or skipped.
+
+**2. Every turn after the first over-counted.** `turn.completed.usage` is a
+CUMULATIVE tally for the whole thread, not that turn's own tokens — turn 1
+reported 17,232 in / 5 out, turn 2 reported 34,572 / 10, which is 1 + 2, not 2.
+`codex.ts` was summing those readings, so a 3-turn chat billed itself roughly
+double. It now keeps a session-scoped `sentUsage` and emits `usageDelta`, the
+same treatment `claude.ts` gives Anthropic's repeated readings — which is also
+what lets the rollout tail and `turn.completed` share one accumulator: whatever
+the tail already reported, `turn.completed` simply tops up (usually by zero).
+An interrupted turn never reaches `turn.completed` at all, so the turn ends with
+one final poll before the tail stops — otherwise stopping mid-turn would lose
+everything it spent.
+
+Supersedes the 2026-08-05 entry's "Codex only reports usage once, at
+`turn.completed`, so its counters step at the end of a turn" — true of the SDK's
+stream, but the CLI knows more than the SDK surfaces.
+
+`test/codex-usage.mjs` (unit tier) covers the file pick, the newest-cumulative
+read out of a mixed JSONL stream (`total_token_usage`, never the per-call
+`last_token_usage` sitting next to it), the append-while-reading tail, and the
+diff-don't-sum property, using fixture records copied verbatim from a real run.
+## 2026-08-07 — v10: bring-your-own-model connections (Kimi/DeepSeek et al)
+
+**The idea: harness and endpoint are orthogonal.** Until now "provider" meant two
+things at once — which agent harness runs the loop, and which account answers. v10
+splits them. The two built-in seats (Claude via the Agent SDK, Codex via
+`@openai/codex-sdk`) still log in with the user's own subscription and need no
+setup. A *connection* is the third path: a user-added OpenAI-compatible endpoint
+(Vercel AI Gateway, Groq, anything custom) supplying a URL + key + models, so open
+models like Kimi K3 or DeepSeek can drive a chat. `AgentOptions` gained
+`connectionId` alongside `provider`; a set `connectionId` routes to the Codex
+harness regardless of `provider` (`backends/index.ts`).
+
+**Why the Codex harness and not Claude's.** `CodexOptions` accepts `baseUrl` +
+`apiKey` + `config` per `Codex` instance, so a connection never touches the user's
+`~/.codex/config.toml`. Pointing the Claude Agent SDK at non-Anthropic models would
+instead mean routing its `claude_code` preset through a third-party
+Anthropic-compat shim — greyer, and it loses fidelity. Codex is Apache-2.0 and
+explicitly designed for custom providers. The trade-off accepted knowingly: the
+Codex seat has no per-tool approval interception (its `ThreadEvent` union has no
+approval-request event), so connection-backed models get the policy-level posture
+Codex already used, not praxis's approve/deny cards.
+
+**Two things the plan got wrong, both caught by probing the real vendored CLI.**
+(1) `wire_api = "chat"` is DEAD — the bundled binary rejects it at config load
+("no longer supported"). So a host that serves only `/chat/completions` cannot back
+a connection at all. `ProviderConnection.wireApi` is therefore pinned to
+`'responses'`, coerced on read AND write, and the dialog states the constraint
+instead of offering a broken choice. (2) The SDK's plain `baseUrl` shortcut only
+emits `openai_base_url`, leaving the built-in provider's `supports_websockets` on —
+every turn then tried `ws://<host>/responses`, burned five reconnects (~10s) and
+surfaced each as an `error` event, i.e. five red lines before every turn. Fixed by
+registering a dedicated `model_providers."praxis-connection"` block
+(`supports_websockets = false`) and selecting it, with the key passed via `apiKey`
+only — never argv, never `env` (passing `env` would strip `process.env` from the
+CLI). Verified: requests hit `POST <baseUrl>/responses` with our key, zero
+WebSocket attempts, and with a real `codex login` active NO ChatGPT token leaks
+into a connection run.
+
+**Keys.** `providers-store.ts` is pure (injected `baseDir` + a `SecretCipher`, so it
+unit-tests with no electron); `providers.ts` owns the `safeStorage` cipher, the
+`providers:*` IPC and the `/models` probe. The key never crosses to the renderer —
+the UI only ever sees `hasKey`, so a compromised renderer dep can't exfiltrate it.
+`safeStorage` unavailable + an apiKey supplied THROWS rather than writing plaintext.
+Omitting `apiKey` on save preserves the stored key, so editing a label can't wipe it.
+
+**The picker is now model-first and built in main.** `ChatPanel.tsx`'s hardcoded
+`CLAUDE_MODELS`/`CODEX_MODELS` arrays and the separate Backend dropdown are gone:
+one grouped list from `providers.choices()`, where picking a model derives harness +
+connection + model id atomically. The login banner still works (it keys off the now
+*derived* provider) and is suppressed for connections — a connection authenticates
+with its own key, so "run `codex login`" would be the wrong advice. Live `setModel`
+is now gated on a `liveSwap` predicate (Claude→Claude, no connection either side);
+everything else restarts just that chat, which correctly covers
+connection→connection, a case the old `provider === 'codex'` check would have missed.
+
+New: `src/main/providers-store.ts`, `src/main/providers.ts`,
+`src/renderer/src/providers-store.ts`,
+`src/renderer/src/components/SettingsDialog.tsx`,
+`src/renderer/src/components/ProviderForm.tsx`, `test/providers-store.mjs`.
+
+**Review caught a real hole in the key story, twice over.** The stated invariant ("a
+compromised renderer dependency cannot exfiltrate keys") held for *reading* a key but
+not for *aiming* one — the renderer chose the destination while main supplied the
+credential. `catalog({ id, baseUrl: 'https://attacker/…' })` (ids are free from
+`providers:list`) would have had main decrypt every saved key and post it as a bearer
+token; and `save({ id, baseUrl: attacker })` re-pointed a connection while the
+key-preserving rule silently carried its credential across to the next turn. Fixed
+with one rule in one place — `sameOrigin` in providers-store.ts: a stored key may only
+be sent to the origin it was entered against. `save` drops the secret when the origin
+changes (path-only edits keep it — same server), `catalog` refuses a stored key aimed
+elsewhere, and `ProviderForm` requires a key when the host is edited. Test-pinned.
+
+Four smaller review findings, all fixed: a connection's 401 raised the global "sign in
+with ChatGPT" banner for the perfectly healthy built-in Codex seat; `setModel` /
+`setProvider` left `modelId`/`connectionId` stale, so a persisted profile could run a
+different model than the picker showed; the CLI's stderr (from a process whose env
+holds the key) reached the chat and the session record unscrubbed; and `isStored`
+didn't validate the fields `choices()` iterates, so `"models": "gpt-5"` in a
+hand-edited file would have filled the picker one character per entry. Also hardened:
+Linux's `basic_text` safeStorage backend now reads as unavailable (its "encryption"
+uses a hardcoded key — not what the UI promises), and providers.json is written 0600.
+
+**Proven against a live AI Gateway, same day.** A real key, a real turn, a real edit:
+`anthropic/claude-sonnet-4.6` through `https://ai-gateway.vercel.sh/v1` on the Codex
+harness read the target file, made the requested change, left the untargeted function
+alone, and finished in 15.5s with ZERO error events. That settles both big unknowns —
+the gateway's `/responses` accepts Codex's request shape, and the
+`model_providers."praxis-connection"` block is right (no reconnect attempts, so the
+websockets-off entry does its job). `/models` returned 322 models.
+
+**But the open models are still unproven, and the live run found a UX bug.** The test
+key was free-tier, where every open model 403s ("Free tier users do not have access to
+this model") and then 429s once the allowance is spent — only `anthropic/*` was
+reachable, so Kimi's `apply_patch` reliability remains the open question and needs paid
+credits. The bug: the CLI retries a failed request five times and emits EVERY attempt
+as its own `error` event, so that free-tier 403 produced SIX red lines in a row — and
+the six were ordered worst-last, since the attempts carry the real cause while the
+terminal message says only "exceeded retry limit, last status: 429". That is the first
+thing a new user would see after pasting their first key. New pure
+`backends/codex-retry.ts` collapses it: attempts become `status` lines, and their
+reason is grafted onto the single terminal error, so the user reads "…429 Too Many
+Requests — unexpected status 403 Forbidden: Free tier users do not have access to this
+model. Upgrade to paid credits…". `test/codex-retry-cause.mjs` pins it against the
+messages captured verbatim from that live run.
+
+Also observed live (logged in TASKS, not fixed): a connection run inherits the user's
+global `~/.codex/config.toml` MCP servers — an unauthenticated `mcp.vercel.com` entry
+on this machine dumped an OAuth blob into the turn's error text.
+
 ## 2026-08-06 — "Resolve it" no longer loops; questions run as a wizard
 
 **Conflict resolve loop (user-reported, radial-portfolio).** Pressing the

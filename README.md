@@ -20,6 +20,13 @@ GitHub PR.
   streams over IPC and edits source with hot-reload. Backends are pluggable —
   Claude (via the Agent SDK), Codex, and Gemini behind one provider seam
   (Gemini is experimental, gated behind `PRAXIS_EXPERIMENTAL_GEMINI`).
+- **Bring your own model.** Beyond the two subscription seats, Settings →
+  Models & Providers connects any OpenAI-compatible endpoint serving the
+  `/responses` API — Vercel AI Gateway, Groq, or a custom host — so open models
+  like Kimi or DeepSeek can drive a chat. Paste a key, Praxis fetches that
+  endpoint's model catalog, and you tick which models to offer in the picker.
+  Connections run on the Codex harness; the key is encrypted with the OS
+  keychain and never leaves the main process.
 - **Click-to-edit.** A **Select** mode maps a clicked element to its source
   location (via the `data-praxis-source` stamp — see
   [`docs/DESIGN.md`](docs/DESIGN.md)), then edits its **props** with typed
@@ -39,7 +46,8 @@ GitHub PR.
 - **Node 22** (`.nvmrc`) and **Bun** (`bun@1.3.x`). Distributed as source, run
   locally — you need Node + Bun installed.
 - A provider subscription for the agent (e.g. Claude Pro/Max), authorized
-  per-user (below). No shared secret.
+  per-user (below) — or your own API key for a third-party endpoint, added in
+  Settings. Either way it is per-user; there is no shared secret.
 - macOS is the primary target (the postinstall step rebrands the dev Electron
   bundle to Praxis and is macOS-only; it no-ops elsewhere).
 

@@ -26,12 +26,34 @@ export const DEFAULT_PROVIDER = 'claude'
  * toolbar stays simple, while `ProjectEntry.chatSettings` retains every chat's
  * choice as the user moves through the rail. */
 export interface ChatAgentSettings {
+  /**
+   * The picker's identity for the chosen model — a `ModelChoice.value` (v10), which
+   * for a connection-backed model is NOT the model id the backend wants (two
+   * connections can offer the same id). `DEFAULT_MODEL` still means "no model, use
+   * the account default".
+   */
   model: string
+  /**
+   * `ModelChoice.modelId` — what actually goes to the backend when it differs from
+   * `model`. Stored rather than re-derived from the choice list so a chat restored
+   * from localStorage can start its session correctly before that list has loaded.
+   */
+  modelId?: string
   effort: string
   provider: string
+  /** v10: run this chat against a user-added endpoint (`ProviderConnection.id`). */
+  connectionId?: string
   /** Tool-permission posture for THIS chat. Persisted per-chat like model/provider
    *  so switching chats restores it (main keeps mode per-session; see usePermissions). */
   permissionMode: PermissionMode
+}
+
+/** What the model picker hands back — one `ModelChoice`, flattened. */
+export interface ModelSelection {
+  model: string
+  modelId?: string
+  provider: string
+  connectionId?: string
 }
 
 export const defaultChatAgentSettings = (): ChatAgentSettings => ({
@@ -49,16 +71,37 @@ export const chatAgentSettingsFor = (
   sessionKey: string
 ): ChatAgentSettings => ({ ...defaultChatAgentSettings(), ...entry.chatSettings?.[sessionKey] })
 
+/**
+ * The model id a turn should actually carry, or undefined for "use the account
+ * default". A picker value is an IDENTITY (`ModelChoice.value`, namespaced by main
+ * as `provider[:connectionId]:modelId`), so the id to send is the choice's
+ * `modelId` — never `model`, which would reach the backend as the literal string
+ * "claude:opus". Pre-v10 chats persisted the bare id in `model` with no `modelId`,
+ * and still resolve through the fallback.
+ */
+export const agentModelId = (s: { model: string; modelId?: string }): string | undefined => {
+  const id = s.modelId ?? s.model
+  return id === DEFAULT_MODEL || s.model === DEFAULT_MODEL ? undefined : id
+}
+
 /** Convert the UI sentinels into AgentOptions the SDK understands. */
-export const toAgentOptions = (s: { model: string; effort: string; provider?: string }): {
+export const toAgentOptions = (s: {
+  model: string
+  modelId?: string
+  effort: string
+  provider?: string
+  connectionId?: string
+}): {
   model?: string
   effort?: string
   provider?: string
+  connectionId?: string
 } => ({
-  model: s.model === DEFAULT_MODEL ? undefined : s.model,
+  model: agentModelId(s),
   effort: s.effort === DEFAULT_EFFORT ? undefined : s.effort,
   // Default Claude is implied — only send a non-default backend.
-  ...(s.provider && s.provider !== DEFAULT_PROVIDER ? { provider: s.provider } : {})
+  ...(s.provider && s.provider !== DEFAULT_PROVIDER ? { provider: s.provider } : {}),
+  ...(s.connectionId ? { connectionId: s.connectionId } : {})
 })
 
 /** The FULL options a session must be started with — the SDK sentinels plus the
@@ -76,9 +119,13 @@ export const agentOptionsFor = (s: ChatAgentSettings): AgentOptions => ({
  * 'auto'. Used to reconcile the pickers with main after a renderer reload.
  */
 export const chatAgentSettingsFromOptions = (options: AgentOptions = {}): ChatAgentSettings => ({
+  // main knows only the model ID, not the picker's namespaced identity, so it lands
+  // in `model` and resolves through `agentModelId`'s pre-v10 fallback. The picker
+  // re-matches it against the live choice list (see `resolveChoice`).
   model: options.model ?? DEFAULT_MODEL,
   effort: options.effort ?? DEFAULT_EFFORT,
   provider: options.provider ?? DEFAULT_PROVIDER,
+  ...(options.connectionId ? { connectionId: options.connectionId } : {}),
   permissionMode: options.permissionMode ?? 'default'
 })
 
@@ -88,8 +135,19 @@ export const chatAgentSettingsFromOptions = (options: AgentOptions = {}): ChatAg
  * so a resumed chat always runs on Claude — and a model alias picked for another
  * backend ("gpt-5") means nothing to it, hence the account default. Everything
  * else (effort, permission posture) carries over from the visible chat.
+ *
+ * `connectionId` and `modelId` must be cleared too (v10): a set `connectionId`
+ * routes to the Codex harness whatever `provider` says, so leaving one behind would
+ * send a "resumed on Claude" chat to a third-party endpoint — and a stale `modelId`
+ * would outrank the reset `model` in `agentModelId`.
  */
 export const resumeChatSettings = (current: ChatAgentSettings): ChatAgentSettings =>
-  current.provider === DEFAULT_PROVIDER
+  current.provider === DEFAULT_PROVIDER && !current.connectionId
     ? current
-    : { ...current, provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL }
+    : {
+        ...current,
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+        modelId: undefined,
+        connectionId: undefined
+      }
