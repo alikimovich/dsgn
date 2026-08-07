@@ -104,6 +104,13 @@ src/
                     safeStorage cipher, the providers:* IPC, the /models catalog probe,
                     the picker's ModelChoice list, and resolveConnection() — the seam
                     backends/codex.ts aims the Codex SDK at
+    model-catalog.ts / codex-models.ts   what the two BUILT-IN seats offer, discovered
+                    instead of curated. model-catalog is the pure half (parsers + a TTL
+                    cache with injected clock/baseDir, persisted under userData);
+                    codex-models runs `codex debug models` on the SDK's OWN vendored
+                    binary, not PATH. Claude needs a live session (Query.supportedModels()),
+                    so backends/claude.ts hands its answer back via recordClaudeModels;
+                    providers.ts only schedules the refresh, never on the render path
     simulator.ts    iOS Simulator preview (Metro/Expo detect, MJPEG sim bridge)
     props.ts / props-svelte.ts   prop editing engines (React via react-docgen /
                     Svelte 5); they mirror each other's splice/apply contract
@@ -324,3 +331,15 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   Consequence for anything that asks "what did this session change?": a diff vs
   `HEAD` now returns nothing — compare against the merge base with the default
   branch instead (`src/main/publish-scope.ts` does, for the publish paths).
+- **Never hardcode a built-in seat's model list.** It rots invisibly: the picker
+  offered "GPT-5 Codex"/"GPT-5" for months after the Codex CLI moved to the
+  GPT-5.6 family, so a user's first act was to pick a model that no longer
+  existed. Both harnesses can be ASKED (`src/main/model-catalog.ts`), and the
+  arrays left in `providers.ts` are a last resort for "we could not ask", not
+  curation. Two traps if you touch this: the Codex binary to ask is the SDK's
+  VENDORED one (`@openai/codex-<plat>/vendor/…/bin/codex`), never the `codex` on
+  PATH — a global CLI of a different version would answer for a binary that
+  never runs the turns; and `Query.supportedModels()` leads with its own
+  `{value:'default'}`, which collides with praxis's "Default" sentinel, so a
+  discovered `default` is dropped in favour of ours (`agentModelId` maps that
+  exact string to "send no model").

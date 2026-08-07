@@ -53,9 +53,13 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 - [ ] **Untested UI paths:** the `unsupported: true` free-text fallback (host
       with no `/models` route) and the edit-an-existing-connection auto-probe.
       Both need a host that exhibits them.
-- [ ] **Claude's model list is still curated in main.** `providers.choices()`
-      hardcodes opus/sonnet/haiku because it's called with no live session; the
-      Agent SDK's `Query.supportedModels()` would make it live and account-accurate.
+- [x] **Both seats' model lists are discovered, not curated.** ✅ 2026-08-07 —
+      `src/main/model-catalog.ts` (pure: parsers + TTL cache, injected
+      clock/baseDir, persisted to `<userData>/praxis/model-catalog.json`) +
+      `src/main/codex-models.ts` (runs `codex debug models` on the SDK's vendored
+      binary). Claude answers `Query.supportedModels()`, handed back from
+      `backends/claude.ts` since it needs a live session. `test/model-catalog.mjs`.
+      See PROGRESS 2026-08-07.
 - [ ] **Codex-seat parity holes** (these now matter for every connection model,
       not just ChatGPT users): praxis's in-process tools aren't available (serve
       them over a local MCP server injected via `CodexOptions.config`, whose

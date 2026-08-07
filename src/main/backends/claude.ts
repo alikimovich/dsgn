@@ -22,6 +22,7 @@ import { checkContrast, suggestAccessible } from '../apca'
 import { lexLiteral, locateAnchor, validateManifest } from '../control-manifest'
 import { saveManifest } from '../control-panels'
 import { fluidClamp, fluidScale } from '../fluid'
+import { recordClaudeModels } from '../model-catalog'
 import { oklchScale } from '../oklch'
 import { capturePreview, getPreviewUrl } from '../preview-state'
 import { praxisRules } from '../rules'
@@ -1288,6 +1289,24 @@ async function startSession(
     .catch(() => {
       /* older SDK / not ready — the init message will still populate on first turn */
     })
+
+  // Feed the model picker (see main/model-catalog.ts). A LIVE query is the only
+  // thing that can say which models this account actually has — `choices()` runs
+  // on a picker render with no session to ask — so every session opportunistically
+  // hands its answer to the catalog, which persists it for the next launch. Purely
+  // fire-and-forget: never awaited, never emitted, never able to fail a turn. The
+  // try/catch is for an SDK old enough to lack the method outright, which would
+  // throw SYNCHRONOUSLY here and take session startup with it.
+  try {
+    void q
+      .supportedModels()
+      .then((models) => recordClaudeModels(models))
+      .catch(() => {
+        /* not ready / no auth — the picker keeps its cached or last-resort list */
+      })
+  } catch {
+    /* no supportedModels() on this SDK — same outcome, one turn earlier */
+  }
 
   // Drive the output stream for the life of the session.
   void (async () => {

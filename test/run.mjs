@@ -44,6 +44,7 @@ const UNIT = [
   'diag-rules',
   'sessions-store',
   'providers-store',
+  'model-catalog',
   'codex-retry-cause',
   'chat-title',
   'chat-settings',
