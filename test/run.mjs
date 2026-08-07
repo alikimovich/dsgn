@@ -45,6 +45,7 @@ const UNIT = [
   'sessions-store',
   'providers-store',
   'codex-retry-cause',
+  'interrupt-escalation',
   'chat-title',
   'chat-settings',
   'run-stats',

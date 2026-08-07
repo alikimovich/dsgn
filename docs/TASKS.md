@@ -3,6 +3,31 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Stop / interrupt (2026-08-07, user-reported)
+
+- [x] **Stop was a dead button on Claude, and a silent no-op on Gemini.** ✅
+      2026-08-07 — the SDK's `interrupt()` control request has no timeout, so a
+      wedged subprocess made Stop hang forever with the spinner still running.
+      New pure `src/main/backends/interrupt.ts` (ask, then kill), claude.ts
+      escalates to its abort signal and emits the missing `done`, agent.ts caps
+      its wait and rebuilds the dead session. Gemini gained a real `interrupt`.
+      `test/interrupt-escalation.mjs`. See PROGRESS 2026-08-07.
+- [ ] **The wedge itself was never reproduced.** The fix is reasoned from the SDK
+      source + event paths and its escalation logic is unit-tested, but nobody has
+      seen it rescue a real hang. If it recurs: confirm Stop now returns within
+      ~3s, the chat restarts, and the "force-stopped" message appears. Worth
+      capturing what triggers it (large image attachment? long session? a
+      particular tool?) — the user reported it as intermittent.
+- [ ] **A hard stop loses the model's context.** The restarted chat is a fresh SDK
+      query, so earlier turns are gone from the model's view even though praxis
+      still shows them. The record captures `sdkSessionId`, and v9 resume already
+      exists, so restarting via `resume` instead of fresh would keep the context —
+      not attempted here because a wedged session's id may itself be unusable.
+- [ ] **Codex/connection turns can't be force-stopped, only aborted locally.** Its
+      `turnAbort` cancels praxis's read of the stream; whether the underlying CLI
+      process actually dies wasn't verified. Worth checking a connection turn
+      against a slow endpoint.
+
 ## v10 — bring-your-own-model connections (2026-08-07, user-requested)
 
 - [x] **Connections: user-added OpenAI-compatible endpoints.** ✅ 2026-08-07 —

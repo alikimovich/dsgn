@@ -107,6 +107,13 @@ const store = (): SessionStore => (_store ??= createSessionStore(dataDir()))
 // render into a visible chat; the dispose guard keeps backgrounded/replaced
 // sessions from leaking events into a chat the renderer isn't showing.
 const sessions = new Map<string, ProviderSession>()
+/**
+ * Hard cap on how long `agent:interrupt` waits for a backend's cancel before
+ * resolving anyway. Deliberately longer than any backend's own grace window (see
+ * claude.ts's INTERRUPT_GRACE_MS) so a backend that IS handling it properly gets
+ * to finish and report `hardStopped`; this only catches one that never answers.
+ */
+const INTERRUPT_IPC_CAP_MS = 5_000
 let activeKey: string | null = null
 const activeSession = (): ProviderSession | null =>
   activeKey ? (sessions.get(activeKey) ?? null) : null
@@ -602,6 +609,44 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
   // Codex fixes its model/backend when a thread is created. Restart exactly the
   // selected chat (not the project's default session) so a picker change never
   // alters a sibling chat or leaves an additional chat on its old model.
+  //
+  // Extracted from the IPC handler because a force-stop needs it too: when Stop has
+  // to hard-abort a wedged backend (see `agent:interrupt`), that kills the whole
+  // query, not just the turn — so the chat must be rebuilt or it would look alive
+  // while silently swallowing every later message.
+  const restartChatSession = async (
+    root: string,
+    sessionKey: string,
+    options: AgentOptions = {}
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const key = projectKey(root)
+    if (!sessionKeysForProject(key).includes(sessionKey)) {
+      return { ok: false, error: 'That chat is no longer open.' }
+    }
+    const existing = sessions.get(sessionKey)
+    if (!existing) return { ok: false, error: 'That chat is no longer open.' }
+    closeSession(existing)
+    sessions.delete(sessionKey)
+    runningKeys.delete(sessionKey)
+    try {
+      // Reuse the chat's EXISTING worktree (isolatedCwd is idempotent for a known
+      // sessionKey) so a model/backend restart keeps its isolation instead of
+      // silently dropping to the live root and leaking the worktree.
+      const cwd = await isolatedCwd(root, sessionKey)
+      const s = await pickProvider(options).startSession(cwd, options, getWindow, {
+        emitKey: sessionKey,
+        liveRoot: root,
+        onEvent: interactiveEvents(sessionKey)
+      })
+      adoptSession(sessionKey, s.record, root)
+      sessions.set(sessionKey, s)
+      if (activeKey === sessionKey) activeSessionKeyByProject.set(key, sessionKey)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+
   ipcMain.handle(
     'agent:restart-chat',
     async (
@@ -609,34 +654,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
       root: string,
       sessionKey: string,
       options: AgentOptions = {}
-    ): Promise<{ ok: boolean; error?: string }> => {
-      const key = projectKey(root)
-      if (!sessionKeysForProject(key).includes(sessionKey)) {
-        return { ok: false, error: 'That chat is no longer open.' }
-      }
-      const existing = sessions.get(sessionKey)
-      if (!existing) return { ok: false, error: 'That chat is no longer open.' }
-      closeSession(existing)
-      sessions.delete(sessionKey)
-      runningKeys.delete(sessionKey)
-      try {
-        // Reuse the chat's EXISTING worktree (isolatedCwd is idempotent for a known
-        // sessionKey) so a model/backend restart keeps its isolation instead of
-        // silently dropping to the live root and leaking the worktree.
-        const cwd = await isolatedCwd(root, sessionKey)
-        const s = await pickProvider(options).startSession(cwd, options, getWindow, {
-          emitKey: sessionKey,
-          liveRoot: root,
-          onEvent: interactiveEvents(sessionKey)
-        })
-        adoptSession(sessionKey, s.record, root)
-        sessions.set(sessionKey, s)
-        if (activeKey === sessionKey) activeSessionKeyByProject.set(key, sessionKey)
-        return { ok: true }
-      } catch (err) {
-        return { ok: false, error: err instanceof Error ? err.message : String(err) }
-      }
-    }
+    ): Promise<{ ok: boolean; error?: string }> => restartChatSession(root, sessionKey, options)
   )
 
   // v9 resume — hand a past ("previous agent") SessionRecord back to a LIVE SDK
@@ -1110,9 +1128,24 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     ;[...session.pending.keys()].forEach((id) => resolvePending(session, id, 'deny'))
     if (session.pendingQuestions)
       [...session.pendingQuestions.keys()].forEach((id) => resolveQuestion(session, id, null))
+    const sessionKey = activeKey
+    const root = session.root
     // A stop that lands after the turn already finished/aborted makes the SDK
     // throw "Operation aborted" — treat it as the no-op it is.
-    await session.interrupt?.().catch(() => {})
+    //
+    // The outer race is belt-and-braces for the whole seam: a backend is REQUIRED
+    // to bound its own cancel, but if a future one forgets, this handler must still
+    // resolve or the renderer's Stop sits on a promise that never settles and the
+    // button reads as broken — which is exactly how the Claude deadlock presented.
+    const outcome = await Promise.race([
+      session.interrupt?.().catch(() => undefined) ?? Promise.resolve(undefined),
+      new Promise<undefined>((r) => setTimeout(r, INTERRUPT_IPC_CAP_MS, undefined))
+    ])
+    // The backend killed its query to escape a wedge, so this session is dead:
+    // rebuild the chat in place, or it would keep accepting messages into nothing.
+    if (outcome && typeof outcome === 'object' && outcome.hardStopped && sessionKey) {
+      await restartChatSession(root, sessionKey, session.options)
+    }
   })
 
   // Don't leave any backend subprocess running after praxis quits.
