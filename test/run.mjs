@@ -46,6 +46,7 @@ const UNIT = [
   'chat-title',
   'chat-settings',
   'run-stats',
+  'codex-usage',
   'edit-history',
   'worktrees',
   'chat-worktrees',

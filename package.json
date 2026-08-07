@@ -101,6 +101,7 @@
     "test:chat-title": "bun test/chat-title.mjs",
     "test:chat-settings": "bun test/chat-settings.mjs",
     "test:run-stats": "bun test/run-stats.mjs",
+    "test:codex-usage": "bun test/codex-usage.mjs",
     "test:edithistory": "bun test/edit-history.mjs",
     "test:worktrees": "bun test/worktrees.mjs",
     "test:chat-worktrees": "bun test/chat-worktrees.mjs",

@@ -3,7 +3,15 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { AgentEvent, AgentOptions } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
-import { isEmptyUsage, readUsage } from '../../shared/run-stats'
+import {
+  addUsage,
+  emptyUsage,
+  isEmptyUsage,
+  readUsage,
+  usageDelta,
+  type TokenUsage
+} from '../../shared/run-stats'
+import { watchRolloutUsage, type RolloutUsageWatch } from '../codex-usage'
 import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
 import { describeTool, sendToRenderer } from './tools'
 import { createRecordCapture } from './record'
@@ -123,6 +131,34 @@ async function startSession(
     initErr = err instanceof Error ? err : new Error(String(err))
   }
 
+  // Codex reports token usage as a CUMULATIVE tally for the whole thread — turn 2's
+  // `turn.completed` repeats turn 1's tokens on top of its own — so every reading is
+  // diffed against what we've already emitted (the `usage` event carries a delta, and
+  // summing the raw readings would have over-counted every turn after the first).
+  // Same accumulator serves the live rollout tail below, so whichever readings it
+  // missed are simply topped up at `turn.completed`.
+  let sentUsage = emptyUsage()
+  const noteUsage = (total: TokenUsage | null): void => {
+    if (!total) return
+    const delta = usageDelta(sentUsage, total)
+    if (isEmptyUsage(delta)) return
+    sentUsage = addUsage(sentUsage, delta) // = max(sent, total), never claws back
+    emit({ type: 'usage', ...delta })
+  }
+
+  // The SDK's event stream has no incremental usage member, so the counters would
+  // otherwise sit at zero for the whole turn; the CLI's own session rollout does
+  // record them as it goes. Runs only while a turn is in flight. See codex-usage.ts.
+  let usageWatch: RolloutUsageWatch | null = null
+  const startUsageWatch = (threadId: string): void => {
+    if (usageWatch || disposed) return
+    usageWatch = watchRolloutUsage(threadId, noteUsage)
+  }
+  const stopUsageWatch = (): void => {
+    usageWatch?.stop()
+    usageWatch = null
+  }
+
   // Codex streams whole `ThreadItem`s (often started→updated→completed), not raw deltas.
   // Track per-item: how much agent_message text we've emitted (so updates stream as a
   // suffix), and which tool items we've already surfaced (so we emit each step once).
@@ -203,11 +239,17 @@ async function startSession(
       return
     }
     turnAbort = new AbortController()
+    // On turn 2+ the thread id is already known, so the tail starts with the turn;
+    // on turn 1 it starts at `thread.started`, a moment later.
+    if (thread.id) startUsageWatch(thread.id)
     try {
       const { events } = await thread.runStreamed(text, { signal: turnAbort.signal })
       for await (const ev of events) {
         if (disposed || aborted || turnAbort.signal.aborted) break
         switch (ev.type) {
+          case 'thread.started':
+            startUsageWatch(ev.thread_id)
+            break
           case 'item.started':
           case 'item.updated':
             handleItem(ev.item, false)
@@ -215,21 +257,18 @@ async function startSession(
           case 'item.completed':
             handleItem(ev.item, true)
             break
-          case 'turn.completed': {
-            // Codex reports tokens once, for the whole turn (no incremental
-            // readings to dedupe like Claude's) — so the status line's counters
-            // step up at the end of each turn rather than during it.
-            const used = readUsage((ev as { usage?: unknown }).usage)
-            if (used && !isEmptyUsage(used)) emit({ type: 'usage', ...used })
+          case 'turn.completed':
+            // A running thread total, not this turn's own tokens — `noteUsage`
+            // emits only the part the rollout tail hasn't already reported.
+            noteUsage(readUsage((ev as { usage?: unknown }).usage))
             break
-          }
           case 'turn.failed':
             emitError(ev.error.message)
             break
           case 'error':
             emitError(ev.message)
             break
-          // thread.started / turn.started need no extra handling.
+          // turn.started needs no extra handling.
         }
       }
     } catch (err) {
@@ -243,6 +282,10 @@ async function startSession(
         )
       }
     }
+    // One last read before the tail stops: an INTERRUPTED turn never reaches
+    // `turn.completed`, so the rollout is the only record of what it spent.
+    await usageWatch?.poll().catch(() => {})
+    stopUsageWatch()
     cap.finalize()
     emit({ type: 'done' })
   }
@@ -263,9 +306,11 @@ async function startSession(
     finalize: cap.finalize,
     dispose: () => {
       disposed = true
+      stopUsageWatch()
     },
     shutdown: () => {
       aborted = true
+      stopUsageWatch()
       turnAbort?.abort()
     },
     interrupt: async () => {

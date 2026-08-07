@@ -87,6 +87,11 @@ src/
                     path). Pure fs+path; sanitizes the renderer-supplied name
     backends/       provider seam: claude.ts, codex.ts, gemini.ts behind pickProvider
                     (gemini currently has NO SDK dep — treat as experimental)
+    codex-usage.ts  live token counts for a Codex turn: the SDK's event stream
+                    reports usage only at `turn.completed`, so this tails the
+                    CLI's own session rollout (`$CODEX_HOME/sessions/…jsonl`) for
+                    its `token_count` records. Every reading is a running THREAD
+                    total, so codex.ts DIFFS them (`usageDelta`), never sums
     simulator.ts    iOS Simulator preview (Metro/Expo detect, MJPEG sim bridge)
     props.ts / props-svelte.ts   prop editing engines (React via react-docgen /
                     Svelte 5); they mirror each other's splice/apply contract
