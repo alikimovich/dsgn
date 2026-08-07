@@ -7,6 +7,14 @@ import type {
   ProviderConnection,
   ProviderConnectionInput
 } from '../shared/api'
+import { discoverCodexModels } from './codex-models'
+import {
+  type CatalogBackend,
+  type CatalogModel,
+  createModelCatalog,
+  type ModelCatalog,
+  setModelCatalog
+} from './model-catalog'
 import {
   createProviderStore,
   modelsUrl,
@@ -79,6 +87,11 @@ const cipher: SecretCipher = {
 let getDataDir: () => string = () => join(app.getPath('userData'), 'praxis')
 let _store: ProviderStore | null = null
 const store = (): ProviderStore => (_store ??= createProviderStore(getDataDir(), cipher))
+// Same lazy shape, same reason: `getDataDir` isn't final (and `app.getPath`
+// throws) until `registerProviderIpc` has run.
+let _modelCatalog: ModelCatalog | null = null
+const modelCatalog = (): ModelCatalog =>
+  (_modelCatalog ??= createModelCatalog({ baseDir: getDataDir() }))
 
 // ---------------------------------------------------------------------------
 // Catalog probe
@@ -194,6 +207,55 @@ export async function catalog(input: ModelCatalogInput): Promise<ModelCatalogRes
 }
 
 // ---------------------------------------------------------------------------
+// Built-in seats: live model discovery
+//
+// The halves this orchestrates live elsewhere: `model-catalog.ts` (pure — the
+// parsers and the TTL/disk cache) and `codex-models.ts` (finding and running the
+// CLI). What's here is WHEN to ask: one probe in flight, a floor between
+// attempts, never on the render path. The Claude half needs no scheduler —
+// `backends/claude.ts` volunteers its answer whenever a session exists.
+// ---------------------------------------------------------------------------
+
+/** Don't re-spawn a failing CLI on every picker render. A machine with no Codex
+ *  set up answers `[]` forever, which leaves the entry stale forever, so
+ *  staleness alone can't be the gate. */
+const CODEX_RETRY_MS = 5 * 60_000
+/** How long a COLD `providers:choices` may wait on the first probe (see the IPC
+ *  handler). Only ever paid once, before any list has been cached to disk. */
+const COLD_START_WAIT_MS = 2_500
+
+let codexProbe: Promise<void> | null = null
+let codexProbedAt = 0
+
+/**
+ * Refresh the Codex list if it's due, at most one probe in flight. Returns a
+ * promise that settles when the current probe does (already-resolved when
+ * nothing needed doing), so the cold-start path can wait on it — but it is
+ * never REQUIRED to be awaited, and it never rejects.
+ */
+function refreshCodexModels(): Promise<void> {
+  if (codexProbe) return codexProbe
+  try {
+    if (!modelCatalog().isStale('codex')) return Promise.resolve()
+  } catch {
+    return Promise.resolve()
+  }
+  if (codexProbedAt && Date.now() - codexProbedAt < CODEX_RETRY_MS) return Promise.resolve()
+  codexProbedAt = Date.now()
+  codexProbe = discoverCodexModels()
+    .then((models) => {
+      modelCatalog().set('codex', models) // a no-op for the empty (failed) list
+    })
+    .catch(() => {
+      /* discoverCodexModels already swallows; belt-and-braces */
+    })
+    .finally(() => {
+      codexProbe = null
+    })
+  return codexProbe
+}
+
+// ---------------------------------------------------------------------------
 // The picker's model list
 // ---------------------------------------------------------------------------
 
@@ -206,26 +268,37 @@ export async function catalog(input: ModelCatalogInput): Promise<ModelCatalogRes
 const DEFAULT_MODEL = 'default'
 
 /**
- * Built-in seats. These are CURATED here rather than discovered: both harnesses
- * run on the user's own subscription, and their model sets change rarely.
+ * LAST-RESORT fallbacks — used only when a seat has never been discovered
+ * successfully (see `model-catalog.ts`): no cache on disk, and either the Codex
+ * CLI can't be asked or no Claude session has ever run on this install.
  *
- * The Claude Agent SDK does expose a live `supportedModels()`, and swapping this
- * list for it would be strictly better — but `choices()` is called by a settings
- * /picker render with NO live session to ask, and spinning one up just to
- * populate a dropdown is far more expensive than a four-item list. If a session
- * is ever guaranteed to exist at picker time, replace CLAUDE with that call.
+ * These are NOT curation. A hardcoded list is exactly the bug this change
+ * exists to fix: the picker went on offering "GPT-5 Codex"/"GPT-5" for months
+ * after the CLI had moved to the GPT-5.6 family, so users' first act was to pick
+ * a model that no longer existed. Both harnesses can be asked — `codex debug
+ * models` and the Agent SDK's `Query.supportedModels()` — and the answer is
+ * cached to disk, so these arrays should be reached ~once per install at most.
+ *
+ * They are a snapshot of what discovery returned on 2026-08-07 and WILL rot.
+ * When they're wrong the seat is almost certainly unusable anyway (no working
+ * CLI / never-authenticated account), so they exist to keep the picker from
+ * rendering empty, not to be right.
  */
-const CLAUDE: Array<[modelId: string, label: string]> = [
-  [DEFAULT_MODEL, 'Default'],
+const CLAUDE_FALLBACK: Array<[modelId: string, label: string]> = [
+  // Left exactly as the curated array had them (minus the sentinel, which
+  // `builtinChoices` now prepends): these short aliases are what shipped, and a
+  // fallback that quietly drops a model the user could pick before would be its
+  // own regression. Discovery returns the fuller ids (`claude-fable-5[1m]`, …).
   ['fable', 'Fable'],
   ['opus', 'Opus'],
   ['sonnet', 'Sonnet'],
   ['haiku', 'Haiku']
 ]
-const CODEX: Array<[modelId: string, label: string]> = [
-  [DEFAULT_MODEL, 'Default'],
-  ['gpt-5-codex', 'GPT-5 Codex'],
-  ['gpt-5', 'GPT-5']
+const CODEX_FALLBACK: Array<[modelId: string, label: string]> = [
+  ['gpt-5.6-sol', 'GPT-5.6-Sol'],
+  ['gpt-5.6-terra', 'GPT-5.6-Terra'],
+  ['gpt-5.6-luna', 'GPT-5.6-Luna'],
+  ['gpt-5.5', 'GPT-5.5']
 ]
 
 /**
@@ -259,34 +332,74 @@ function prettyModelLabel(id: string, siblings: string[]): string {
 }
 
 /**
+ * One built-in seat's group: the "Default" sentinel, then whatever discovery
+ * found — or the last-resort array when it has never found anything.
+ *
+ * The sentinel is prepended here rather than living in the lists, because BOTH
+ * sources of truth can carry their own: the Agent SDK's `supportedModels()`
+ * leads with `{value: 'default', displayName: 'Default (recommended)'}`, whose
+ * value collides exactly with ours. Two choices sharing a `value` would be a
+ * duplicate React key and an ambiguous `resolveChoice` match, so a discovered
+ * `default` is dropped in favour of praxis's own entry — which the renderer and
+ * `agentModelId` ("modelId === 'default' ⇒ send no model") depend on being first.
+ */
+function builtinChoices(
+  provider: CatalogBackend,
+  group: string,
+  fallback: Array<[modelId: string, label: string]>
+): ModelChoice[] {
+  // Total by construction: a catalog read never throws, but `modelCatalog()`
+  // itself reaches `app.getPath` on first use, and `choices()` must never throw.
+  let discovered: CatalogModel[] | null = null
+  try {
+    discovered = modelCatalog().get(provider)
+  } catch {
+    /* data dir not resolvable yet — use the fallback */
+  }
+  const models = discovered?.length
+    ? discovered
+    : fallback.map(([id, label]) => ({ id, label }) as CatalogModel)
+  return [
+    { id: DEFAULT_MODEL, label: 'Default' },
+    ...models.filter((m) => m.id !== DEFAULT_MODEL)
+  ].map((m) => ({
+    value: choiceValue(provider, m.id),
+    label: m.label,
+    provider,
+    modelId: m.id,
+    group
+  }))
+}
+
+/** The stored connections, or none if the store can't be read at all. Same
+ *  totality rule as `builtinChoices`: `choices()` must never throw. */
+function connections(): ProviderConnection[] {
+  try {
+    return store().list()
+  } catch {
+    return []
+  }
+}
+
+/**
  * Every model the chat picker should offer: the two built-in seats first, then one
  * group per connection (labelled with the connection's own name). Recomputed per
  * call, so it always reflects the store — including a connection deleted a moment
  * ago. Keyless connections are still listed: hiding a user's own configuration is
  * more confusing than the turn-time error, and the backend gates on
  * `resolveConnection` anyway.
+ *
+ * FAST AND TOTAL. Every read here is off an already-loaded cache or a small
+ * JSON file, and nothing in it can throw or await: this runs on the picker's
+ * render path, so discovery happens BEHIND it (`refreshCodexModels`, and
+ * `backends/claude.ts` handing back `supportedModels()`), never inside it.
  */
 export function choices(): ModelChoice[] {
-  const out: ModelChoice[] = []
-  for (const [modelId, label] of CLAUDE) {
-    out.push({
-      value: choiceValue('claude', modelId),
-      label,
-      provider: 'claude',
-      modelId,
-      group: 'Claude'
-    })
-  }
-  for (const [modelId, label] of CODEX) {
-    out.push({
-      value: choiceValue('codex', modelId),
-      label,
-      provider: 'codex',
-      modelId,
-      group: 'Codex'
-    })
-  }
-  for (const conn of store().list()) {
+  const out: ModelChoice[] = [
+    ...builtinChoices('claude', 'Claude', CLAUDE_FALLBACK),
+    ...builtinChoices('codex', 'Codex', CODEX_FALLBACK)
+  ]
+  for (const conn of connections()) {
     for (const modelId of conn.models) {
       out.push({
         // A connection is an OpenAI-compatible endpoint, so the Codex harness runs
@@ -327,6 +440,14 @@ export function resolveConnection(
  */
 export function registerProviderIpc(dataDirFn: () => string): void {
   getDataDir = dataDirFn
+  // From here on `getDataDir` is final, so the catalog can be built and shared.
+  // `backends/claude.ts` feeds the Claude half through it (`recordClaudeModels`)
+  // — the SDK will only name its models from inside a live query.
+  setModelCatalog(modelCatalog())
+  // Warm the Codex half NOW, at app start, rather than waiting for the first
+  // picker render: the probe is a ~1s subprocess, and this runs long before a
+  // window exists, so by the time the renderer asks the answer is already there.
+  void refreshCodexModels()
 
   ipcMain.handle('providers:list', (): ProviderConnection[] => store().list())
 
@@ -354,5 +475,30 @@ export function registerProviderIpc(dataDirFn: () => string): void {
     (_e, input: ModelCatalogInput): Promise<ModelCatalogResult> => catalog(input)
   )
 
-  ipcMain.handle('providers:choices', (): ModelChoice[] => choices())
+  // `choices()` is synchronous and serves whatever is cached; the refresh runs
+  // behind it. The ONE exception is a genuinely COLD catalog (first-ever launch,
+  // nothing on disk), where answering instantly would pin the last-resort list
+  // for the whole session — the renderer's providers-store fetches once and keeps
+  // the result. There, briefly wait on the probe already running since
+  // registration. Bounded twice (the execFile timeout AND this race), and the
+  // timer is unref'd, so a wedged CLI can neither hang the picker nor hold the
+  // event loop open.
+  ipcMain.handle('providers:choices', async (): Promise<ModelChoice[]> => {
+    let cold = false
+    try {
+      cold = modelCatalog().get('codex') === null
+    } catch {
+      /* no data dir yet — treat as warm and just serve the fallback */
+    }
+    const refreshing = refreshCodexModels()
+    if (cold) {
+      await Promise.race([
+        refreshing,
+        new Promise<void>((resolve) => {
+          setTimeout(resolve, COLD_START_WAIT_MS).unref?.()
+        })
+      ])
+    }
+    return choices()
+  })
 }

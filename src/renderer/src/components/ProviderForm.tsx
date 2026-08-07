@@ -1,3 +1,4 @@
+import { Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -7,6 +8,26 @@ import { useProviders } from '../providers-store'
 
 /** Vercel's documented values for pointing Codex at the AI Gateway. */
 export const GATEWAY_BASE_URL = 'https://ai-gateway.vercel.sh/v1'
+
+/**
+ * How long the FORM waits for a catalog probe before giving up on it.
+ *
+ * Deliberately longer than main's own 10s request timeout (providers.ts): main
+ * answers a slow/unreachable host with a real error message well inside this, so
+ * this only ever fires when the IPC round trip itself never lands — the one case
+ * that would otherwise leave the button reading "Connecting…" forever. Two
+ * seconds of headroom is enough for the message to win the race.
+ */
+const PROBE_DEADLINE_MS = 12_000
+
+/** The host a base URL points at, for the in-flight status line. Null if unparseable. */
+const hostOf = (url: string): string | null => {
+  try {
+    return new URL(url.trim()).host
+  } catch {
+    return null
+  }
+}
 
 /** The add/edit form's working copy. `id` present ⇒ editing a saved connection. */
 interface Draft {
@@ -98,10 +119,26 @@ export default function ProviderForm({
   const [unsupported, setUnsupported] = useState(false)
   const [manualIds, setManualIds] = useState(connection?.models.join('\n') ?? '')
   const [filter, setFilter] = useState('')
-  const [probing, setProbing] = useState(false)
+  /**
+   * The probe currently in flight, or null. Modelled as the REQUEST rather than a
+   * `probing` boolean on purpose: "the button says Connecting…" and "a request is
+   * outstanding" are then the same fact, so the two can't drift apart. Every exit
+   * path (answer, throw, deadline, cancel, preset switch, unmount) clears it, and
+   * the only case that deliberately doesn't is a NEWER probe having taken the slot
+   * — which then owns clearing it.
+   */
+  const [inFlight, setInFlight] = useState<{
+    token: number
+    host: string
+    startedAt: number
+  } | null>(null)
+  const probing = inFlight !== null
+  /** Whole seconds the current probe has been waiting — the visible progress. */
+  const [waited, setWaited] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  // A probe raced by a preset switch (or an unmount) must not land.
+  // A probe raced by a preset switch, a cancel, the deadline (or an unmount) must
+  // not land: bumping this token is what disowns whatever is still outstanding.
   const probeToken = useRef(0)
   const live = useRef(true)
   useEffect(
@@ -111,6 +148,25 @@ export default function ProviderForm({
     []
   )
 
+  // Tick the "…for Ns" counter while a probe is outstanding. No aria-live: a
+  // number changing every second is announcement noise (same call as the chat's
+  // status line); the button's own "Connecting…" label carries the state.
+  useEffect(() => {
+    if (!inFlight) return
+    setWaited(0)
+    const id = setInterval(
+      () => setWaited(Math.round((Date.now() - inFlight.startedAt) / 1000)),
+      1000
+    )
+    return () => clearInterval(id)
+  }, [inFlight])
+
+  /** Disown the outstanding probe (if any) and return the form to its idle state. */
+  const dropProbe = (): void => {
+    probeToken.current += 1
+    setInFlight(null)
+  }
+
   /**
    * The "Connect" probe. Takes the draft + key explicitly so it can run straight
    * from the mount effect below without waiting for a state flush. Omitting
@@ -118,9 +174,18 @@ export default function ProviderForm({
    */
   const probe = async (d: Draft, key: string): Promise<void> => {
     const token = ++probeToken.current
-    setProbing(true)
+    setInFlight({ token, host: hostOf(d.baseUrl) ?? 'the endpoint', startedAt: Date.now() })
     setError(null)
     const stale = (): boolean => !live.current || token !== probeToken.current
+    // Renderer-side backstop for an IPC round trip that never comes back. It
+    // disowns this probe, so a late answer can no longer touch the form.
+    const deadline = setTimeout(() => {
+      if (stale()) return
+      dropProbe()
+      setError(
+        `No answer from ${hostOf(d.baseUrl) ?? 'that endpoint'} after ${PROBE_DEADLINE_MS / 1000} seconds. Check the base URL, then try again.`
+      )
+    }, PROBE_DEADLINE_MS)
     try {
       const res = await window.api.providers.catalog({
         baseUrl: d.baseUrl.trim(),
@@ -145,7 +210,11 @@ export default function ProviderForm({
       if (stale()) return
       setError(e instanceof Error ? e.message : 'Couldn’t reach that endpoint.')
     } finally {
-      if (!stale()) setProbing(false)
+      clearTimeout(deadline)
+      // Unconditional except for the one legitimate case: a newer probe owns the
+      // slot now. Guarding this on `stale()` (as it used to) meant any path that
+      // bumped the token mid-probe left the button on "Connecting…" for good.
+      if (live.current) setInFlight((cur) => (cur?.token === token ? null : cur))
     }
   }
 
@@ -159,11 +228,10 @@ export default function ProviderForm({
 
   const setPreset = (preset: 'gateway' | 'custom'): void => {
     if (draft.preset === preset) return
-    probeToken.current += 1
+    dropProbe()
     setCatalog(null)
     setUnsupported(false)
     setError(null)
-    setProbing(false)
     setDraft(
       preset === 'gateway'
         ? { ...draft, preset, baseUrl: GATEWAY_BASE_URL }
@@ -324,17 +392,35 @@ export default function ProviderForm({
         </span>
       </div>
 
-      {/* 3 — connect, then pick models */}
-      <div className="flex items-center gap-2">
+      {/* 3 — connect, then pick models. A probe can take seconds (main allows the
+          host 10), so the wait is legible rather than a frozen button: a spinner,
+          which host is being contacted, how long it's been, and a way out. */}
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"
           onClick={() => void probe(draft, apiKey)}
           disabled={!canConnect || probing}
         >
-          {probing ? 'Connecting…' : 'Connect'}
+          {probing ? (
+            <>
+              <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              Connecting…
+            </>
+          ) : (
+            'Connect'
+          )}
         </Button>
+        {probing && (
+          // Stops the form waiting on it; main's own request runs to completion
+          // and its answer is simply disowned (see `dropProbe`).
+          <Button variant="ghost" size="sm" onClick={dropProbe} aria-label="Cancel connecting">
+            Cancel
+          </Button>
+        )}
         <span className="text-xs text-muted-foreground">
-          Checks the key and lists the models this endpoint offers.
+          {inFlight
+            ? `Contacting ${inFlight.host}… ${waited}s`
+            : 'Checks the key and lists the models this endpoint offers.'}
         </span>
       </div>
 

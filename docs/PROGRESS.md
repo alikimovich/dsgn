@@ -34,6 +34,68 @@ Two details worth keeping:
 `src/renderer/src/composer-drafts.ts` (new — also now owns the `Attachment`
 type), `components/ChatPanel.tsx`, `store.ts` (`clearChat`),
 `test/composer-draft.mjs` (new, electron tier).
+## 2026-08-07 — The model picker asks the harnesses instead of quoting a list
+
+User-reported: the picker still offered "GPT-5 Codex" and "GPT-5" when the Codex
+CLI had long since moved to the GPT-5.6 family — so a user's first act was to
+pick a model that no longer exists. The lists were two hardcoded arrays in
+`providers.ts`, whose own comment defended the curation. Both harnesses can be
+asked, and now are.
+
+`src/main/model-catalog.ts` is the pure half (the `codex-retry.ts` /
+`providers-store.ts` pattern — no electron, so it unit-tests under bun): the two
+parsers plus a TTL cache with an injected clock and an injected baseDir. Nothing
+in it throws; a model list is never worth breaking a picker or a turn for.
+
+- **Codex** — `codex debug models` prints the CLI's whole model table as JSON
+  (~300KB: every entry embeds its instruction preamble, so it's parsed and
+  dropped, never logged). `visibility` is a hard filter: `gpt-5.6-sol-wm` and
+  `codex-auto-review` are `"hide"`, i.e. seats the CLI itself won't offer.
+  Entries sort by the CLI's own `priority`, not array position. The six that
+  surface today: gpt-5.6-sol, -terra, -luna, gpt-5.5, gpt-5.4, gpt-5.4-mini.
+- **Claude** — `Query.supportedModels()`, which needs a LIVE query, and
+  `choices()` runs on a picker render with no session. So `backends/claude.ts`
+  hands its answer to the catalog fire-and-forget next to the existing
+  `supportedCommands()` call, and the catalog persists it. Real values are
+  `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `sonnet[1m]`, `haiku` — none of
+  which the old array had right.
+
+`src/main/codex-models.ts` is the side-effecting half (its own file only because
+`providers.ts` went past the 500-line rule with it inline; named like its
+siblings `codex-usage.ts` / `codex-retry.ts`). The binary it spawns is the SDK's
+**vendored** one, resolved the way `@openai/codex-sdk` resolves it (platform
+package → `vendor/<triple>/bin/codex`, legacy layout too, `PRAXIS_CODEX_BIN`
+first, `codex` on PATH last) — asking a global CLI of another version would
+describe a binary that never runs the turns. `providers.ts` keeps only the
+scheduling, and warms it once at `registerProviderIpc`, ~840ms, long before a
+window exists.
+
+`choices()` itself stays synchronous, total (every read is wrapped) and cache-only
+— the refresh runs behind it, at most one probe in flight, with a 5-minute floor
+between attempts so a machine with no Codex doesn't re-spawn on every render. The
+one concession: a genuinely COLD catalog (first launch, nothing on disk) makes the
+`providers:choices` handler wait up to 2.5s on the warm-up already running, because
+the renderer's providers-store fetches once and keeps the result — returning
+instantly there would pin the last-resort list for the whole session.
+
+Two things that had to stay exactly as they were: `ModelChoice`'s shape and the
+`provider[:connectionId]:modelId` namespacing (the renderer resolves picks by
+`value`), and the "Default" sentinel at the top of each built-in group. The
+latter needs care now — the Agent SDK's list LEADS with its own
+`{value: 'default'}`, colliding exactly with ours, so a discovered `default` is
+dropped in favour of praxis's (`agentModelId` maps that string to "send no
+model"; two choices sharing a `value` would also be a duplicate React key).
+
+The old arrays survive as a LAST RESORT — reached only when a seat has never been
+discovered at all — with their comment rewritten to say so, and refreshed to the
+2026-08-07 answers. `test/chat-render.mjs` no longer names a model id either (it
+takes the first non-Default entry per group); pinning one there would have
+re-introduced the same rot in the test tier.
+
+`src/main/model-catalog.ts` (new), `src/main/codex-models.ts` (new),
+`src/main/providers.ts`, `src/main/backends/claude.ts`,
+`test/model-catalog.mjs` (new), `test/chat-render.mjs`, `test/run.mjs`,
+`package.json`.
 
 ## 2026-08-07 — A project's fold in the rail is its own state, not "am I active"
 

@@ -106,6 +106,13 @@ src/
                     safeStorage cipher, the providers:* IPC, the /models catalog probe,
                     the picker's ModelChoice list, and resolveConnection() — the seam
                     backends/codex.ts aims the Codex SDK at
+    model-catalog.ts / codex-models.ts   what the two BUILT-IN seats offer, discovered
+                    instead of curated. model-catalog is the pure half (parsers + a TTL
+                    cache with injected clock/baseDir, persisted under userData);
+                    codex-models runs `codex debug models` on the SDK's OWN vendored
+                    binary, not PATH. Claude needs a live session (Query.supportedModels()),
+                    so backends/claude.ts hands its answer back via recordClaudeModels;
+                    providers.ts only schedules the refresh, never on the render path
     simulator.ts    iOS Simulator preview (Metro/Expo detect, MJPEG sim bridge)
     props.ts / props-svelte.ts   prop editing engines (React via react-docgen /
                     Svelte 5); they mirror each other's splice/apply contract
@@ -277,6 +284,19 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   `backends/interrupt.ts`, and report `hardStopped` so agent.ts rebuilds the dead
   session. Codex was always safe here (its cancel is a local AbortController);
   Gemini had no `interrupt` at all, so Stop silently did nothing.
+- **Never run an Electron test directly — it uses your REAL app state.**
+  `node test/chat-render.mjs` launches against the live `userData`, so if any
+  project is currently open there the empty state (`openCount === 0`) never
+  renders and the test dies on `waitForSelector('.empty__open')` after 15s.
+  `test/run.mjs` gives every test a fresh `PRAXIS_USER_DATA` temp dir, which is
+  why the same test passes through `bun run test:<name>` / `bun run test`. This
+  trap cost real time twice: it produced three separate TASKS notes claiming
+  "the Electron tier can't launch a window on this machine, confirmed at HEAD"
+  (all wrong, all corrected 2026-08-07) and it makes stash-and-compare baselines
+  meaningless, since both sides fail for the same bogus reason. If you must run
+  one by hand: `PRAXIS_USER_DATA=$(mktemp -d) node test/<name>.mjs`. Note the
+  runner also spawns bare `electron-vite`, so it needs `node_modules/.bin` on
+  PATH — invoke it via `bun run test`, not `node test/run.mjs`.
 - **ESM/CJS**: the Agent SDK is ESM-only, `main` is CJS → dynamic `import()`
   only, never static/`require`.
 - **The preview `WebContentsView` is a separate CDP target** — not in renderer
@@ -340,3 +360,15 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   Consequence for anything that asks "what did this session change?": a diff vs
   `HEAD` now returns nothing — compare against the merge base with the default
   branch instead (`src/main/publish-scope.ts` does, for the publish paths).
+- **Never hardcode a built-in seat's model list.** It rots invisibly: the picker
+  offered "GPT-5 Codex"/"GPT-5" for months after the Codex CLI moved to the
+  GPT-5.6 family, so a user's first act was to pick a model that no longer
+  existed. Both harnesses can be ASKED (`src/main/model-catalog.ts`), and the
+  arrays left in `providers.ts` are a last resort for "we could not ask", not
+  curation. Two traps if you touch this: the Codex binary to ask is the SDK's
+  VENDORED one (`@openai/codex-<plat>/vendor/…/bin/codex`), never the `codex` on
+  PATH — a global CLI of a different version would answer for a binary that
+  never runs the turns; and `Query.supportedModels()` leads with its own
+  `{value:'default'}`, which collides with praxis's "Default" sentinel, so a
+  discovered `default` is dropped in favour of ours (`agentModelId` maps that
+  exact string to "send no model").

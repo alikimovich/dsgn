@@ -290,47 +290,72 @@ try {
   if (defaultMode !== 'auto')
     throw new Error(`default permission mode should be auto, got ${defaultMode}`)
 
-  // v10 model picker: ONE model-first <select> built from main's
-  // `providers.choices()` (there's no separate Backend dropdown any more) —
-  // picking a model is what selects the harness. Wait for the choices to land.
+  // The picker is TWO <select>s, both derived from main's one `providers.choices()`
+  // list: a Provider (the built-in seats, then each saved connection, then an
+  // "Add new…" row that opens Settings) and the models of whichever provider is
+  // selected. Wait for the choices to land.
   await win.waitForFunction(
     () => (window.__praxisProviders?.getState().choices.length ?? 0) > 0,
     null,
     { timeout: 10000 }
   )
-  // Choice `value`s are main's to namespace — look them up by (harness, modelId)
-  // rather than hardcoding the scheme here.
-  const valueOf = (provider, modelId) =>
+  // Choice `value`s are main's to namespace, and the model IDS are discovered at
+  // runtime now (main/model-catalog.ts asks each harness what it actually has),
+  // so naming one here would re-pin the very hardcoded list that discovery
+  // replaced — and break the day the CLI ships its next family. Take the first
+  // real (non-"Default") entry of each built-in group instead.
+  const firstRealModel = (provider) =>
     win.evaluate(
-      ({ provider, modelId }) =>
+      (provider) =>
         window.__praxisProviders
           .getState()
-          .choices.find((c) => c.provider === provider && c.modelId === modelId && !c.connectionId)
-          ?.value ?? null,
-      { provider, modelId }
+          .choices.find(
+            (c) => c.provider === provider && !c.connectionId && c.modelId !== 'default'
+          )?.value ?? null,
+      provider
     )
-  const opusValue = await valueOf('claude', 'opus')
-  const codexValue = await valueOf('codex', 'gpt-5-codex')
-  if (!opusValue || !codexValue) throw new Error('built-in seats missing from providers.choices()')
-  const modelOptions = await win.$$eval('select[aria-label="Model"] option', (os) =>
-    os.map((o) => o.value)
-  )
-  // Both harnesses' models live in the ONE list now, plus the Settings row.
-  for (const expected of [opusValue, codexValue, '__manage-providers__']) {
-    if (!modelOptions.includes(expected)) {
-      throw new Error(`model picker is missing ${expected}: ${JSON.stringify(modelOptions)}`)
-    }
+  const claudeValue = await firstRealModel('claude')
+  const codexValue = await firstRealModel('codex')
+  if (!claudeValue || !codexValue)
+    throw new Error('built-in seats missing from providers.choices()')
+  const optionsOf = (label) =>
+    win.$$eval(`select[aria-label="${label}"] option`, (os) =>
+      os.map((o) => ({ value: o.value, label: o.textContent?.trim() ?? '' }))
+    )
+  const providerOptions = await optionsOf('Provider')
+  // The two built-in seats lead (labelled by harness), and the Settings row is
+  // LAST — any saved connection sits between them.
+  if (providerOptions[0]?.value !== 'claude' || providerOptions[1]?.value !== 'codex') {
+    throw new Error(
+      `provider picker should lead with the built-in seats: ${JSON.stringify(providerOptions)}`
+    )
   }
-  // Groups are the picker's <optgroup>s (harness name, or a connection's label).
-  const optgroups = await win.$$eval('select[aria-label="Model"] optgroup', (gs) =>
-    gs.map((g) => g.label)
-  )
-  if (!optgroups.includes('Claude') || !optgroups.includes('Codex')) {
-    throw new Error(`model picker should group by harness: ${JSON.stringify(optgroups)}`)
+  if (providerOptions[0].label !== 'Claude' || providerOptions[1].label !== 'Codex') {
+    throw new Error(`provider rows carry their group label: ${JSON.stringify(providerOptions)}`)
+  }
+  if (providerOptions[providerOptions.length - 1]?.value !== '__manage-providers__') {
+    throw new Error(`"Add new…" must be the last provider row: ${JSON.stringify(providerOptions)}`)
+  }
+  // The model list is scoped to the selected provider (Claude at rest) — the other
+  // harness's models are not in it.
+  const claudeModels = (await optionsOf('Model')).map((o) => o.value)
+  if (!claudeModels.includes(claudeValue) || claudeModels.includes(codexValue)) {
+    throw new Error(
+      `model picker should offer only Claude's models: ${JSON.stringify(claudeModels)}`
+    )
+  }
+  // Switching provider re-points the harness and repopulates the models.
+  await win.selectOption('select[aria-label="Provider"]', 'codex')
+  const derived = await win.evaluate(() => window.__praxisSession.getState().provider)
+  if (derived !== 'codex') throw new Error(`picking the Codex provider should set it: ${derived}`)
+  const codexModels = (await optionsOf('Model')).map((o) => o.value)
+  if (!codexModels.includes(codexValue) || codexModels.includes(claudeValue)) {
+    throw new Error(`model picker should follow the provider: ${JSON.stringify(codexModels)}`)
   }
   await win.selectOption('select[aria-label="Model"]', codexValue)
-  const derived = await win.evaluate(() => window.__praxisSession.getState().provider)
-  if (derived !== 'codex') throw new Error(`picking a Codex model should set provider: ${derived}`)
+  await win.waitForFunction((v) => window.__praxisSession.getState().model === v, codexValue, {
+    timeout: 5000
+  })
   // The `codex login` hint is NOT a nag on every switch — an already-connected
   // user shouldn't see it. It only appears after a turn fails to connect.
   if ((await win.$('.provider-hint')) !== null)
@@ -341,21 +366,74 @@ try {
   const hint = (await win.textContent('.provider-hint'))?.toLowerCase() ?? ''
   if (!hint.includes('codex login')) throw new Error(`provider hint should mention codex login: ${hint}`)
   await win.evaluate(() => window.__praxisSession.getState().setCodexAuthNeeded(false))
-  await win.selectOption('select[aria-label="Model"]', opusValue) // reset to Claude
+  await win.selectOption('select[aria-label="Provider"]', 'claude') // reset to Claude
   if ((await win.$('.provider-hint')) !== null) throw new Error('hint should hide for Claude')
-  // "Manage providers…" isn't a model — it opens Settings and leaves the pick be.
-  await win.selectOption('select[aria-label="Model"]', '__manage-providers__')
+  // Switching provider lands on that provider's Default rather than carrying a
+  // model id across (it would mean nothing to the other harness).
+  const afterSwitch = await win.evaluate(() => {
+    const s = window.__praxisSession.getState()
+    return {
+      provider: s.provider,
+      model: s.model,
+      modelId: s.modelId,
+      connectionId: s.connectionId
+    }
+  })
+  if (afterSwitch.provider !== 'claude' || afterSwitch.modelId !== 'default') {
+    throw new Error(`switching provider should select its Default: ${JSON.stringify(afterSwitch)}`)
+  }
+  // "Add new…" isn't a provider — it opens Settings and leaves the pick be.
+  await win.selectOption('select[aria-label="Provider"]', '__manage-providers__')
   const afterManage = await win.evaluate(() => ({
     open: window.__praxisProviders.getState().settingsOpen,
+    provider: window.__praxisSession.getState().provider,
     model: window.__praxisSession.getState().model
   }))
-  if (!afterManage.open || afterManage.model !== opusValue) {
-    throw new Error(`"Manage providers…" should open settings only: ${JSON.stringify(afterManage)}`)
+  if (
+    !afterManage.open ||
+    afterManage.provider !== 'claude' ||
+    afterManage.model !== afterSwitch.model
+  ) {
+    throw new Error(`"Add new…" should open settings only: ${JSON.stringify(afterManage)}`)
   }
   // The Settings dialog itself renders its one tab + the empty connections state.
   await win.waitForSelector('[data-slot="dialog-title"]:has-text("Settings")', { timeout: 8000 })
   await win.screenshot({ path: join(artifacts, '09b-settings-dialog.png') })
   await win.evaluate(() => window.__praxisProviders.getState().setSettingsOpen(false))
+
+  // Model ids are DISCOVERED now, so a chat persisted against one the harness has
+  // since retired matches no choice at all. It must degrade to that provider's
+  // Default rather than render a dead row — while leaving the stored settings
+  // exactly as they are (they're only rewritten when the user actually picks).
+  await win.evaluate(() =>
+    window.__praxisSession.getState().setChatAgentSettings({
+      provider: 'claude',
+      model: 'claude:retired-in-2026',
+      modelId: 'retired-in-2026',
+      effort: 'high',
+      permissionMode: 'auto'
+    })
+  )
+  const staleId = await win.evaluate(() => {
+    const modelSel = document.querySelector('select[aria-label="Model"]')
+    return {
+      provider: document.querySelector('select[aria-label="Provider"]').value,
+      label: modelSel.selectedOptions[0]?.textContent?.trim() ?? '',
+      values: [...modelSel.options].map((o) => o.value),
+      stored: window.__praxisSession.getState().model
+    }
+  })
+  if (staleId.provider !== 'claude' || staleId.label !== 'Default') {
+    throw new Error(
+      `a retired model id should fall back to its provider's Default: ${JSON.stringify(staleId)}`
+    )
+  }
+  if (staleId.values.includes('claude:retired-in-2026')) {
+    throw new Error('the retired id must not be offered as an option of its own')
+  }
+  if (staleId.stored !== 'claude:retired-in-2026') {
+    throw new Error(`the picker must not rewrite the chat's stored model: ${staleId.stored}`)
+  }
 
   // Model/backend choices are per live chat. Changing the new chat's Codex model
   // must not overwrite the older chat, and switching between their rail rows must
