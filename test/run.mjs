@@ -101,6 +101,7 @@ const ELECTRON = [
   'chat-render',
   'revert-action',
   'chat-route',
+  'composer-draft',
   'restore-reload',
   'preview-location',
   'feedback-dialog',

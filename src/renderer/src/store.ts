@@ -18,6 +18,7 @@ import type {
   UpdateStatus
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { useComposerDrafts } from './composer-drafts'
 import { emptyUsage, addUsage as sumUsage, type TokenUsage } from '../../shared/run-stats'
 import {
   type ChatAgentSettings,
@@ -168,7 +169,7 @@ interface ChatState {
    *  its file changes (the 'merged' isolation event). No-op if there's no assistant
    *  message yet. Call it BEFORE any post-merge note so the real turn gets tagged. */
   tagRevert: (key: string, group: string) => void
-  /** Drop a project's chat buffer (on close). */
+  /** Drop a project's chat buffer (on close) — including its unsent composer draft. */
   clearChat: (key: string) => void
   /** Clear a chat's "done — go check it" flag (it's been read). */
   markReviewed: (key: string) => void
@@ -290,12 +291,17 @@ export const useChat = create<ChatState>((set, get) => {
         messages[idx] = { ...messages[idx], revertGroup: group }
         return { ...sl, messages }
       }),
-    clearChat: (key) =>
+    clearChat: (key) => {
+      // A closed chat's half-written message goes with it — otherwise a new chat
+      // that reuses the key (a project's default `key` after closing all of them)
+      // would open showing the dead chat's text.
+      useComposerDrafts.getState().clear(key)
       set((s) => {
         const byKey = { ...s.byKey }
         delete byKey[key]
         return { byKey }
-      }),
+      })
+    },
     markReviewed: (key) =>
       set((s) => {
         const slice = s.byKey[key]

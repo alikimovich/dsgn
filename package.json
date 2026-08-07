@@ -92,6 +92,7 @@
     "test:agentmulti": "electron-vite build && node test/agent-multi.mjs",
     "test:agentcap": "electron-vite build && node test/agent-cap.mjs",
     "test:chatroute": "electron-vite build && node test/chat-route.mjs",
+    "test:composerdraft": "electron-vite build && node test/composer-draft.mjs",
     "test:previewlocation": "electron-vite build && node test/preview-location.mjs",
     "test:questions": "electron-vite build && node test/questions.mjs",
     "test:rail": "electron-vite build && node test/rail.mjs",
