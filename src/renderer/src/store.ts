@@ -555,9 +555,11 @@ export interface ProjectEntry {
   /** Preview viewport for THIS project — each remembers its own; restored on
    *  switch (a global viewport leaked one project's Mobile into the next). */
   viewport?: Viewport
-  /** Rail: hide this project's chat list while it stays active (chevron toggle).
-   *  Independent of `activeKey` — collapsing doesn't deactivate the project, its
-   *  dev server/preview stay live. Defaults to expanded (undefined = false). */
+  /** Rail: hide this project's chat list (chevron toggle). Fully independent of
+   *  `activeKey` — collapsing doesn't deactivate the project (its dev server/
+   *  preview stay live), and switching to another project doesn't collapse this
+   *  one: the fold is per-project state the user sets, persisted with the entry.
+   *  Defaults to expanded (undefined = false). */
   chatsCollapsed?: boolean
   /** Monotonic recency stamp (bumped on activate) — drives LRU warm-server eviction. */
   touchedAt: number
@@ -604,7 +606,7 @@ interface WorkspaceState {
   close: (key: string) => void
   toggleCollapsed: () => void
   toggleChatHidden: () => void
-  /** Toggle whether an (active) project's chat list is hidden — see `chatsCollapsed`. */
+  /** Toggle whether a project's chat list is hidden — see `chatsCollapsed`. */
   toggleChatsCollapsed: (key: string) => void
   reset: () => void
   /** Replace the whole set (boot restore) — see restore.ts. Also advances the

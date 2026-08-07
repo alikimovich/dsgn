@@ -778,7 +778,7 @@ body.is-fullscreen .sidebar-toggle {
     flex: 1 1 auto;
 }
 
-/* Chats under the active project (Cursor-style): a flat list of full-width
+/* Chats under an EXPANDED project — active or not (Cursor-style): a flat list of full-width
    rows whose text is flush-left, aligned under the project name. Each row leads
    with a status dot sized/spaced exactly like the project row's folder glyph
    (8px padding + 16px slot + 7px gap), so the dots centre on the folder icon
@@ -791,6 +791,13 @@ body.is-fullscreen .sidebar-toggle {
     display: flex;
     flex-direction: column;
     gap: 1px;
+}
+/* An expanded project with nothing to list yet (freshly opened, or its only chat
+   hasn't been sent) still renders the list — drop its margin so it doesn't leave
+   a phantom gap under the row. Now that EVERY expanded project shows its chats,
+   that gap would otherwise repeat down the rail. */
+.rail__chats:empty {
+    margin: 0;
 }
 .rail__chat-item {
     display: flex;

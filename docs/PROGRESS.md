@@ -2,6 +2,44 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-07 — A project's fold in the rail is its own state, not "am I active"
+
+User-reported: switching projects collapsed the one you left. The rail computed
+`expanded = active && !p.chatsCollapsed`, so `chatsCollapsed` — a real per-project
+field, persisted with the entry — only ever mattered for the one project that
+happened to be on screen. Every other project rendered as a bare row whatever the
+user had done to its chevron, and the fold "reset" on every switch.
+
+`expanded` is now just `!p.chatsCollapsed`. The chevron is the only thing that
+folds a project; switching leaves every other project exactly as it was. Three
+follow-ons the change forces:
+
+- **The glyph button always toggles.** It used to switch projects when the row
+  wasn't active (there was nothing to expand). Now it folds this project's list
+  and nothing else — switching stays with the name button, so a fold never drags
+  the preview with it.
+- **Only the active project paints an active chat row.** `isActiveChat` gained an
+  `active &&`; without it every expanded background project would highlight its
+  own `activeSessionKey` and the rail would show several "current" chats at once.
+- **Chat rows under a background project have to go somewhere.** Clicking one
+  now brings its project forward (`switchSession` records the choice on the entry
+  first, then hands off to `switchTo`, which opens whatever the entry names);
+  resuming a past chat from another project does the same. Both used to be
+  no-ops for a non-active project because neither was reachable.
+
+Their previous-chats lists also have to be loaded now: App only fetches history
+for the project it opens/switches to, so a boot-restored sibling had none. Rail
+pulls it for any expanded project that hasn't got one yet (guarded on the store's
+`byKey`/`loading`, so a project with no history doesn't re-fetch). An expanded
+project with nothing to list still renders the (empty) `<ul>` — `rail-chat-status`
+waits on it as its "the project is open" signal — but `.rail__chats:empty` now
+drops its margin, so the 5px phantom gap doesn't repeat down the rail.
+
+`src/renderer/src/components/Rail.tsx`, `App.tsx` (`switchSession`,
+`resumeRecord`), `store.ts` (doc only), `test/rail.mjs` — which now asserts B's
+chats survive a switch to A, and that folding B keeps it folded when B becomes
+active again.
+
 ## 2026-08-07 — Codex's token counters: live during the turn, and no longer double-counted
 
 User-reported: "doesn't show tokens when I use Codex" — a screenshot of `↑ 0
