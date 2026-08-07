@@ -19,15 +19,22 @@ import type {
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
 import { emptyUsage, addUsage as sumUsage, type TokenUsage } from '../../shared/run-stats'
-import { type ChatAgentSettings, DEFAULT_MODEL, DEFAULT_PROVIDER } from './chat-settings'
+import {
+  type ChatAgentSettings,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  type ModelSelection
+} from './chat-settings'
 
 // The per-chat agent choices + their AgentOptions mappings live in their own
 // (pure, unit-testable) module; re-exported here so importers keep one entry point.
 export {
   type ChatAgentSettings,
+  type ModelSelection,
   DEFAULT_EFFORT,
   DEFAULT_MODEL,
   DEFAULT_PROVIDER,
+  agentModelId,
   agentOptionsFor,
   chatAgentSettingsFor,
   chatAgentSettingsFromOptions,
@@ -467,9 +474,13 @@ export const messagesFromTranscript = (
 
 interface SessionState {
   model: string
+  /** See `ChatAgentSettings.modelId`. */
+  modelId?: string
   effort: string
   /** Which backend runs the agent ('claude' | 'codex' | …) — v7. */
   provider: string
+  /** v10: the user-added endpoint this chat runs against, if any. */
+  connectionId?: string
   /** "/" menu entries — project skills first, described; built by main (LKM-54). */
   slashCommands: SlashCommandItem[]
   /** Set when the agent reports an auth failure — drives the onboarding banner. */
@@ -486,6 +497,9 @@ interface SessionState {
   /** The `praxis/*` branch praxis is working on (null if not a git repo). */
   branch: string | null
   setModel: (model: string) => void
+  /** Apply a whole picker choice at once — model, its backend id, harness and
+   *  endpoint move together, so no subscriber ever sees a half-applied pair. */
+  setModelSelection: (selection: ModelSelection) => void
   setEffort: (effort: string) => void
   setProvider: (provider: string) => void
   setChatAgentSettings: (settings: ChatAgentSettings) => void
@@ -505,11 +519,25 @@ export const useSession = create<SessionState>((set) => ({
   codexAuthNeeded: false,
   projectRoot: null,
   branch: null,
-  setModel: (model) => set({ model }),
+  // Since v10 the model choice is a TUPLE — `model` (the picker's identity),
+  // `modelId` (what the backend is actually told to run) and `connectionId` (which
+  // endpoint runs it). `agentModelId` prefers `modelId`, and `connectionId` pins the
+  // harness whatever `provider` says, so a setter that moves one member and leaves
+  // the rest is worse than no setter at all: `setModel('haiku')` over a chat holding
+  // `{ model: 'claude:opus', modelId: 'opus' }` would still run opus. These two only
+  // survive for tests/imperative callers, so they set the whole tuple to a consistent
+  // state: a bare model id names itself and belongs to no connection, and switching
+  // harness drops a model value that was namespaced to the previous one.
+  setModel: (model) => set({ model, modelId: undefined, connectionId: undefined }),
+  setModelSelection: ({ model, modelId, provider, connectionId }) =>
+    set({ model, modelId, provider, connectionId }),
   setEffort: (effort) => set({ effort }),
-  setProvider: (provider) => set({ provider }),
-  setChatAgentSettings: ({ model, effort, provider, permissionMode }) => {
-    set({ model, effort, provider })
+  setProvider: (provider) =>
+    set({ provider, model: DEFAULT_MODEL, modelId: undefined, connectionId: undefined }),
+  setChatAgentSettings: ({ model, modelId, effort, provider, connectionId, permissionMode }) => {
+    // `modelId`/`connectionId` are set even when undefined — a chat with no
+    // connection must CLEAR the outgoing chat's, not inherit it.
+    set({ model, modelId, effort, provider, connectionId })
     // Mode is a per-chat choice too, but it lives in usePermissions (which also owns
     // the pending-prompt queue). Restore it here so activating a chat re-points the
     // toolbar dropdown to THAT chat's real mode instead of a stale global value —
@@ -581,11 +609,13 @@ export interface ProjectEntry {
 }
 
 export const chatAgentSettingsFromSession = (
-  session: Pick<SessionState, 'model' | 'effort' | 'provider'>
+  session: Pick<SessionState, 'model' | 'modelId' | 'effort' | 'provider' | 'connectionId'>
 ): ChatAgentSettings => ({
   model: session.model,
+  modelId: session.modelId,
   effort: session.effort,
   provider: session.provider,
+  connectionId: session.connectionId,
   permissionMode: usePermissions.getState().mode
 })
 

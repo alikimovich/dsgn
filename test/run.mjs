@@ -43,6 +43,8 @@ const UNIT = [
   'diag-cache',
   'diag-rules',
   'sessions-store',
+  'providers-store',
+  'codex-retry-cause',
   'chat-title',
   'chat-settings',
   'run-stats',

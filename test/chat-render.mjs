@@ -290,35 +290,72 @@ try {
   if (defaultMode !== 'auto')
     throw new Error(`default permission mode should be auto, got ${defaultMode}`)
 
-  // v7 backend picker: native <select> spanning the implemented backends; selecting
-  // a non-Claude one surfaces its subscription-login hint.
-  const backends = await win.$$eval('select[aria-label="Backend"] option', (os) =>
+  // v10 model picker: ONE model-first <select> built from main's
+  // `providers.choices()` (there's no separate Backend dropdown any more) —
+  // picking a model is what selects the harness. Wait for the choices to land.
+  await win.waitForFunction(
+    () => (window.__praxisProviders?.getState().choices.length ?? 0) > 0,
+    null,
+    { timeout: 10000 }
+  )
+  // Choice `value`s are main's to namespace — look them up by (harness, modelId)
+  // rather than hardcoding the scheme here.
+  const valueOf = (provider, modelId) =>
+    win.evaluate(
+      ({ provider, modelId }) =>
+        window.__praxisProviders
+          .getState()
+          .choices.find((c) => c.provider === provider && c.modelId === modelId && !c.connectionId)
+          ?.value ?? null,
+      { provider, modelId }
+    )
+  const opusValue = await valueOf('claude', 'opus')
+  const codexValue = await valueOf('codex', 'gpt-5-codex')
+  if (!opusValue || !codexValue) throw new Error('built-in seats missing from providers.choices()')
+  const modelOptions = await win.$$eval('select[aria-label="Model"] option', (os) =>
     os.map((o) => o.value)
   )
-  // Gemini stays a flag-gated main-process backend but is off the UI list.
-  if (JSON.stringify(backends) !== JSON.stringify(['claude', 'codex'])) {
-    throw new Error(`unexpected backends: ${JSON.stringify(backends)}`)
+  // Both harnesses' models live in the ONE list now, plus the Settings row.
+  for (const expected of [opusValue, codexValue, '__manage-providers__']) {
+    if (!modelOptions.includes(expected)) {
+      throw new Error(`model picker is missing ${expected}: ${JSON.stringify(modelOptions)}`)
+    }
   }
-  await win.selectOption('select[aria-label="Backend"]', 'codex')
+  // Groups are the picker's <optgroup>s (harness name, or a connection's label).
+  const optgroups = await win.$$eval('select[aria-label="Model"] optgroup', (gs) =>
+    gs.map((g) => g.label)
+  )
+  if (!optgroups.includes('Claude') || !optgroups.includes('Codex')) {
+    throw new Error(`model picker should group by harness: ${JSON.stringify(optgroups)}`)
+  }
+  await win.selectOption('select[aria-label="Model"]', codexValue)
+  const derived = await win.evaluate(() => window.__praxisSession.getState().provider)
+  if (derived !== 'codex') throw new Error(`picking a Codex model should set provider: ${derived}`)
   // The `codex login` hint is NOT a nag on every switch — an already-connected
   // user shouldn't see it. It only appears after a turn fails to connect.
   if ((await win.$('.provider-hint')) !== null)
     throw new Error('provider hint should stay hidden until a Codex turn fails')
-  // Selecting Codex swaps the model picker to Codex's own models (not Claude's).
-  const codexModels = await win.$$eval('select[aria-label="Model"] option', (os) =>
-    os.map((o) => o.value)
-  )
-  if (!codexModels.includes('gpt-5-codex') || codexModels.includes('opus')) {
-    throw new Error(`Codex backend should list Codex models, got: ${JSON.stringify(codexModels)}`)
-  }
   // A Codex auth/"not connected" failure surfaces the login hint.
   await win.evaluate(() => window.__praxisSession.getState().setCodexAuthNeeded(true))
   await win.waitForSelector('.provider-hint', { timeout: 5000 })
   const hint = (await win.textContent('.provider-hint'))?.toLowerCase() ?? ''
   if (!hint.includes('codex login')) throw new Error(`provider hint should mention codex login: ${hint}`)
   await win.evaluate(() => window.__praxisSession.getState().setCodexAuthNeeded(false))
-  await win.selectOption('select[aria-label="Backend"]', 'claude') // reset
+  await win.selectOption('select[aria-label="Model"]', opusValue) // reset to Claude
   if ((await win.$('.provider-hint')) !== null) throw new Error('hint should hide for Claude')
+  // "Manage providers…" isn't a model — it opens Settings and leaves the pick be.
+  await win.selectOption('select[aria-label="Model"]', '__manage-providers__')
+  const afterManage = await win.evaluate(() => ({
+    open: window.__praxisProviders.getState().settingsOpen,
+    model: window.__praxisSession.getState().model
+  }))
+  if (!afterManage.open || afterManage.model !== opusValue) {
+    throw new Error(`"Manage providers…" should open settings only: ${JSON.stringify(afterManage)}`)
+  }
+  // The Settings dialog itself renders its one tab + the empty connections state.
+  await win.waitForSelector('[data-slot="dialog-title"]:has-text("Settings")', { timeout: 8000 })
+  await win.screenshot({ path: join(artifacts, '09b-settings-dialog.png') })
+  await win.evaluate(() => window.__praxisProviders.getState().setSettingsOpen(false))
 
   // Model/backend choices are per live chat. Changing the new chat's Codex model
   // must not overwrite the older chat, and switching between their rail rows must
@@ -373,11 +410,11 @@ try {
   await win.waitForFunction(() => document.querySelectorAll('.rail__chat').length === 2, null, {
     timeout: 5000
   })
-  await win.selectOption('select[aria-label="Model"]', 'gpt-5-codex')
+  await win.selectOption('select[aria-label="Model"]', codexValue)
   const changedNew = await win.evaluate(({ key, newer }) =>
     window.__praxisWorkspace.getState().projects.find((p) => p.key === key)?.chatSettings?.[newer]?.model,
   perChat)
-  if (changedNew !== 'gpt-5-codex') throw new Error(`new chat model was not stored: ${changedNew}`)
+  if (changedNew !== codexValue) throw new Error(`new chat model was not stored: ${changedNew}`)
   // The rail orders chats newest first, so the second button is the original one.
   await win.locator('.rail__chat').nth(1).click()
   await win.waitForFunction(
@@ -394,8 +431,8 @@ try {
   }
   await win.locator('.rail__chat').nth(0).click()
   await win.waitForFunction(
-    () => window.__praxisSession.getState().model === 'gpt-5-codex',
-    null,
+    (expected) => window.__praxisSession.getState().model === expected,
+    codexValue,
     { timeout: 5000 },
   )
 
