@@ -21,6 +21,9 @@ import type {
   ImageAttachment,
   LayerFingerprint,
   LayersSnapshot,
+  ModelCatalogInput,
+  ModelCatalogResult,
+  ModelChoice,
   MoveNodeRequest,
   MoveNodeResult,
   PanelAction,
@@ -31,6 +34,8 @@ import type {
   PropEdit,
   PropEditResult,
   PropInspection,
+  ProviderConnection,
+  ProviderConnectionInput,
   PublishResult,
   QuestionAnswers,
   RecentMenuEntry,
@@ -449,6 +454,17 @@ const api: PraxisApi = {
     },
     workspaceSnapshot: (): Promise<WorkspaceSnapshot> =>
       ipcRenderer.invoke('agent:workspace-snapshot')
+  },
+  providers: {
+    list: (): Promise<ProviderConnection[]> => ipcRenderer.invoke('providers:list'),
+    save: (
+      input: ProviderConnectionInput
+    ): Promise<{ ok: boolean; connection?: ProviderConnection; error?: string }> =>
+      ipcRenderer.invoke('providers:save', input),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke('providers:remove', id),
+    catalog: (input: ModelCatalogInput): Promise<ModelCatalogResult> =>
+      ipcRenderer.invoke('providers:catalog', input),
+    choices: (): Promise<ModelChoice[]> => ipcRenderer.invoke('providers:choices')
   },
   sessions: {
     list: (root: string): Promise<SessionRecord[]> => ipcRenderer.invoke('sessions:list', root),

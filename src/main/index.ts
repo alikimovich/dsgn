@@ -271,7 +271,9 @@ let recentProjects: RecentMenuEntry[] = []
  * commands (Reload/Select/Publish/Stop/Viewport) that used to be titlebar
  * buttons. Because we set our OWN menu, the default View → Reload (which reloaded
  * the renderer and stranded the tool) is gone; our Cmd+R reloads the PREVIEW
- * instead. Renderer-side actions go over `menu:action`; a chosen recent goes over
+ * instead. On macOS the app menu is spelled out rather than `role: 'appMenu'` so
+ * it can carry Settings… (Cmd+,); other platforms get that item under File.
+ * Renderer-side actions go over `menu:action`; a chosen recent goes over
  * `menu:open-recent`; reload is handled here directly.
  */
 function buildAppMenu(): void {
@@ -315,8 +317,40 @@ function buildAppMenu(): void {
       ]
     : [{ label: 'No Recent Projects', enabled: false }]
 
+  /**
+   * Settings (the v10 providers dialog). MUST be a real menu item: Cmd+, is a
+   * native accelerator, so a renderer keydown for it would never fire on a
+   * physical keyboard (see the Edit-menu note above). On macOS that means
+   * spelling out `role: 'appMenu'`'s own template — it has no Settings slot —
+   * so the item sits where the platform puts it; elsewhere it rides File.
+   */
+  const settingsItem: MenuItemConstructorOptions = {
+    label: 'Settings…',
+    accelerator: 'CmdOrCtrl+,',
+    click: () => send('settings')
+  }
+
   const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              settingsItem,
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
     {
       label: 'File',
       submenu: [
@@ -330,7 +364,10 @@ function buildAppMenu(): void {
           accelerator: 'CmdOrCtrl+O',
           click: () => send('open-project')
         },
-        { label: 'Open Recent', submenu: recentItems }
+        { label: 'Open Recent', submenu: recentItems },
+        ...(process.platform === 'darwin'
+          ? []
+          : [{ type: 'separator' as const }, settingsItem])
       ]
     },
     {

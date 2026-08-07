@@ -278,11 +278,119 @@ export interface AgentOptions {
   /** Permission posture; defaults to 'default' (ask). */
   permissionMode?: PermissionMode
   /**
-   * Which subscription-login backend to run (v7): 'claude' (default) | 'codex' | …
-   * Undefined → Claude. Each backend authenticates with the user's own subscription
-   * (Claude setup-token / Codex sign-in-with-ChatGPT / …) — never an in-repo API key.
+   * Which HARNESS runs the agent loop (v7): 'claude' (default) | 'codex'.
+   * Undefined → Claude. The two built-in harnesses authenticate with the user's own
+   * subscription (Claude setup-token / Codex sign-in-with-ChatGPT). A key is never
+   * committed in-repo — but see `connectionId`: a user MAY store their own API key
+   * for a third-party endpoint, encrypted at rest and only in main.
    */
   provider?: string
+  /**
+   * Run this turn against a user-added endpoint (v10) instead of the harness's own
+   * account — see `ProviderConnection`. Harness and endpoint are orthogonal: the
+   * Codex harness supplies the agent loop while the connection supplies the URL,
+   * key and model. Undefined ⇒ the harness's own subscription, exactly as pre-v10.
+   */
+  connectionId?: string
+}
+
+/**
+ * A user-added model endpoint (v10). Praxis's two built-in seats — Claude (Agent
+ * SDK) and Codex (`@openai/codex-sdk`) — log in with the user's own subscription and
+ * need no configuration. A *connection* is the third path: an OpenAI-compatible
+ * endpoint the user points Praxis at (Vercel AI Gateway, Groq, or any custom host)
+ * so open models like Kimi or DeepSeek can drive a chat.
+ *
+ * Harness and endpoint are ORTHOGONAL. The Codex harness runs the loop; the
+ * connection only says where requests go. `@openai/codex-sdk` accepts `baseUrl` +
+ * `apiKey` per `Codex` instance, so a connection never writes to (or reads from)
+ * the user's own `~/.codex/config.toml`.
+ *
+ * Connections are GLOBAL, not per-project — a key belongs to the user, not a repo.
+ * The API key is deliberately NOT a field here: it is encrypted at rest with
+ * Electron `safeStorage` and never crosses to the renderer, which only learns
+ * `hasKey`. That way a compromised renderer dependency cannot exfiltrate keys.
+ */
+export interface ProviderConnection {
+  /** Stable generated id — what `AgentOptions.connectionId` references. */
+  id: string
+  /** User-facing name shown as the picker's group heading ("AI Gateway"). */
+  label: string
+  /** Which preset created it; drives defaults and the dialog's badge. */
+  preset: 'gateway' | 'custom'
+  /** Endpoint root, e.g. `https://ai-gateway.vercel.sh/v1`. */
+  baseUrl: string
+  /**
+   * Which OpenAI wire format Praxis speaks to this host. Only `'responses'` (the
+   * newer `/responses` endpoint) is possible: the `codex` CLI bundled with
+   * `@openai/codex-sdk` REJECTS `wire_api = "chat"` at config load ("no longer
+   * supported"), so a host that offers only the older `/chat/completions` route
+   * cannot back a connection at all — verified against the vendored binary, not
+   * inferred. Kept as a field rather than hardcoded so the disk format survives
+   * the CLI ever restoring chat support; widen the union if it does.
+   */
+  wireApi: 'responses'
+  /** The models the user ticked from the catalog — these populate the chat picker. */
+  models: string[]
+  /** Whether a key is stored. The key itself never leaves main. */
+  hasKey: boolean
+}
+
+/** A connection draft from the settings dialog. `id` absent ⇒ create a new one. */
+export interface ProviderConnectionInput {
+  id?: string
+  label: string
+  preset: 'gateway' | 'custom'
+  baseUrl: string
+  wireApi: 'responses'
+  models: string[]
+  /** Plaintext key on its way to `safeStorage`. Omit to keep the stored one. */
+  apiKey?: string
+}
+
+/** Params for a catalog probe — an unsaved draft, or a saved connection by id. */
+export interface ModelCatalogInput {
+  baseUrl: string
+  /** Plaintext key to probe with. Omit to reuse the key stored for `id`. */
+  apiKey?: string
+  /** Saved connection whose stored key to use when `apiKey` is omitted. */
+  id?: string
+}
+
+/**
+ * Result of probing `{baseUrl}/models`. This one call both validates the credential
+ * and returns the catalog, so the dialog's "Connect" button does the whole job.
+ */
+export interface ModelCatalogResult {
+  ok: boolean
+  /** Model ids the endpoint advertises, sorted. Empty when `ok` is false. */
+  models: string[]
+  /** Human-readable failure ("401 Unauthorized"), for display in the dialog. */
+  error?: string
+  /** The host has no `/models` route — the dialog falls back to free-text entry
+   *  rather than leaving the user stuck. */
+  unsupported?: boolean
+}
+
+/**
+ * One selectable entry in the chat's model picker (v10). The picker is MODEL-first:
+ * the user picks a model and Praxis derives which harness runs it and which endpoint
+ * it points at, because people think in models rather than harnesses. Built in main
+ * so the renderer never hardcodes a model list again.
+ */
+export interface ModelChoice {
+  /** Stable value for the picker + `AgentOptions` round-trip. */
+  value: string
+  /** Display name ("Opus", "Kimi K3"). */
+  label: string
+  /** Which harness runs it. */
+  provider: 'claude' | 'codex'
+  /** Set when this model comes from a user connection (absent for built-in seats). */
+  connectionId?: string
+  /** The model id handed to the backend, when it differs from `value`. */
+  modelId?: string
+  /** Group heading in the picker ("Claude", "Codex", or a connection's label). */
+  group: string
 }
 
 /** One line of a recorded agent session's transcript (v5-D history). */
@@ -1371,6 +1479,30 @@ export interface PraxisApi {
      *  transcripts) — used to reattach the renderer after a reload without tearing
      *  down any session. Read-only: never suspends/starts/closes anything. */
     workspaceSnapshot: () => Promise<WorkspaceSnapshot>
+  }
+  /**
+   * User-added model endpoints (v10) — see `ProviderConnection`. Global, not
+   * per-project. Every call here is key-safe: keys go IN via `save`/`catalog` and
+   * never come back out, so the renderer can only ever observe `hasKey`.
+   */
+  providers: {
+    /** Every saved connection, keys excluded. */
+    list: () => Promise<ProviderConnection[]>
+    /**
+     * Create (no `id`) or update (with `id`) a connection. `apiKey` set ⇒ replace the
+     * stored key; omitted ⇒ leave it untouched, so editing a label can't wipe a key.
+     */
+    save: (
+      input: ProviderConnectionInput
+    ) => Promise<{ ok: boolean; connection?: ProviderConnection; error?: string }>
+    /** Delete a connection and its stored key. */
+    remove: (id: string) => Promise<void>
+    /** Probe `{baseUrl}/models` — validates the key AND returns the catalog (the
+     *  dialog's "Connect"). Accepts an unsaved draft so users can test before saving. */
+    catalog: (input: ModelCatalogInput) => Promise<ModelCatalogResult>
+    /** Every model the chat picker should offer, grouped: built-in seats first, then
+     *  one group per connection. Recomputed on demand, so it always reflects the store. */
+    choices: () => Promise<ModelChoice[]>
   }
   /** Persisted agent-session history ("previous agents") — v5-D. */
   sessions: {

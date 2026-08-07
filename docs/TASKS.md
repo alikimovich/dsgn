@@ -3,6 +3,68 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## v10 — bring-your-own-model connections (2026-08-07, user-requested)
+
+- [x] **Connections: user-added OpenAI-compatible endpoints.** ✅ 2026-08-07 —
+      harness and endpoint split apart (`AgentOptions.connectionId` beside
+      `provider`); `src/main/providers-store.ts` (pure) +
+      `src/main/providers.ts` (safeStorage cipher, `providers:*` IPC, `/models`
+      probe, `resolveConnection`); Codex SDK aimed at the endpoint via a
+      dedicated `model_providers."praxis-connection"` block.
+      `test/providers-store.mjs`. See PROGRESS 2026-08-07.
+- [x] **Settings dialog + model-first picker.** ✅ 2026-08-07 —
+      `SettingsDialog.tsx` / `ProviderForm.tsx` / `renderer/src/providers-store.ts`;
+      `ChatPanel.tsx`'s hardcoded model arrays and Backend dropdown deleted in
+      favour of one grouped list from `providers.choices()`.
+- [ ] **NOTHING here has hit a live third-party endpoint.** Every verification
+      was a local probe server plus the real SDK/CLI. SUPERSEDED 2026-08-07 for the
+      gateway — see the next item; still open for Groq and other hosts.
+- [x] **The connection path works against a live AI Gateway.** ✅ 2026-08-07 —
+      real key, real turn, real edit: `anthropic/claude-sonnet-4.6` through
+      `https://ai-gateway.vercel.sh/v1` on the Codex harness read the file, wrote
+      a correct edit, left the untargeted function alone, and finished in 15.5s
+      with ZERO error events. That settles the two big unknowns: the gateway's
+      `/responses` accepts Codex's request shape, and the
+      `model_providers."praxis-connection"` block (websockets off) is right — no
+      reconnect attempts appeared. `/models` returned 322 models including all
+      eight Kimi variants and nine DeepSeek ones.
+- [ ] **Kimi/DeepSeek still unproven — the test key was free-tier.** Every open
+      model returns 403 "Free tier users do not have access to this model", then
+      429 once the free allowance is spent; only `anthropic/*` was reachable. So
+      the `apply_patch` question below is still open, and needs paid gateway
+      credits to answer. (Note the irony: the first fully working connection ran
+      Claude through the Codex harness.)
+- [ ] **Open models may fumble Codex's `apply_patch` format.** GPT-5 was trained
+      on it; Kimi/DeepSeek weren't, so edits may need retries or fail. Blocked on
+      paid credits (above). If it's bad, the fix the user asked for is an appended
+      system-prompt section teaching the patch format (praxis already prepends its
+      rules to the first Codex turn, so there's a hook).
+- [ ] **Connection runs inherit the user's global `~/.codex/config.toml` MCP
+      servers.** Observed live: an unauthenticated `mcp.vercel.com` entry on the
+      dev machine dumped an OAuth `AuthRequired` blob into the turn's error text.
+      Praxis only overrides `model_provider`, so this is expected — but it means a
+      user's unrelated MCP config can pollute a connection chat. Decide whether a
+      connection run should start from a clean MCP set.
+- [ ] **A chat pointing at a deleted connection.** The picker falls back to an
+      option echoing the raw stored value and `AgentOptions` still carries the
+      dead `connectionId`; main fails the turn soft with "re-add it in Settings".
+      Deliberate (don't silently rewrite a user's chat settings) but the UX of
+      that state hasn't been designed.
+- [ ] **Untested UI paths:** the `unsupported: true` free-text fallback (host
+      with no `/models` route) and the edit-an-existing-connection auto-probe.
+      Both need a host that exhibits them.
+- [ ] **Claude's model list is still curated in main.** `providers.choices()`
+      hardcodes opus/sonnet/haiku because it's called with no live session; the
+      Agent SDK's `Query.supportedModels()` would make it live and account-accurate.
+- [ ] **Codex-seat parity holes** (these now matter for every connection model,
+      not just ChatGPT users): praxis's in-process tools aren't available (serve
+      them over a local MCP server injected via `CodexOptions.config`, whose
+      `mcp_tool_call` events `backends/codex.ts` already maps); no
+      `AskUserQuestion` equivalent; no resume (`resumeThread(id)` +
+      `ThreadStartedEvent.thread_id` make this nearly free); `supportsSpawn` off.
+      Per-tool approve/deny cards are NOT closable — the SDK event stream has no
+      approval-request event; user accepted that trade-off 2026-08-07.
+
 ## Design-token naming accuracy (2026-07-30/31, user-reported)
 
 - [x] **A token from another property family can't name a row.** ✅ 2026-07-30 —
