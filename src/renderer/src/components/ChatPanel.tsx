@@ -34,6 +34,12 @@ import {
   usePropsIsland,
 } from "../store";
 import { groupChoices, resolveChoice, useProviders } from "../providers-store";
+import {
+  type Attachment,
+  draftAttachments,
+  draftText,
+  useComposerDrafts,
+} from "../composer-drafts";
 import { projectKey } from "../../../shared/projectKey";
 import { parseSlashToken } from "../../../shared/slash-token";
 import type {
@@ -78,25 +84,6 @@ import {
 } from "@/components/ui/collapsible";
 import CatLoader from "./CatLoader";
 import RunStats from "./RunStats";
-
-// A pending composer attachment. Images carry base64 bytes + a data URL for the
-// thumbnail (sent as a vision block); files carry only their name + absolute path
-// (folded into the prompt text so the agent reads them itself). An image ALSO
-// carries a path when it came from one — dropped from Finder, that's its real
-// location; pasted from the clipboard, `path` is empty until `send` materializes
-// the bytes (see saveAttachment). Either way the path is named in the prompt, so
-// the agent can copy/move the actual file instead of asking where it lives.
-type Attachment =
-  | {
-      id: string;
-      kind: "image";
-      mediaType: string;
-      data: string;
-      url: string;
-      name: string;
-      path: string;
-    }
-  | { id: string; kind: "file"; name: string; path: string };
 
 // v10: the picker is MODEL-first and its contents come from MAIN
 // (`providers.choices()` — built-in seats first, then one group per user
@@ -449,7 +436,26 @@ export default function ChatPanel(): React.JSX.Element {
     ok: boolean;
     text: string;
   } | null>(null);
-  const [input, setInput] = useState("");
+  // A half-written message belongs to the chat it was written in, so the
+  // composer's content is keyed by chat rather than held in component state:
+  // ChatPanel is mounted once for the whole app, so plain local state would just
+  // follow the user into whichever chat they switch to. Switching away parks the
+  // text; switching back finds it again; a chat never typed in opens blank.
+  const activeChatKey = useChat((s) => s.activeKey);
+  const input = useComposerDrafts((s) => draftText(s, activeChatKey));
+  const attachments = useComposerDrafts((s) => draftAttachments(s, activeChatKey));
+  // `useState`-shaped setters (value or updater) so every call site below reads
+  // as it did when these were `useState`.
+  const setInput = (value: React.SetStateAction<string>): void =>
+    useComposerDrafts.getState().update(activeChatKey, (d) => ({
+      ...d,
+      text: typeof value === "function" ? value(d.text) : value,
+    }));
+  const setAttachments = (value: React.SetStateAction<Attachment[]>): void =>
+    useComposerDrafts.getState().update(activeChatKey, (d) => ({
+      ...d,
+      attachments: typeof value === "function" ? value(d.attachments) : value,
+    }));
   // Caret position in the composer — drives which "/" token the slash menu reads
   // (the menu can open mid-message, not just at the start).
   const [caret, setCaret] = useState(0);
@@ -458,10 +464,6 @@ export default function ChatPanel(): React.JSX.Element {
   // The "/" menu is uncapped and scrolls (see rankSlashMatches); keep the
   // keyboard-selected row inside the viewport as you arrow past the fold.
   const activeItemRef = useRef<HTMLButtonElement>(null);
-  // Attachments pasted/dropped into the composer. Images ride the turn as base64
-  // vision blocks (as before); other files are handed to the agent by path (it
-  // reads them with its own tools) and shown as a filename card.
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   // Which conflict-card action is in flight (drives its spinners); null when idle.
   const [conflictBusy, setConflictBusy] = useState<null | "resolve" | "discard">(
@@ -516,6 +518,13 @@ export default function ChatPanel(): React.JSX.Element {
       el.removeEventListener("touchmove", onTouchMove);
     };
   }, []);
+
+  // The restored draft comes back with the cursor at its end — the caret is
+  // per-composer, not per-chat, so without this the slash menu would keep
+  // reading the outgoing chat's caret against the incoming chat's text.
+  useEffect(() => {
+    setCaret(useComposerDrafts.getState().byKey[activeChatKey]?.text.length ?? 0);
+  }, [activeChatKey]);
 
   // Auto-grow the composer with the text — from 2 lines up to 6, then scroll.
   useEffect(() => {

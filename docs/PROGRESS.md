@@ -2,6 +2,39 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-07 — An unsent message stays in the chat it was typed in
+
+User-reported: type into the composer, switch chats, and the text is still
+sitting there — now in front of a different conversation. ChatPanel is mounted
+exactly once for the whole app (App keeps it alive so nothing re-mounts on
+project switch / unhide), so `useState("")` for the composer was, by
+construction, app-global: nothing about a chat switch touched it.
+
+The composer's content now lives in `src/renderer/src/composer-drafts.ts`, keyed
+by the same chat key as `useChat.byKey` (a `sessionKey`). ChatPanel derives
+`input`/`attachments` from `useChat`'s `activeKey`, so a switch needs no
+save/restore step at all — the draft simply *is* per-chat, and switching away
+parks it while switching back brings it right where it was. Attachments ride
+along with the text for the same reason: text that returns while a pasted
+screenshot stayed behind in the other chat would be worse than either.
+
+Two details worth keeping:
+
+- **`setInput`/`setAttachments` kept their `useState` shape** (value *or*
+  updater), so all nine call sites — the seed effect, the slash-menu splice,
+  `send`'s clear, the FileReader callback — read exactly as before. An async
+  callback that resolves after a switch writes to the chat it was started in,
+  which is the right home for it.
+- **`clearChat` drops the draft.** Closing a chat and reopening one that reuses
+  the key (a project's default `key` after closing all of its chats) would
+  otherwise open showing the dead chat's text. Writes are per-keystroke rather
+  than at switch time precisely so this ordering holds — `closeChatForProject`
+  clears the slice *before* it moves the visible chat.
+
+`src/renderer/src/composer-drafts.ts` (new — also now owns the `Attachment`
+type), `components/ChatPanel.tsx`, `store.ts` (`clearChat`),
+`test/composer-draft.mjs` (new, electron tier).
+
 ## 2026-08-07 — A project's fold in the rail is its own state, not "am I active"
 
 User-reported: switching projects collapsed the one you left. The rail computed

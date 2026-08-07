@@ -185,6 +185,9 @@ src/
                     (Models & Providers): add a connection, probe its catalog, tick
                     models. providers-store.ts is its zustand slice (kept OUT of the
                     already-oversized store.ts)
+                    composer-drafts.ts  the composer's unsent text + attachments,
+                    keyed by chat (ChatPanel is mounted once for the whole app, so
+                    component state would follow the user into the next chat)
   ../bin/praxis.mjs the `praxis` CLI (launch + `--update`); owns the update
                     sequence (git pull + bun install + build). ../install.sh boots it.
 test/             hand-rolled .mjs tests + fixtures/ + artifacts/ (PNGs, gitignored)
