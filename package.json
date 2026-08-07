@@ -101,6 +101,7 @@
     "test:sessionstore": "bun test/sessions-store.mjs",
     "test:providers": "bun test/providers-store.mjs",
     "test:codex-retry": "bun test/codex-retry-cause.mjs",
+    "test:interrupt": "bun test/interrupt-escalation.mjs",
     "test:chat-title": "bun test/chat-title.mjs",
     "test:chat-settings": "bun test/chat-settings.mjs",
     "test:run-stats": "bun test/run-stats.mjs",

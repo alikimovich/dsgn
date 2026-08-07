@@ -1,11 +1,11 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import type { BrowserWindow } from 'electron'
 import type { AgentEvent, AgentOptions } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
-import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
-import { describeTool, sendToRenderer } from './tools'
-import { createRecordCapture } from './record'
 import { praxisRules } from '../rules'
+import { createRecordCapture } from './record'
+import { describeTool, sendToRenderer } from './tools'
+import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
 
 /**
  * EXPERIMENTAL / UNWIRED (v7) — Google Gemini backend via the **Gemini CLI**
@@ -99,9 +99,13 @@ async function startSession(
 
   // Serialize turns: each send() runs one `gemini -p` process to completion.
   let chain: Promise<void> = Promise.resolve()
+  // Set by `interrupt` for the CURRENT turn only (unlike session-level `aborted`),
+  // so the kill it performs isn't reported to the user as a crash.
+  let turnInterrupted = false
   const runTurn = (text: string): Promise<void> =>
     new Promise<void>((resolve) => {
       if (aborted || disposed) return resolve()
+      turnInterrupted = false
       let proc: ChildProcessWithoutNullStreams
       try {
         proc = spawn(GEMINI_BIN, ['-p', text, '--output-format', 'stream-json'], {
@@ -151,7 +155,9 @@ async function startSession(
       proc.on('close', (codeNum) => {
         if (buf.trim()) onLine(buf)
         // A non-zero exit with no streamed text usually means not-signed-in / bad input.
-        if (codeNum !== 0 && !aborted) {
+        // A turn the USER stopped exits non-zero by definition — reporting that as
+        // "Gemini exited with code null" would turn pressing Stop into an error.
+        if (codeNum !== 0 && !aborted && !turnInterrupted) {
           emit({
             type: 'error',
             message: `Gemini exited with code ${codeNum}. If you haven't signed in, run \`gemini\` and Login with Google.`
@@ -184,6 +190,17 @@ async function startSession(
     shutdown: () => {
       aborted = true
       child?.kill()
+    },
+    // Gemini had NO interrupt at all, so Stop was a silent no-op here: the button
+    // did nothing and the turn ran to completion. A turn IS one `gemini -p` child,
+    // so killing it ends the turn (its `close` handler emits the `done`) while
+    // leaving the session able to take the next one. Local and synchronous, so it
+    // can't wedge the way a control-request round trip can — no `hardStopped`.
+    interrupt: async () => {
+      if (!child) return undefined
+      turnInterrupted = true
+      child.kill()
+      return undefined
     }
   }
 }

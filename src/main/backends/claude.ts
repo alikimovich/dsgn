@@ -41,6 +41,7 @@ import {
   toTransition
 } from '../spring'
 import { letterSpacing, lineHeight } from '../type-metrics'
+import { interruptWithEscalation } from './interrupt'
 import { createRecordCapture } from './record'
 import { sanitizeTitle, transcriptDigest } from './title'
 import { AUTO_ALLOW_TOOLS, describeTool, sendToRenderer, toolDetail, touchesSidecar } from './tools'
@@ -57,6 +58,14 @@ import type {
 // ../../agent-plugin), the same walk as index.ts's appIcon. Only wired in when
 // present so a stripped build degrades gracefully instead of erroring.
 const PLUGIN_PATH = join(__dirname, '../../agent-plugin')
+
+/**
+ * How long Stop waits for the SDK's graceful `interrupt()` before killing the
+ * query outright. Generous enough that a merely BUSY subprocess (mid tool call,
+ * flushing a long response) still gets to stop cleanly and keep its session, but
+ * short enough that a wedged one doesn't leave the user staring at a dead button.
+ */
+const INTERRUPT_GRACE_MS = 3_000
 
 // The two in-process `praxis` MCP tools, fully-qualified (mcp__<server>__<tool>).
 // Read-only observers of the user's preview — auto-allowed so they never prompt.
@@ -574,6 +583,11 @@ async function startSession(
   const pendingQuestions = new Map<string, PendingQuestion>()
   // Per-session: disposed when replaced/closed; namespaces fallback permission ids.
   let disposed = false
+  // Set when `interrupt` had to force-stop a wedged query. The abort makes the
+  // reader loop throw rather than reach a `result`, but a graceful interrupt that
+  // lands just AFTER the grace window could still deliver one — and the seam
+  // promises exactly one `done` per turn, which the escalation has already sent.
+  let hardStopped = false
   let permCounter = 0
 
   const emit = (event: AgentEvent): void => {
@@ -1361,6 +1375,7 @@ async function startSession(
             break
           }
           case 'result': {
+            if (hardStopped) break // the force-stop already finalized and sent `done`
             cap.finalize()
             emit({ type: 'done' })
             streamedText = false
@@ -1399,7 +1414,33 @@ async function startSession(
       await q.setPermissionMode?.(mode)
     },
     interrupt: async () => {
-      await q.interrupt?.()
+      // `q.interrupt()` is a CONTROL REQUEST to the CLI subprocess, and the SDK's
+      // control-request promise settles only when a matching `control_response`
+      // comes back — there is no timeout in the SDK. So when that subprocess is
+      // wedged (the request went out and nothing ever came back: 0 tokens in, 0
+      // out, the turn running for minutes) the graceful path never returns, this
+      // promise never settles, and Stop does nothing at all — precisely the state
+      // Stop exists to escape. Race it, then escalate to the abort signal the
+      // query was constructed with, which is the kill switch shutdown() already
+      // relies on and which nothing else was reaching for here.
+      return await interruptWithEscalation({
+        graceful: () => q.interrupt?.(),
+        graceMs: INTERRUPT_GRACE_MS,
+        escalate: () => {
+          hardStopped = true // stop the reader loop double-emitting on a late result
+          abort.abort()
+          input.close()
+          emit({
+            type: 'error',
+            message:
+              'That turn stopped responding, so Praxis force-stopped it. The chat has been ' +
+              'restarted — earlier messages are still shown, but the assistant no longer has ' +
+              'them in context.'
+          })
+          cap.finalize()
+          emit({ type: 'done' })
+        }
+      })
     }
   }
 }

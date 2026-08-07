@@ -114,7 +114,18 @@ export interface ProviderSession {
   // bookkeeping (options update, pending release) around them.
   setModel?: (model: string) => Promise<void>
   setPermissionMode?: (mode: PermissionMode) => Promise<void>
-  interrupt?: () => Promise<void>
+  /**
+   * Stop the in-flight turn. MUST settle promptly — Stop is the user's escape
+   * hatch, so a backend whose graceful cancel can block has to bound it itself
+   * and escalate (agent.ts also caps the wait, but only it can clean up after).
+   *
+   * `hardStopped: true` means the graceful path failed and the backend killed the
+   * underlying query/process, so this SESSION is now dead — agent.ts rebuilds the
+   * chat rather than leaving one that looks alive but swallows every later turn.
+   * A backend whose cancel is purely local (an AbortController it owns) never
+   * needs it: resolving undefined reads as a clean stop.
+   */
+  interrupt?: () => Promise<{ hardStopped: boolean } | undefined>
 }
 
 export interface ModelProvider {
@@ -143,5 +154,8 @@ export interface ModelProvider {
    * (and agent.ts falls back to the first-message heuristic) on any failure.
    * Optional — a backend without a cheap completion primitive omits it.
    */
-  generateTitle?: (transcript: SessionTranscriptEntry[], options: AgentOptions) => Promise<string | null>
+  generateTitle?: (
+    transcript: SessionTranscriptEntry[],
+    options: AgentOptions
+  ) => Promise<string | null>
 }

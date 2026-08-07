@@ -439,6 +439,9 @@ async function startSession(
     },
     interrupt: async () => {
       turnAbort?.abort() // cancel the current turn; the session can still take more
+      // Local + synchronous, so it can never wedge the way a control-request round
+      // trip can — nothing for agent.ts to clean up.
+      return undefined
     }
     // setModel/setPermissionMode: Codex sets these per-thread at startThread, so a live
     // change would mean re-threading — a follow-up. Model/effort are honored on open.

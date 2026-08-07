@@ -72,6 +72,48 @@ drops its margin, so the 5px phantom gap doesn't repeat down the rail.
 `resumeRecord`), `store.ts` (doc only), `test/rail.mjs` — which now asserts B's
 chats survive a switch to A, and that folding B keeps it folded when B becomes
 active again.
+## 2026-08-07 — Stop actually stops (and it was broken differently on each backend)
+
+**User-reported:** a chat sat spinning for minutes at `↑0 ↓0` and pressing Stop did
+nothing. Not a UI glitch — a real deadlock, and the diagnosis is worth keeping.
+
+`q.interrupt()` is a CONTROL REQUEST. Reading the bundled SDK: its control-request
+promise is settled only by a matching `control_response` from the CLI subprocess,
+and nothing in that path has a timeout. So when the subprocess is wedged — request
+sent, nothing ever came back, hence zero tokens in either direction — the graceful
+cancel never settles, `agent:interrupt`'s `await` never returns, and the button is
+inert. Meanwhile `done` is emitted from exactly ONE place (the `result` message), so
+with no result the spinner spins forever. The infuriating part: the kill switch
+existed all along — `shutdown()` aborts the query's AbortController — but only
+session teardown ever reached it, so the user's only escape was closing the project.
+
+Fix, in three parts. New pure `backends/interrupt.ts` races the backend's graceful
+cancel against a 3s deadline and escalates to a caller-supplied kill switch; a
+rejection counts as ANSWERED (killing on top of a clean stop would destroy a healthy
+session), and a re-check after the race stops a late timer killing a cancel that
+landed in the same tick. claude.ts escalates by aborting the query, then emits the
+`error` + `done` the wedged turn never would — guarded by `hardStopped` so a
+late-arriving `result` can't double-emit. `agent.ts` caps its own wait at 5s
+regardless (a future backend that forgets to bound itself still can't make the
+button feel broken) and, on `hardStopped`, rebuilds the chat via a
+`restartChatSession` helper extracted from `agent:restart-chat` — a hard abort kills
+the whole query, so without that the chat would look alive while swallowing every
+later message.
+
+**The other two backends were each wrong in a different way.** Codex was never
+affected: its cancel is `turnAbort.abort()`, local and synchronous, and its turn loop
+emits `done` after the break regardless — so connection-backed models (Kimi/DeepSeek)
+already had the safe path. Gemini had NO `interrupt` at all, so Stop was a silent
+no-op there and the turn just ran to completion; it now kills the turn's child
+process, with a per-turn `turnInterrupted` flag so the resulting non-zero exit isn't
+reported to the user as a crash.
+
+`test/interrupt-escalation.mjs` pins the decisive cases (clean stop preserved,
+rejection treated as answered, wedged backend killed exactly once, always resolves).
+
+**Not reproduced.** The wedge is intermittent; this was diagnosed by reading the SDK
+and the event paths, not by triggering it. The escalation logic is directly tested,
+but "does this fix the wedge in the wild" is unproven — see TASKS.
 
 ## 2026-08-07 — Codex's token counters: live during the turn, and no longer double-counted
 

@@ -90,7 +90,9 @@ src/
                     AgentOptions.connectionId routes to codex.ts whatever `provider` says.
                     codex-retry.ts is codex.ts's pure half (the CLI emits all five of its
                     retry attempts as separate `error` events; this collapses them into
-                    one line that keeps the actual cause)
+                    one line that keeps the actual cause). interrupt.ts is the shared
+                    "Stop must always work" helper — ask the backend nicely, then kill
+                    (see the Gotcha on the SDK's untimed interrupt)
     codex-usage.ts  live token counts for a Codex turn: the SDK's event stream
                     reports usage only at `turn.completed`, so this tails the
                     CLI's own session rollout (`$CODEX_HOME/sessions/…jsonl`) for
@@ -264,6 +266,17 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   handled via the menu item's `click` → `menu:action`, not a renderer keydown;
   and Edit→Undo/Redo route by focus (`buildAppMenu`'s `editCommand` +
   App.tsx's menu-action handler + `menu:native-edit` for focused text fields).
+- **The Agent SDK's `interrupt()` can never return, so Stop must not just await it.**
+  It's a CONTROL REQUEST: the SDK resolves it only when the CLI subprocess sends a
+  matching `control_response`, and there is no timeout anywhere in that path. A
+  wedged subprocess (symptom: turn running for minutes, `↑0 ↓0`) therefore made
+  Stop a dead button — the IPC never resolved, and since `done` is only emitted
+  from a `result` message, the spinner ran forever. The kill switch was present
+  the whole time (`shutdown()`'s `abort.abort()`) but only teardown reached it.
+  Any future backend cancel must bound itself the same way — go through
+  `backends/interrupt.ts`, and report `hardStopped` so agent.ts rebuilds the dead
+  session. Codex was always safe here (its cancel is a local AbortController);
+  Gemini had no `interrupt` at all, so Stop silently did nothing.
 - **ESM/CJS**: the Agent SDK is ESM-only, `main` is CJS → dynamic `import()`
   only, never static/`require`.
 - **The preview `WebContentsView` is a separate CDP target** — not in renderer
