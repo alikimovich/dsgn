@@ -1332,22 +1332,31 @@ export default function App(): React.JSX.Element {
 
   // v9 multi-chat switcher (Rail): activate one of a project's already-live
   // sessionKeys — both the renderer's chat store and main's per-project "which
-  // session is active" bookkeeping need to move together.
+  // session is active" bookkeeping need to move together. The rail lists the
+  // chats of every EXPANDED project, not just the active one, so a click on a
+  // backgrounded project's chat brings that project forward too (record the
+  // choice on the entry first — applyProject opens whichever chat it names).
   const switchSession = async (key: string, sessionKey: string): Promise<void> => {
-    const entry = useWorkspace.getState().projects.find((p) => p.key === key)
-    if (!entry || sessionKey === entry.activeSessionKey) return
-    useWorkspace.getState().patchEntry(key, { activeSessionKey: sessionKey })
-    if (useSession.getState().projectRoot === entry.root) {
-      useChat.getState().setActiveChat(sessionKey)
-      useSession.getState().setChatAgentSettings(chatAgentSettingsFor(entry, sessionKey))
-      void window.api.agent.setActive(entry.root, sessionKey)
+    const ws = useWorkspace.getState()
+    const entry = ws.projects.find((p) => p.key === key)
+    if (!entry) return
+    const onScreen = ws.activeKey === key
+    if (onScreen && sessionKey === entry.activeSessionKey) return
+    ws.patchEntry(key, { activeSessionKey: sessionKey })
+    if (!onScreen) {
+      await switchTo(key)
+      return
     }
+    useChat.getState().setActiveChat(sessionKey)
+    useSession.getState().setChatAgentSettings(chatAgentSettingsFor(entry, sessionKey))
+    void window.api.agent.setActive(entry.root, sessionKey)
   }
 
   // v9 resume — hand a past ("previous agent") session back to a live SDK query
   // (SessionReview's Resume button), then switch the active chat to it and close
-  // the review panel. Only reachable for the currently-active project (the rail's
-  // history list only shows the active project's past sessions).
+  // the review panel. The rail lists the past chats of every expanded project, so
+  // the record may belong to a backgrounded one — resuming then brings its project
+  // forward too, rather than reviving a chat nothing on screen can show.
   const resumeRecord = async (record: SessionRecord): Promise<void> => {
     const key = projectKey(record.projectRoot)
     // A resumed chat runs with the choices on screen (forced back to Claude — see
@@ -1382,6 +1391,10 @@ export default function App(): React.JSX.Element {
       // Repoint the toolbar at what the resumed session actually got (the backend
       // is pinned to Claude even if the picker was on another one).
       useSession.getState().setChatAgentSettings(settings)
+    } else {
+      // Another project's chat — switchTo picks up the entry patched above, so it
+      // lands on the resumed session rather than that project's previous one.
+      await switchTo(key)
     }
     setReviewing(null)
   }

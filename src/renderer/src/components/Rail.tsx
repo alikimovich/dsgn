@@ -6,7 +6,7 @@ import {
   Plus,
   X,
 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { SessionRecord } from "../../../shared/api";
 import {
   chatTitle,
@@ -62,10 +62,15 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
 
 /**
  * v5 left rail (Cursor-style) — the open projects, each led by a folder icon
- * (open when it's the active project, closed otherwise). The active project
- * expands to a flat, left-aligned list of its chats: first its live/open chats
- * (the active one highlighted), then its **previous chats** (v5-D persisted
- * sessions, one row per chat with a trailing "time ago"). Chat names are
+ * (open while the project is expanded, closed otherwise). Every project owns its
+ * OWN expanded/collapsed state (`chatsCollapsed`, persisted with the entry), so
+ * switching projects leaves the others exactly as the user left them — the
+ * chevron is the only thing that folds a project away. An expanded project shows
+ * a flat, left-aligned list of its chats: first its live/open chats (the one on
+ * screen highlighted — only the active project can have one), then its
+ * **previous chats** (v5-D persisted sessions, one row per chat with a trailing
+ * "time ago"). Clicking any chat of a non-active project switches to that
+ * project as well. Chat names are
  * auto-generated from each chat's opening prompt and renameable in place (the
  * hover pencil — see RailChatRow). Each chat row leads with a status dot that
  * sits in the same 16px slot the project's folder icon occupies, so dots and
@@ -106,6 +111,19 @@ export default function Rail({
   // relaunch — a long history should re-tuck itself, like Cursor's sidebar).
   const [moreShown, setMoreShown] = useState<Set<string>>(new Set());
 
+  // Every EXPANDED project lists its previous chats, not just the active one, so
+  // pull the history of any that hasn't been fetched yet. App only loads it for
+  // the project it opens/switches to, which leaves a boot-restored (or never
+  // visited) sibling showing its live chats and nothing else.
+  useEffect(() => {
+    const hist = useHistory.getState();
+    for (const p of projects) {
+      if (p.chatsCollapsed) continue;
+      if (hist.byKey[p.key] || hist.loading[p.key]) continue;
+      void hist.load(p.root);
+    }
+  }, [projects, history]);
+
   if (projects.length === 0) return null;
 
   return (
@@ -145,10 +163,11 @@ export default function Rail({
         <ul className="rail__list">
           {projects.map((p) => {
             const active = p.key === activeKey;
-            // Chats show only for the active project, AND only while it isn't
-            // collapsed — collapsing hides the list but leaves the project (and
-            // its dev server/preview) live; it's independent of `activeKey`.
-            const expanded = active && !p.chatsCollapsed;
+            // Expansion is the project's OWN state, not a side effect of being
+            // active: switching projects must not fold the outgoing one away.
+            // Collapsing only hides the list — the project (and its dev server/
+            // preview) stays live either way.
+            const expanded = !p.chatsCollapsed;
             const sessionKeys = p.sessionKeys ?? [p.key];
             // A live chat whose changes couldn't auto-merge is "parked" (v9). While one
             // is, its `chatpark-*` history record is redundant with the live row's badge
@@ -187,21 +206,16 @@ export default function Rail({
                     {/* Cursor-style glyph: a subdued folder (open when expanded,
                       closed otherwise) that, on hover, gives way to a chevron —
                       pointing down while expanded, right while collapsed.
-                      For the active project this toggles the chat list without
-                      switching away; for an inactive one it just switches. */}
+                      It only ever folds THIS project's chat list, active or not
+                      — switching projects is the name button's job, so a fold
+                      never drags the preview along with it. */}
                     <button
                       className="rail__glyph-btn"
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (active)
-                          useWorkspace.getState().toggleChatsCollapsed(p.key);
-                        else onSwitch(p.key);
+                        useWorkspace.getState().toggleChatsCollapsed(p.key);
                       }}
-                      aria-label={
-                        active
-                          ? `${expanded ? "Collapse" : "Expand"} ${p.name}'s chats`
-                          : `Open ${p.name}`
-                      }
+                      aria-label={`${expanded ? "Collapse" : "Expand"} ${p.name}'s chats`}
                     >
                       <span className="rail__glyph" aria-hidden="true">
                         <FolderIcon className="rail__folder size-4" />
@@ -240,7 +254,7 @@ export default function Rail({
                     <X className="size-3.5" aria-hidden="true" />
                   </button>
                 </div>
-                {/* Active + expanded project: a flat, left-aligned list of its chats
+                {/* Expanded project: a flat, left-aligned list of its chats
                   — live chats newest-first (the active one highlighted), then
                   previous chats. `sessionKeys` grows by append, so we render a
                   reversed copy to float freshly-started chats to the top. No
@@ -252,7 +266,11 @@ export default function Rail({
                 {expanded && (
                   <ul className="rail__chats" aria-label={`${p.name}'s chats`}>
                     {live.map((sk) => {
-                      const isActiveChat = sk === (p.activeSessionKey ?? p.key);
+                      // Only the project on screen has a chat on screen — an
+                      // expanded background project must not paint a second
+                      // "active" row alongside it.
+                      const isActiveChat =
+                        active && sk === (p.activeSessionKey ?? p.key);
                       // Prefer the conversation-derived name (main's auto-title);
                       // fall back to the opening prompt until it's generated.
                       const name =
