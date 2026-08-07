@@ -2,6 +2,52 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-07 — Codex's token counters: live during the turn, and no longer double-counted
+
+User-reported: "doesn't show tokens when I use Codex" — a screenshot of `↑ 0
+↓ 0 2:31`, i.e. two and a half minutes into a turn with nothing to show for it.
+
+Two separate problems, both found by running the real CLI
+(`codex exec --experimental-json`) and reading what it actually emits.
+
+**1. The counters were dead for the whole turn.** The SDK's `ThreadEvent` union
+has no incremental usage member (verified against the event names compiled into
+the CLI binary: `thread.started`, `turn.started`, `turn.completed`,
+`turn.failed`, `item.*`, `error` — that's all of them), so the one reading
+arrives at `turn.completed`. The status line is on screen for exactly the
+period in which there is nothing to report.
+
+The CLI *does* record the counts as it goes, just not on that stream: every
+model response appends a `token_count` record to the thread's rollout at
+`$CODEX_HOME/sessions/<YYYY>/<MM>/<DD>/rollout-<timestamp>-<threadId>.jsonl`.
+New `src/main/codex-usage.ts` tails it — resolve the path once (a bounded
+newest-first walk of the date dirs; a heavy user's session tree is large), then
+one stat + a tail read per second while a turn is in flight. It's read-only, it
+only runs during a turn, and if the file can't be found the behavior is exactly
+what it was: `turn.completed` still delivers the full amount. A half-written
+record at the tail is left for the next poll rather than parsed or skipped.
+
+**2. Every turn after the first over-counted.** `turn.completed.usage` is a
+CUMULATIVE tally for the whole thread, not that turn's own tokens — turn 1
+reported 17,232 in / 5 out, turn 2 reported 34,572 / 10, which is 1 + 2, not 2.
+`codex.ts` was summing those readings, so a 3-turn chat billed itself roughly
+double. It now keeps a session-scoped `sentUsage` and emits `usageDelta`, the
+same treatment `claude.ts` gives Anthropic's repeated readings — which is also
+what lets the rollout tail and `turn.completed` share one accumulator: whatever
+the tail already reported, `turn.completed` simply tops up (usually by zero).
+An interrupted turn never reaches `turn.completed` at all, so the turn ends with
+one final poll before the tail stops — otherwise stopping mid-turn would lose
+everything it spent.
+
+Supersedes the 2026-08-05 entry's "Codex only reports usage once, at
+`turn.completed`, so its counters step at the end of a turn" — true of the SDK's
+stream, but the CLI knows more than the SDK surfaces.
+
+`test/codex-usage.mjs` (unit tier) covers the file pick, the newest-cumulative
+read out of a mixed JSONL stream (`total_token_usage`, never the per-call
+`last_token_usage` sitting next to it), the append-while-reading tail, and the
+diff-don't-sum property, using fixture records copied verbatim from a real run.
+
 ## 2026-08-06 — "Resolve it" no longer loops; questions run as a wizard
 
 **Conflict resolve loop (user-reported, radial-portfolio).** Pressing the
