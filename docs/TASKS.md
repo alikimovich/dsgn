@@ -95,10 +95,16 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       match a computed `0px`, so that token is offered but never names anything.
       Fix belongs in the renderer's `css-values.ts` comparator; it shifts
       matching for every property, so it wants its own pass.
-- [ ] **`test/style-edit.mjs`'s token assertions are written but unrun.** The
-      Electron tier can't launch a window on this machine (`.empty__open`
-      timeout, confirmed identical at HEAD) — the new `ProvenTokenCard`/raw-hex
-      assertions haven't been visually confirmed. Same gap as the styles-ladder
+- [ ] **`test/style-edit.mjs`'s token assertions are written but unrun.**
+      CORRECTED 2026-08-07: the reason recorded here ("the Electron tier can't
+      launch a window on this machine") was WRONG — see the new gotcha in
+      CLAUDE.md. The tier runs fine through `test/run.mjs`, which gives each test
+      a fresh `PRAXIS_USER_DATA`; the `.empty__open` timeout only happens when a
+      test is invoked DIRECTLY (`node test/style-edit.mjs`), because it then uses
+      the real app state, and if any project is open the empty state never
+      renders. `style-edit` does still fail under the runner, but on a genuine
+      assertion ("inspector never showed src/Styled.tsx:5 after clicking
+      #tw-box") — that's the real bug to chase. Same gap as the styles-ladder
       fix (2026-07-30); worth a real run wherever the Electron window can
       reliably take focus.
 
@@ -117,10 +123,13 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       shouldn't — but reliable project-level Tailwind detection is the blocker
       (v4 is CSS-first and often ships no `tailwind.config.*`), and agent-routing
       it is correct, just slower.
-- [ ] **A runnable tier for the styles ladder.** `style-edit.mjs` is electron-only
-      and can't launch a window on the current dev machine (dies at
-      `.empty__open`, at HEAD too), so the S2-refusal assertion is written but
-      unrun. Verified instead with a throwaway esbuild-bundled harness driving
+- [ ] **A runnable tier for the styles ladder.** CORRECTED 2026-08-07 — the
+      premise ("can't launch a window on the current dev machine, dies at
+      `.empty__open`, at HEAD too") was wrong: that only happens when the test is
+      run directly instead of through `test/run.mjs`, which isolates
+      `PRAXIS_USER_DATA` per test. The window launches fine. The S2-refusal
+      assertion is still unrun because `style-edit` fails earlier on a real
+      inspector assertion. Verified instead with a throwaway harness driving
       the real `applyStyleEdit` in node (PROGRESS 2026-07-30 has the details).
       Worth making permanent if the Electron tier stays unrunnable.
 
@@ -221,9 +230,11 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       represent a deleted file. `test/file-ops.mjs`. See PROGRESS 2026-08-05.
       Deliberately out of scope: directory create/rename/delete (a nested path
       makes dirs implicitly; git doesn't track empty ones anyway) and drag-to-move.
-- [ ] **Follow-up:** see the sidebar's new chrome rendered. The Electron tier
-      can't launch a window here (`test:codedrawer` dies at `.empty__open`, at
-      HEAD too), so the toolbar / rename field / delete confirm are unverified
+- [ ] **Follow-up:** see the sidebar's new chrome rendered. CORRECTED 2026-08-07
+      — "the Electron tier can't launch a window here (`test:codedrawer` dies at
+      `.empty__open`, at HEAD too)" was wrong; that's the run-it-directly trap
+      (see CLAUDE.md). `code-drawer` PASSES through `test/run.mjs`, so the
+      toolbar / rename field / delete confirm are unverified
       visually, as is whether the tree widget re-fires a selection change for an
       already-selected row (the `dblclick` fallback exists because it might not).
 

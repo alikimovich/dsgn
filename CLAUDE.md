@@ -268,6 +268,19 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   handled via the menu item's `click` → `menu:action`, not a renderer keydown;
   and Edit→Undo/Redo route by focus (`buildAppMenu`'s `editCommand` +
   App.tsx's menu-action handler + `menu:native-edit` for focused text fields).
+- **Never run an Electron test directly — it uses your REAL app state.**
+  `node test/chat-render.mjs` launches against the live `userData`, so if any
+  project is currently open there the empty state (`openCount === 0`) never
+  renders and the test dies on `waitForSelector('.empty__open')` after 15s.
+  `test/run.mjs` gives every test a fresh `PRAXIS_USER_DATA` temp dir, which is
+  why the same test passes through `bun run test:<name>` / `bun run test`. This
+  trap cost real time twice: it produced three separate TASKS notes claiming
+  "the Electron tier can't launch a window on this machine, confirmed at HEAD"
+  (all wrong, all corrected 2026-08-07) and it makes stash-and-compare baselines
+  meaningless, since both sides fail for the same bogus reason. If you must run
+  one by hand: `PRAXIS_USER_DATA=$(mktemp -d) node test/<name>.mjs`. Note the
+  runner also spawns bare `electron-vite`, so it needs `node_modules/.bin` on
+  PATH — invoke it via `bun run test`, not `node test/run.mjs`.
 - **ESM/CJS**: the Agent SDK is ESM-only, `main` is CJS → dynamic `import()`
   only, never static/`require`.
 - **The preview `WebContentsView` is a separate CDP target** — not in renderer
