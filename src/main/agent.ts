@@ -35,6 +35,7 @@ import {
 } from './chat-isolation'
 import { clearHistory, recordEdit } from './edit-history'
 import { isRepoRoot } from './git'
+import { registerProviderIpc } from './providers'
 import { createSessionStore, type SessionStore } from './sessions-store'
 import {
   applyToWorkingTree,
@@ -994,6 +995,12 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle('sessions:list', (_e, root: string) => store().list(projectKey(root)))
   ipcMain.handle('sessions:get', (_e, id: string) => store().get(id))
   ipcMain.handle('sessions:remove', (_e, id: string) => store().remove(id))
+
+  // User-added model endpoints (v10, `providers:*`). Registered from here, next to
+  // the other userData-backed stores, and handed THIS module's `dataDir` so both
+  // stores share one directory — and so providers.ts can't create it ahead of the
+  // legacy dsgn→praxis migration above and quietly skip it.
+  registerProviderIpc(dataDir)
 
   // v9 reattach: everything still live in main, for a fresh renderer (after a
   // reload) to repaint without tearing anything down. Groups every live

@@ -374,9 +374,23 @@ export const DEFAULT_PROVIDER = 'claude'
  * toolbar stays simple, while `ProjectEntry.chatSettings` retains every chat's
  * choice as the user moves through the rail. */
 export interface ChatAgentSettings {
+  /**
+   * The picker's identity for the chosen model — a `ModelChoice.value` (v10), which
+   * for a connection-backed model is NOT the model id the backend wants (two
+   * connections can offer the same id). `DEFAULT_MODEL` still means "no model, use
+   * the account default".
+   */
   model: string
+  /**
+   * `ModelChoice.modelId` — what actually goes to the backend when it differs from
+   * `model`. Stored (not re-derived from `useProviders`) so a chat restored from
+   * localStorage can start its session correctly before the choice list has loaded.
+   */
+  modelId?: string
   effort: string
   provider: string
+  /** v10: run this chat against a user-added endpoint (`ProviderConnection.id`). */
+  connectionId?: string
   /** Tool-permission posture for THIS chat. Persisted per-chat like model/provider
    *  so switching chats restores it (main keeps mode per-session; see usePermissions). */
   permissionMode: PermissionMode
@@ -389,11 +403,23 @@ export const defaultChatAgentSettings = (): ChatAgentSettings => ({
   permissionMode: 'auto'
 })
 
+/** What the model picker hands back — one `ModelChoice`, flattened. */
+export interface ModelSelection {
+  model: string
+  modelId?: string
+  provider: string
+  connectionId?: string
+}
+
 interface SessionState {
   model: string
+  /** See `ChatAgentSettings.modelId`. */
+  modelId?: string
   effort: string
   /** Which backend runs the agent ('claude' | 'codex' | …) — v7. */
   provider: string
+  /** v10: the user-added endpoint this chat runs against, if any. */
+  connectionId?: string
   /** "/" menu entries — project skills first, described; built by main (LKM-54). */
   slashCommands: SlashCommandItem[]
   /** Set when the agent reports an auth failure — drives the onboarding banner. */
@@ -410,6 +436,9 @@ interface SessionState {
   /** The `praxis/*` branch praxis is working on (null if not a git repo). */
   branch: string | null
   setModel: (model: string) => void
+  /** Apply a whole picker choice at once — model, its backend id, harness and
+   *  endpoint move together, so no subscriber ever sees a half-applied pair. */
+  setModelSelection: (selection: ModelSelection) => void
   setEffort: (effort: string) => void
   setProvider: (provider: string) => void
   setChatAgentSettings: (settings: ChatAgentSettings) => void
@@ -429,11 +458,25 @@ export const useSession = create<SessionState>((set) => ({
   codexAuthNeeded: false,
   projectRoot: null,
   branch: null,
-  setModel: (model) => set({ model }),
+  // Since v10 the model choice is a TUPLE — `model` (the picker's identity),
+  // `modelId` (what the backend is actually told to run) and `connectionId` (which
+  // endpoint runs it). `agentModelId` prefers `modelId`, and `connectionId` pins the
+  // harness whatever `provider` says, so a setter that moves one member and leaves
+  // the rest is worse than no setter at all: `setModel('haiku')` over a chat holding
+  // `{ model: 'claude:opus', modelId: 'opus' }` would still run opus. These two only
+  // survive for tests/imperative callers, so they set the whole tuple to a consistent
+  // state: a bare model id names itself and belongs to no connection, and switching
+  // harness drops a model value that was namespaced to the previous one.
+  setModel: (model) => set({ model, modelId: undefined, connectionId: undefined }),
+  setModelSelection: ({ model, modelId, provider, connectionId }) =>
+    set({ model, modelId, provider, connectionId }),
   setEffort: (effort) => set({ effort }),
-  setProvider: (provider) => set({ provider }),
-  setChatAgentSettings: ({ model, effort, provider, permissionMode }) => {
-    set({ model, effort, provider })
+  setProvider: (provider) =>
+    set({ provider, model: DEFAULT_MODEL, modelId: undefined, connectionId: undefined }),
+  setChatAgentSettings: ({ model, modelId, effort, provider, connectionId, permissionMode }) => {
+    // `modelId`/`connectionId` are set even when undefined — a chat with no
+    // connection must CLEAR the outgoing chat's, not inherit it.
+    set({ model, modelId, effort, provider, connectionId })
     // Mode is a per-chat choice too, but it lives in usePermissions (which also owns
     // the pending-prompt queue). Restore it here so activating a chat re-points the
     // toolbar dropdown to THAT chat's real mode instead of a stale global value —
@@ -510,11 +553,13 @@ export const chatAgentSettingsFor = (
 ): ChatAgentSettings => ({ ...defaultChatAgentSettings(), ...entry.chatSettings?.[sessionKey] })
 
 export const chatAgentSettingsFromSession = (
-  session: Pick<SessionState, 'model' | 'effort' | 'provider'>
+  session: Pick<SessionState, 'model' | 'modelId' | 'effort' | 'provider' | 'connectionId'>
 ): ChatAgentSettings => ({
   model: session.model,
+  modelId: session.modelId,
   effort: session.effort,
   provider: session.provider,
+  connectionId: session.connectionId,
   permissionMode: usePermissions.getState().mode
 })
 
@@ -1124,16 +1169,36 @@ export const isAuthError = (message: string): boolean =>
     message
   )
 
+/**
+ * The model id a turn should actually carry, or undefined for "use the account
+ * default". A picker value is an IDENTITY (`ModelChoice.value`, namespaced by
+ * main as `provider[:connectionId]:modelId`), so the id to send is the choice's
+ * `modelId` — except when that id is itself the "no model" sentinel. Pre-v10
+ * chats persisted the bare id in `model` with no `modelId`, and still resolve.
+ */
+export const agentModelId = (s: { model: string; modelId?: string }): string | undefined => {
+  const id = s.modelId ?? s.model
+  return id === DEFAULT_MODEL || s.model === DEFAULT_MODEL ? undefined : id
+}
+
 /** Convert the UI sentinels into AgentOptions the SDK understands. */
-export const toAgentOptions = (s: { model: string; effort: string; provider?: string }): {
+export const toAgentOptions = (s: {
+  model: string
+  modelId?: string
+  effort: string
+  provider?: string
+  connectionId?: string
+}): {
   model?: string
   effort?: string
   provider?: string
+  connectionId?: string
 } => ({
-  model: s.model === DEFAULT_MODEL ? undefined : s.model,
+  model: agentModelId(s),
   effort: s.effort === DEFAULT_EFFORT ? undefined : s.effort,
   // Default Claude is implied — only send a non-default backend.
-  ...(s.provider && s.provider !== DEFAULT_PROVIDER ? { provider: s.provider } : {})
+  ...(s.provider && s.provider !== DEFAULT_PROVIDER ? { provider: s.provider } : {}),
+  ...(s.connectionId ? { connectionId: s.connectionId } : {})
 })
 
 /**

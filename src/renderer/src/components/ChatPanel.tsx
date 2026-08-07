@@ -1,7 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  agentModelId,
   chatAgentSettingsFor,
-  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
   describeSelectionForPrompt,
   selectionForBubble,
   isAuthError,
@@ -24,6 +25,7 @@ import {
   useWorkspace,
   usePropsIsland,
 } from "../store";
+import { groupChoices, resolveChoice, useProviders } from "../providers-store";
 import { projectKey } from "../../../shared/projectKey";
 import { parseSlashToken } from "../../../shared/slash-token";
 import type {
@@ -74,24 +76,12 @@ type Attachment =
   | { id: string; kind: "image"; mediaType: string; data: string; url: string }
   | { id: string; kind: "file"; name: string; path: string };
 
-// The model picker is per-backend: Claude's own models vs. the models the
-// `codex` CLI accepts via --model. "Default" is a sentinel meaning "omit the
-// model, use the account/backend default" (see toAgentOptions). Handing a
-// Claude model name (e.g. "opus") to Codex would fail the turn, so switching
-// backend also resets the model to Default (see onProviderChange).
-const CLAUDE_MODELS = [
-  { value: DEFAULT_MODEL, label: "Default" },
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
-const CODEX_MODELS = [
-  { value: DEFAULT_MODEL, label: "Default" },
-  { value: "gpt-5-codex", label: "GPT-5 Codex" },
-  { value: "gpt-5", label: "GPT-5" },
-];
-const modelsFor = (provider: string): { value: string; label: string }[] =>
-  provider === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+// v10: the picker is MODEL-first and its contents come from MAIN
+// (`providers.choices()` — built-in seats first, then one group per user
+// connection). Nothing about models is hardcoded here any more; picking a model
+// is what decides the harness (`provider`) and the endpoint (`connectionId`).
+// A sentinel option at the bottom opens Settings instead of choosing a model.
+const MANAGE_PROVIDERS = "__manage-providers__";
 
 // `bypassPermissions` is intentionally omitted — see its "unused" doc note on
 // PermissionMode (shared/api.ts): skips praxis's own canUseTool guards too, not
@@ -102,26 +92,18 @@ const PERMISSION_MODES: { value: PermissionMode; label: string }[] = [
   { value: "default", label: "Ask always" },
 ];
 
-// Selectable backends (v7). Each authenticates with the user's own subscription
-// login — no API keys. Only backends wired in main's pickProvider are listed.
-// Gemini is EXPERIMENTAL/unwired (no SDK dep) and gated behind
-// PRAXIS_EXPERIMENTAL_GEMINI in main, so it's omitted here — listing it would let a
-// user pick a provider that silently falls back to Claude. Re-add when its
-// adapter ships. `login` is the one-time CLI step.
-const PROVIDERS: {
-  value: string;
-  label: string;
-  login: string | null;
-  blurb: string | null;
-}[] = [
-  { value: "claude", label: "Claude", login: null, blurb: null },
-  {
-    value: "codex",
-    label: "Codex",
+// The one-time CLI sign-in for a harness that authenticates with the user's own
+// subscription (v7). There's no separate backend dropdown any more — the harness
+// falls out of the picked model — so this is keyed by harness, and only consulted
+// when the chat is on that harness's OWN account: a connection-backed model runs
+// on the Codex harness too but authenticates with its stored API key, and telling
+// that user to run `codex login` would send them the wrong way.
+const HARNESS_LOGIN: Record<string, { login: string; blurb: string }> = {
+  codex: {
     login: "codex login",
     blurb: "OpenAI Codex runs on your ChatGPT subscription",
   },
-];
+};
 
 /**
  * Framework-correct setup instructions for the agent. Returns null when the
@@ -399,9 +381,15 @@ export default function ChatPanel(): React.JSX.Element {
     appendStatus,
     finish,
   } = useChat();
-  const { model, provider, slashCommands, projectRoot, setModel, setProvider } =
+  const { model, modelId, provider, connectionId, slashCommands, projectRoot, setModelSelection } =
     useSession();
   const codexAuthNeeded = useSession((s) => s.codexAuthNeeded);
+  // v10 model picker contents (main is the single source of truth). Fetched once,
+  // and re-fetched by the settings dialog after every save/remove.
+  const choices = useProviders((s) => s.choices);
+  useEffect(() => {
+    useProviders.getState().ensureLoaded();
+  }, []);
   const { selected, setSelected } = useSelection();
   const selectMode = useSelection((s) => s.selectMode);
   const layersOpen = useLayersPanel((s) => s.open);
@@ -971,33 +959,55 @@ export default function ChatPanel(): React.JSX.Element {
     void window.api.agent.interrupt();
   };
 
+  /**
+   * The model picker IS the backend picker now (v10): a `ModelChoice` carries the
+   * harness that runs it and, for a user connection, the endpoint it points at.
+   *
+   * Restart rules, unchanged in substance from the pre-v10 pair of dropdowns:
+   * Claude alone can swap models mid-thread. Codex fixes its model when the
+   * thread starts (a live `setModel` is a no-op there — see backends/codex.ts),
+   * and a connection rides the SAME Codex harness, so any move onto, off of, or
+   * between Codex/connection models restarts just THIS chat. Reopening the whole
+   * project would replace its default chat even while the user is looking at an
+   * additional one.
+   */
   const onModelChange = (value: string): void => {
-    setModel(value);
+    const choice = useProviders.getState().choices.find((c) => c.value === value);
+    const next = {
+      model: value,
+      modelId: choice?.modelId,
+      provider: choice?.provider ?? DEFAULT_PROVIDER,
+      connectionId: choice?.connectionId,
+    };
+    const liveSwap =
+      next.provider === "claude" &&
+      provider === "claude" &&
+      !next.connectionId &&
+      !connectionId;
+    setModelSelection(next);
     const entry = useWorkspace.getState().projects.find((p) => p.root === projectRoot);
     if (entry) {
       const sessionKey = entry.activeSessionKey ?? entry.key;
       useWorkspace.getState().patchEntry(entry.key, {
         chatSettings: {
           ...entry.chatSettings,
-          [sessionKey]: { ...chatAgentSettingsFor(entry, sessionKey), model: value },
+          [sessionKey]: { ...chatAgentSettingsFor(entry, sessionKey), ...next },
         },
       });
     }
-    // Codex fixes the model when the thread starts — a live `setModel` is a
-    // no-op there (see backends/codex.ts), so restart only THIS chat on the
-    // new model. Reopening the whole project would replace its default chat,
-    // even when the user is looking at an additional chat.
-    if (provider === "codex") {
+    if (!liveSwap) {
       if (!projectRoot || !entry) return;
       const sessionKey = entry.activeSessionKey ?? entry.key;
       void window.api.agent.restartChat(projectRoot, sessionKey, {
-        ...toAgentOptions({ ...useSession.getState(), model: value }),
+        ...toAgentOptions({ ...useSession.getState(), ...next }),
         permissionMode: usePermissions.getState().mode,
       });
       useChat.getState().finish();
       return;
     }
-    if (value !== DEFAULT_MODEL) void window.api.agent.setModel(value);
+    // "Default" means "no model" — there's nothing to hand the live session.
+    const id = agentModelId(next);
+    if (id) void window.api.agent.setModel(id);
   };
 
   const onPermissionModeChange = (value: string): void => {
@@ -1021,36 +1031,6 @@ export default function ChatPanel(): React.JSX.Element {
       });
     }
     void window.api.agent.setPermissionMode(mode);
-  };
-
-  // Switching the backend means a different agent session entirely — the model
-  // can't change live across providers. Reopen the active project's session on the
-  // new backend (the visible transcript stays; context resets, like an LRU reopen).
-  const onProviderChange = (value: string): void => {
-    setProvider(value);
-    // Model names don't carry across backends ("opus" is meaningless to Codex,
-    // "gpt-5" to Claude), so reset to the backend default on switch — the picker
-    // repopulates with the new backend's models (see modelsFor).
-    setModel(DEFAULT_MODEL);
-    const entry = useWorkspace.getState().projects.find((p) => p.root === projectRoot);
-    if (!projectRoot || !entry) return;
-    const sessionKey = entry.activeSessionKey ?? entry.key;
-    useWorkspace.getState().patchEntry(entry.key, {
-      chatSettings: {
-        ...entry.chatSettings,
-        [sessionKey]: {
-          ...chatAgentSettingsFor(entry, sessionKey),
-          provider: value,
-          model: DEFAULT_MODEL,
-        },
-      },
-    });
-    void window.api.agent.restartChat(projectRoot, sessionKey, {
-      ...toAgentOptions({ ...useSession.getState(), provider: value }),
-      permissionMode: usePermissions.getState().mode,
-    });
-    // The reopened session starts idle — clear any turn left "running" on the slice.
-    useChat.getState().finish();
   };
 
   const respondPermission = (id: string, behavior: "allow" | "deny"): void => {
@@ -1126,6 +1106,18 @@ export default function ChatPanel(): React.JSX.Element {
   // native <option> values via $$eval — a Radix portal would break it.
   const selectCls =
     "h-6 cursor-pointer appearance-none rounded-md border-0 bg-transparent px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+  // The model picker's <optgroup>s, plus which option is selected. A chat
+  // persisted before v10 stored a bare model id, so the value it maps to isn't
+  // necessarily `model` itself (see resolveChoice); when nothing maps — choices
+  // still loading, or the connection that offered it was deleted — a fallback
+  // <option> keeps the control from rendering blank.
+  const modelGroups = useMemo(() => groupChoices(choices), [choices]);
+  const selectedChoice = useMemo(
+    () => resolveChoice(choices, { model, provider, connectionId }),
+    [choices, model, provider, connectionId],
+  );
+  const selectedValue = selectedChoice?.value ?? model;
 
   // Group the flat message list into "turns" — a user ask plus everything
   // that follows until the next ask — each wrapped in its own container so
@@ -1327,9 +1319,11 @@ export default function ChatPanel(): React.JSX.Element {
         {/* v7: a non-Claude backend authenticates with its own subscription
             login (no API keys). Only surface the hint once a turn has actually
             failed to connect (codexAuthNeeded) — an already-logged-in user
-            shouldn't be nagged every time they switch to the backend. */}
+            shouldn't be nagged every time they switch to the backend. v10: a
+            connection-backed model runs on the same harness but authenticates
+            with its own stored key, so it never gets the CLI-login hint. */}
         {(() => {
-          const p = PROVIDERS.find((x) => x.value === provider);
+          const p = connectionId ? undefined : HARNESS_LOGIN[provider];
           if (!p?.login || !codexAuthNeeded) return null;
           return (
             <div
@@ -1472,29 +1466,51 @@ export default function ChatPanel(): React.JSX.Element {
                   <Layers className="size-3.5" aria-hidden="true" />
                 </button>
               )}
+              {/* One model-first list (v10): the group heading is the harness or
+                  the connection's own label, and picking a model is what selects
+                  the backend. `unknownModel` keeps the control from rendering
+                  blank before main's choices land — or after a connection whose
+                  model this chat still points at was deleted. */}
               <select
                 className={selectCls}
-                value={provider}
-                onChange={(e) => onProviderChange(e.target.value)}
-                aria-label="Backend"
-              >
-                {PROVIDERS.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                className={selectCls}
-                value={model}
-                onChange={(e) => onModelChange(e.target.value)}
+                value={selectedValue}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  if (value === MANAGE_PROVIDERS) {
+                    // Not a model — bounce the control back and open Settings.
+                    e.currentTarget.value = selectedValue;
+                    useProviders.getState().setSettingsOpen(true);
+                    return;
+                  }
+                  onModelChange(value);
+                }}
                 aria-label="Model"
               >
-                {modelsFor(provider).map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
+                {/* The fallback must render a human label, never the raw picker
+                    value: since v10 `model` holds a namespaced `ModelChoice.value`
+                    (`claude:opus`, `codex:8f3a…:moonshotai/kimi-k2`), so printing it
+                    flashed `claude:opus` in the toolbar on every mount before
+                    `providers.choices()` resolved — and stuck there for good once the
+                    chat's connection was deleted. `agentModelId` unwraps the tuple to
+                    the real model id, or undefined for the Default sentinel. */}
+                {!selectedChoice && (
+                  <option value={selectedValue}>
+                    {agentModelId({ model, modelId }) ?? "Default"}
                   </option>
+                )}
+                {/* Keyed by index too: two connections may share a label. */}
+                {modelGroups.map((g, i) => (
+                  <optgroup key={`${i}-${g.group}`} label={g.group}>
+                    {g.items.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </optgroup>
                 ))}
+                <optgroup label="Settings">
+                  <option value={MANAGE_PROVIDERS}>Manage providers…</option>
+                </optgroup>
               </select>
               <select
                 className={selectCls}

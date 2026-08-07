@@ -10,6 +10,8 @@ import CodeDrawer from './components/CodeDrawer'
 import SessionReview from './components/SessionReview'
 import FeedbackDialog from './components/FeedbackDialog'
 import ConnectDialog from './components/ConnectDialog'
+import SettingsDialog from './components/SettingsDialog'
+import { useProviders } from './providers-store'
 import {
   describeSelectionForPrompt,
   chatAgentSettingsFor,
@@ -316,8 +318,16 @@ export default function App(): React.JSX.Element {
             // The onboarding banner is Claude-specific (setup-token / claude login);
             // Codex gets its own inline `codex login` hint. Raise whichever matches
             // the active backend — never the Claude banner for a Codex failure. (v7)
+            // v10: a connection-backed chat carries provider 'codex' because it runs
+            // on that harness, but it authenticates with its own stored API key, not
+            // a ChatGPT sign-in. Its 401 says nothing about the built-in Codex seat,
+            // so it must not raise the global (and sticky) `codexAuthNeeded` — that
+            // would outlive the chat and tell the user to `codex login` for a seat
+            // that's perfectly healthy. ChatPanel already guards the render; the
+            // flag itself needs the same guard or it just goes stale instead.
             if ((session.provider ?? 'claude') === 'claude') session.setAuthNeeded(true)
-            else if (session.provider === 'codex') session.setCodexAuthNeeded(true)
+            else if (session.provider === 'codex' && !session.connectionId)
+              session.setCodexAuthNeeded(true)
           }
         } else if (event.type === 'delta' || event.type === 'done') {
           // A finished turn may have merged instrumented source + a fresh
@@ -485,6 +495,9 @@ export default function App(): React.JSX.Element {
         else if (action === 'viewport:desktop') useViewport.getState().setViewport('desktop')
         else if (action === 'viewport:mobile') useViewport.getState().setViewport('mobile')
         else if (action === 'toggle-chat') useWorkspace.getState().toggleChatHidden()
+        // Cmd+, HAS to arrive this way: a native accelerator swallows the physical
+        // keystroke before any renderer keydown fires (see CLAUDE.md's gotchas).
+        else if (action === 'settings') useProviders.getState().setSettingsOpen(true)
       }),
     []
   )
@@ -2099,6 +2112,8 @@ export default function App(): React.JSX.Element {
       {/* LKM-27: in-app feedback → a GitHub issue on the Praxis repo. */}
       <FeedbackDialog />
       <ConnectDialog />
+      {/* v10: app settings (Cmd+, / the model picker's "Manage providers…"). */}
+      <SettingsDialog />
     </div>
   )
 }

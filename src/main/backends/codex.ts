@@ -1,30 +1,50 @@
-import type { BrowserWindow } from 'electron'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { AgentEvent, AgentOptions } from '../../shared/api'
-import { projectKey } from '../../shared/projectKey'
-import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
-import { describeTool, sendToRenderer } from './tools'
-import { createRecordCapture } from './record'
-import { praxisRules } from '../rules'
 import type {
+  CodexOptions,
   ModelReasoningEffort,
   Thread,
   ThreadItem,
   ThreadOptions
 } from '@openai/codex-sdk'
+import type { BrowserWindow } from 'electron'
+import type { AgentEvent, AgentOptions } from '../../shared/api'
+import { projectKey } from '../../shared/projectKey'
+import { resolveConnection } from '../providers'
+import { scrubSecret } from '../providers-store'
+import { praxisRules } from '../rules'
+import { createRetryCause } from './codex-retry'
+import { createRecordCapture } from './record'
+import { describeTool, sendToRenderer } from './tools'
+import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
 
 /**
- * OpenAI Codex backend (v7) via `@openai/codex-sdk`. Auth is the user's **ChatGPT
- * subscription** ("sign in with ChatGPT": `codex login`) — NO API key. The SDK shells
- * out to the `codex` CLI, which edits the repo with its OWN sandboxed tools, so praxis
- * doesn't define a toolset here — it maps Codex's streamed `ThreadEvent`s onto praxis's
- * `AgentEvent` stream.
+ * OpenAI Codex backend (v7) via `@openai/codex-sdk`. The SDK shells out to the `codex`
+ * CLI, which edits the repo with its OWN sandboxed tools, so praxis doesn't define a
+ * toolset here — it maps Codex's streamed `ThreadEvent`s onto praxis's `AgentEvent` stream.
  *
- * Reachable only when `AgentOptions.provider === 'codex'`. ESM-only, so loaded via a
- * dynamic `import()` (like the Claude SDK) in this CJS main bundle. If the `codex` CLI
- * is missing or the user isn't logged in, the turn fails soft (`error` + `done`) and the
- * renderer maps it to the "sign in with ChatGPT" banner.
+ * **Two auth paths (v10), because harness and endpoint are orthogonal.** The harness —
+ * the agent loop, the tools, the sandbox — is the same either way; only where the model
+ * requests go differs:
+ *
+ * - **The built-in Codex seat** (no `connectionId`): the user's own **ChatGPT
+ *   subscription** ("sign in with ChatGPT": `codex login`) — no API key anywhere.
+ *   Unchanged since v7.
+ * - **A user connection** (`AgentOptions.connectionId`): requests go to an
+ *   OpenAI-compatible endpoint the user added (Vercel AI Gateway, Groq, a custom host)
+ *   with the user's own key, so an open model like Kimi or DeepSeek can drive the chat.
+ *   The key is decrypted in main by `resolveConnection` (safeStorage; see
+ *   `main/providers.ts`) and handed to this one `Codex` instance — it is never written
+ *   to the user's `~/.codex/config.toml`, never put in argv, never emitted, and never
+ *   crosses to the renderer.
+ *
+ * Reached when `AgentOptions.provider === 'codex'` OR whenever a `connectionId` is set
+ * (a connection always runs on this harness — see `pickProvider`). ESM-only, so loaded
+ * via a dynamic `import()` (like the Claude SDK) in this CJS main bundle. Every startup
+ * failure — missing CLI, not logged in, a connection that no longer resolves — fails
+ * soft (`error` + `done`); the CLI/login ones are phrased so the renderer's `isAuthError`
+ * heuristic maps them to the "sign in with ChatGPT" banner, and the connection ones are
+ * deliberately phrased so it does NOT (a broken connection is not a login problem).
  *
  * Tool approvals run headless (`approvalPolicy: 'never'`, `sandboxMode: 'workspace-write'`)
  * — mapping Codex approvals → praxis permission cards is a follow-up (the SDK event stream
@@ -47,6 +67,63 @@ async function codexCliPresent(): Promise<boolean> {
     return true
   } catch {
     return false
+  }
+}
+
+/**
+ * The `model_providers` entry id praxis registers for a connection run. It must not
+ * collide with a built-in provider id: the CLI rejects the ENTIRE config with
+ * "model_providers contains reserved built-in provider IDs" if you try to redefine
+ * `openai`, so a connection cannot be expressed by patching the built-in provider.
+ */
+const CONNECTION_PROVIDER_ID = 'praxis-connection'
+
+/**
+ * Point one `Codex` instance at a user connection instead of the ChatGPT seat.
+ *
+ * The SDK has a `baseUrl` shortcut, but all it does is emit
+ * `--config openai_base_url=…`, i.e. re-point the BUILT-IN `openai` provider — which
+ * keeps that provider's `supports_websockets = true`. The CLI then opens every turn
+ * with `ws://<host>/responses`, burns five reconnect attempts against a host that has
+ * no such route, and only then falls back to plain HTTPS. Each of those attempts
+ * arrives as an `error` ThreadEvent, so the shortcut would paint five red
+ * "Reconnecting…" lines into the chat before every single turn. Registering our own
+ * provider entry with websockets off is the only way to say "this endpoint is
+ * ordinary HTTPS", since the built-in entry can't be amended (see above).
+ *
+ * `wire_api` is pinned to `'responses'`: the bundled CLI (`@openai/codex-sdk`
+ * v0.146.0) rejects `wire_api = "chat"` at config load — "no longer supported" — so a
+ * chat-completions host cannot back a connection at all. That constraint is enforced in
+ * the type (`ProviderConnection.wireApi` admits only `'responses'`) and coerced on both
+ * read and write in the store, so no runtime branch is needed here. `env_key` names the
+ * variable the SDK's `apiKey` option writes into the child env (`CODEX_API_KEY`).
+ *
+ * `env` is deliberately NOT set. The SDK documents that supplying it stops the CLI
+ * process from inheriting `process.env` — which would strip PATH/HOME out from under a
+ * CLI that shells out constantly. Passing the key via `apiKey` also keeps it out of
+ * argv, which is world-readable through `ps`.
+ *
+ * Verified end-to-end against a local probe endpoint: requests land on
+ * `<baseUrl>/responses` with `Authorization: Bearer <key>`, no websocket attempt, and
+ * no ChatGPT token or `chatgpt-account-id` header even while `codex login` is active.
+ * NOT yet verified against a live third-party host — if a real gateway misbehaves,
+ * this config block is the thing to adjust.
+ */
+function connectionCodexOptions(conn: { baseUrl: string; apiKey: string }): CodexOptions {
+  return {
+    apiKey: conn.apiKey,
+    config: {
+      model_provider: CONNECTION_PROVIDER_ID,
+      model_providers: {
+        [CONNECTION_PROVIDER_ID]: {
+          name: 'Praxis connection',
+          base_url: conn.baseUrl,
+          env_key: 'CODEX_API_KEY',
+          wire_api: 'responses',
+          supports_websockets: false
+        }
+      }
+    }
   }
 }
 
@@ -94,16 +171,45 @@ async function startSession(
     ctx?.onEvent?.(tagged)
     sendToRenderer(getWindow, 'agent:event', tagged)
   }
+  // A connection's key, held only so `emitError` can blank it out (below). Set once
+  // the connection resolves; null for the ChatGPT seat, where there is no key.
+  let connKey: string | null = null
   // Always attribute errors to the Codex backend (so the user knows which provider
   // failed, and the renderer's login-banner heuristic can key on it).
-  const emitError = (m: string): void =>
-    emit({ type: 'error', message: /codex/i.test(m) ? m : `Codex: ${m}` })
+  //
+  // Scrubbed because not every message here is ours: the SDK surfaces a failed run
+  // as `Codex Exec exited with <code>: <stderr>` — the child's ENTIRE stderr, from a
+  // process whose environment holds CODEX_API_KEY. No CLI path is known to print the
+  // key, but this text is both shown to the user and persisted into the session
+  // record, so it's the wrong place to rely on that staying true.
+  const emitError = (m: string): void => {
+    const safe = scrubSecret(m, connKey)
+    emit({ type: 'error', message: /codex/i.test(safe) ? safe : `Codex: ${safe}` })
+  }
 
-  // Build the thread up front (the SDK spawns the `codex` CLI; auth = `codex login`).
+  // Build the thread up front (the SDK spawns the `codex` CLI; auth = `codex login`,
+  // or the connection's own key when `options.connectionId` is set).
   let thread: Thread | null = null
   let initErr: Error | null = null
   try {
-    if (!(await codexCliPresent())) {
+    // v10: resolve the connection FIRST. A `connectionId` that no longer resolves —
+    // the connection was deleted, or safeStorage can't decrypt its key (new machine,
+    // rotated keychain) — must fail soft and SAY SO. Falling through to the ChatGPT
+    // seat would quietly run the turn on the wrong account, bill the wrong balance,
+    // and answer with a different model than the picker says is selected.
+    const conn = options.connectionId ? resolveConnection(options.connectionId) : null
+    connKey = conn?.apiKey ?? null
+    if (options.connectionId && !conn) {
+      throw new Error(
+        "that model's connection is missing or its key could not be read — re-add it in Settings."
+      )
+    }
+    // The PATH probe is a proxy for "has the user set Codex up at all", and it only
+    // makes sense for the ChatGPT seat. The SDK spawns its OWN vendored `codex` binary
+    // (an npm dependency, always present) rather than anything on PATH, and a
+    // connection run authenticates with the key we hand it — so requiring a global
+    // `codex` + `codex login` here would block a connection that works fine.
+    if (!conn && !(await codexCliPresent())) {
       throw new Error(
         'the `codex` CLI was not found. Install it (`npm i -g @openai/codex` or Homebrew) and run `codex login` (sign in with ChatGPT).'
       )
@@ -117,7 +223,8 @@ async function startSession(
       ...(options.model ? { model: options.model } : {}),
       ...(isEffort(options.effort) ? { modelReasoningEffort: options.effort } : {})
     }
-    thread = new Codex().startThread(threadOptions)
+    // No connection ⇒ a bare `Codex()`, i.e. byte-identical to the pre-v10 seat.
+    thread = new Codex(conn ? connectionCodexOptions(conn) : undefined).startThread(threadOptions)
   } catch (err) {
     initErr = err instanceof Error ? err : new Error(String(err))
   }
@@ -195,13 +302,18 @@ async function startSession(
   const runTurn = async (text: string): Promise<void> => {
     if (aborted || disposed) return
     if (!thread) {
-      // Missing CLI / not logged in → an auth-shaped error (isAuthError matches the
-      // "codex login" / "sign in" phrasing → the renderer shows the login banner).
+      // Startup failed. Missing CLI / not logged in is deliberately auth-shaped
+      // (isAuthError matches the "codex login" / "sign in" phrasing → the renderer
+      // shows the login banner); an unresolvable connection deliberately is NOT, so
+      // the user is told to fix the connection rather than to log in again.
       emitError(initErr?.message ?? 'Codex backend unavailable. Run `codex login`.')
       emit({ type: 'done' })
       return
     }
     turnAbort = new AbortController()
+    // Per turn, not per session: a retry cause from an earlier turn must not be
+    // grafted onto a later, unrelated failure.
+    const retryCause = createRetryCause()
     try {
       const { events } = await thread.runStreamed(text, { signal: turnAbort.signal })
       for await (const ev of events) {
@@ -215,17 +327,29 @@ async function startSession(
             handleItem(ev.item, true)
             break
           case 'turn.failed':
-            emitError(ev.error.message)
+            emitError(retryCause.explain(ev.error.message))
             break
           case 'error':
-            emitError(ev.message)
+            // The CLI retries a failed request up to five times and emits EACH
+            // attempt as its own `error` event ("Reconnecting... 3/5 (…)"). Left
+            // alone that paints five red lines into the chat before the real
+            // failure — and the terminal message is the least informative of the
+            // six ("exceeded retry limit, last status: 429"), because the cause
+            // is only stated inside the attempts. So: keep the attempts out of the
+            // error stream (they're progress, not outcomes) while remembering WHY,
+            // and let the terminal error borrow that reason.
+            if (retryCause.note(ev.message)) {
+              emit({ type: 'status', text: oneLine(ev.message, 100) })
+            } else {
+              emitError(retryCause.explain(ev.message))
+            }
             break
           // thread.started / turn.started / turn.completed need no extra handling.
         }
       }
     } catch (err) {
       if (!aborted && !turnAbort.signal.aborted) {
-        const m = err instanceof Error ? err.message : String(err)
+        const m = retryCause.explain(err instanceof Error ? err.message : String(err))
         // A missing/unauthenticated `codex` CLI surfaces here (e.g. spawn ENOENT).
         emitError(
           /codex/i.test(m)

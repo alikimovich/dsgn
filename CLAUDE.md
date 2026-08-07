@@ -77,7 +77,19 @@ src/
                     pop-out editor's @pierre/trees sidecar (source:tree IPC)
     agent.ts        persistent multi-turn agent session (streams over agent:* IPC)
     backends/       provider seam: claude.ts, codex.ts, gemini.ts behind pickProvider
-                    (gemini currently has NO SDK dep — treat as experimental)
+                    (gemini currently has NO SDK dep — treat as experimental). A set
+                    AgentOptions.connectionId routes to codex.ts whatever `provider` says.
+                    codex-retry.ts is codex.ts's pure half (the CLI emits all five of its
+                    retry attempts as separate `error` events; this collapses them into
+                    one line that keeps the actual cause)
+    providers-store.ts / providers.ts   v10 "connections" — user-added OpenAI-compatible
+                    endpoints (AI Gateway, Groq, custom) so open models like Kimi/DeepSeek
+                    can drive a chat. Same pure/main split as control-manifest vs
+                    control-panels: the store takes an injected baseDir + SecretCipher (so
+                    it unit-tests without electron), while providers.ts owns the
+                    safeStorage cipher, the providers:* IPC, the /models catalog probe,
+                    the picker's ModelChoice list, and resolveConnection() — the seam
+                    backends/codex.ts aims the Codex SDK at
     simulator.ts    iOS Simulator preview (Metro/Expo detect, MJPEG sim bridge)
     props.ts / props-svelte.ts   prop editing engines (React via react-docgen /
                     Svelte 5); they mirror each other's splice/apply contract
@@ -145,6 +157,10 @@ src/
                     zustand store.ts, shadcn ui/
                     components/styles/  the Styles tab's rows + controls
                     (ScrubInput, ColorControl, BezierEditor, TokenPicker)
+                    SettingsDialog.tsx + ProviderForm.tsx  the v10 Settings dialog
+                    (Models & Providers): add a connection, probe its catalog, tick
+                    models. providers-store.ts is its zustand slice (kept OUT of the
+                    already-oversized store.ts)
   ../bin/praxis.mjs the `praxis` CLI (launch + `--update`); owns the update
                     sequence (git pull + bun install + build). ../install.sh boots it.
 test/             hand-rolled .mjs tests + fixtures/ + artifacts/ (PNGs, gitignored)
@@ -201,6 +217,11 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
 - Keep files under ~500 lines; extract instead of appending to `App.tsx`,
   `store.ts`, or `styles.css` (already oversized — see `docs/TASKS.md`).
 - Auth is per-user at runtime; never commit secrets. Nothing sensitive in-repo.
+  The two built-in seats use subscription login (Claude `setup-token` / Codex
+  sign-in-with-ChatGPT). A v10 *connection* is the one path that uses an API key —
+  the user's own, encrypted with `safeStorage` under userData and confined to main.
+  It must never reach the renderer, argv, a log line, or an error string; the
+  renderer only ever observes `hasKey`.
 - Commit in small, focused commits with the Co-Authored-By trailer.
 
 ## Gotchas (hard-won — read before debugging these areas)
