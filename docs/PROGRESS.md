@@ -2,6 +2,34 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-08 — The selection badge reports the element's size
+
+The overlay chip named the element (`svg`, `h1#hero-title`) but never said how
+big it was, so the most basic measurement question in a design tool — "how wide
+is this?" — cost a trip to the inspector. The chip now carries a dimmed
+`724 × 38` alongside the name, DevTools-style.
+
+Both chips are one thing now (`makeChip` in `src/preview/preload.ts`): the hover
+label and the persistent selection badge shared their entire style string
+already, and both anchor to the same top-left of the element's rect. Each holds
+two spans — the name and the size — so the size can be restyled and refreshed
+independently of the name. The hover label writes both in `drawOverlay`; the
+selection badge writes its name once at pick time and lets `positionSelection`
+write the size, because that's the function already re-running on every scroll,
+resize and mutation with the anchor's live rect in hand. The numbers therefore
+track a resize instead of freezing at whatever the layout was when the click
+landed. Sizes round to whole px (border-box, `getBoundingClientRect`) — the
+sub-pixel tail is layout noise at 11px type.
+
+The multi-instance badge keeps reading `h3 × 4`; the size sits after it at 0.72
+opacity, which is what separates the count's `×` from the size's.
+
+`test/select-element.mjs` now asserts the badge's size text equals the picked
+element's rounded rect (not just that *some* digits are there), and captures the
+preview WebContentsView's own pixels to `07b-selection-badge.png` — that test had
+no visual record of the in-preview overlay before, since the overlay never
+appears in a renderer screenshot.
+
 ## 2026-08-07 — The props island could open blank, and the preview could show a stranger's app
 
 Five Electron tests were failing (`select-element`, `prop-edit`, `ready-gating`,
