@@ -168,6 +168,7 @@ const api: PraxisApi = {
       ipcRenderer.on('panel:state', listener)
       return () => ipcRenderer.removeListener('panel:state', listener)
     },
+    requestState: (): void => ipcRenderer.send('panel:request-state'),
     action: (action: PanelAction): void => ipcRenderer.send('panel:action', action),
     onAction: (cb: (action: PanelAction) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, action: PanelAction): void => cb(action)

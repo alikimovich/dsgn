@@ -268,17 +268,27 @@ try {
   await shotIsland('custom-controls-island.png')
 
   // --- Scrub-cadence burst through the island api path: 3 applyLiteral commits
-  // ~250ms apart (CustomPanel's WRITE_THROTTLE_MS), all inside edit-history's
+  // 250ms apart (CustomPanel's WRITE_THROTTLE_MS), all inside edit-history's
   // 500ms coalesce window. One island round trip so IPC latency can't stretch
-  // the gaps. ---
+  // the gaps.
+  //
+  // Paced against a fixed DEADLINE, and spinning rather than sleeping: a
+  // renderer's setTimeout drifts hard when the Electron window isn't the
+  // frontmost app (a 250ms timer measures ~450ms under Playwright here), which
+  // alone stretches the burst past the 500ms window and makes this assert an
+  // environment probe instead of a coalescing one. A fixed cadence is also the
+  // faithful model — CustomPanel's throttle fires every WRITE_THROTTLE_MS
+  // regardless of when the previous write resolved. ---
   const beforeBurst = readFileSync(styled, 'utf8')
   const burst = JSON.parse(
     await panelEval(`(async () => {
       const root = ${JSON.stringify(fixture)}
       const out = []
-      for (const v of [2, 2.5, 3]) {
-        out.push(await window.api.controls.applyLiteral(root, 'custom-demo', 'scale', v))
-        if (v !== 3) await new Promise((r) => setTimeout(r, 250))
+      const t0 = Date.now()
+      const vals = [2, 2.5, 3]
+      for (let i = 0; i < vals.length; i++) {
+        while (Date.now() - t0 < i * 250) { /* spin — the only accurate wait here */ }
+        out.push(await window.api.controls.applyLiteral(root, 'custom-demo', 'scale', vals[i]))
       }
       return JSON.stringify(out)
     })()`)

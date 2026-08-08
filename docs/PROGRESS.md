@@ -2,6 +2,81 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-07 — The props island could open blank, and the preview could show a stranger's app
+
+Five Electron tests were failing (`select-element`, `prop-edit`, `ready-gating`,
+`style-edit`, `custom-controls`) — all in the click-to-edit path, which made a
+stale-tests explanation implausible. They had two distinct product causes.
+
+**1. The island's first state push was thrown away.** The island is a separate
+`?praxisPanel=1` WebContentsView, and it is CREATED by `panel:show` — which
+`PanelHost` sends *after* its first `panel:setState`. So the first push had
+nowhere to land. `ensurePanelView`'s `did-finish-load` re-push was supposed to
+cover that, and it can't: it fires on the page's `load` event, which beats
+`PanelApp`'s mount effect registering the `panel:state` listener often enough
+that a re-send delayed by a single `setTimeout(0)` lands while the synchronous
+one is dropped (measured, both ways). The island then sat on `state === null` —
+rendering *nothing* — until some unrelated change happened to re-push. That is
+why the Svelte prop tests passed: their content-match redirect re-selects, which
+pushes again. The React ones settled before the view finished loading and stayed
+blank forever. The fix inverts the direction: the island PULLS
+(`panel:request-state`) right after it subscribes, which is the only ordering
+that cannot race its own listener. The load-event re-push is gone — one
+mechanism, and it's the correct one.
+
+**2. A reopened island could stay 160px tall.** `PanelHost` is remounted (with
+its size state back at the default 316×160) every time the island is closed and
+reopened, but the island PAGE lives on, so its `ResizeObserver` only speaks up
+when the rendered box actually moves. Reopen on a selection whose card renders
+at the same height and nothing fires — the view stays at the default with the
+card clipped inside it. `PanelApp` now re-measures on every state push, which a
+reopen always carries.
+
+**3. `isPortFree` couldn't see a dual-stack occupant, so the preview attached to
+someone else's server.** Node sets `SO_REUSEADDR`, so on macOS binding
+`127.0.0.1:7783` SUCCEEDS while another process holds the wildcard `:::7783` —
+the shape any `server.listen(port)` takes. `allocatePort` therefore handed out
+an occupied port, the spawned dev server died on `EADDRINUSE`, and
+`spawnDevServer`'s primary path (settle on whatever answers
+`http://127.0.0.1:<port>`) settled on the squatter. Concretely: opening the
+propedit fixture previewed the *selectable* fixture's page, so `style-edit` and
+`custom-controls` were clicking for `#tw-box` in a document that had never heard
+of it. Left-over dev servers from earlier test runs are what exposed it, but the
+user-facing version is worse — any `node server.mjs` a user has running on 7777
+would be previewed under their project's name. `isPortFree` now also probes the
+wildcard, and votes "occupied" only on an explicit `EADDRINUSE` (a wildcard bind
+refused by a sandbox or a no-IPv6 host says nothing about the port and must not
+starve the whole range).
+
+Two of the five also had genuinely wrong test code, exposed only once the port
+bug stopped them failing earlier:
+
+- **`style-edit` was driving the PREVIOUS selection's card.** Its
+  `openStylesTab` polled "are the four Styles groups rendered?" — evidence that
+  survives the island being closed, because closing only unmounts `PanelHost`
+  while the island's own DOM stays. A straggler click from `pickElement`'s retry
+  loop reset `propsIslandOpen` after `setOpen(true)`, the poll passed on the
+  stale card anyway, and the BezierEditor nudge then wrote
+  `transitionTimingFunction: "ease"` into `ProvenTokenCard` (`Styled.tsx:54`)
+  while asserting against `TwCard` (`:5`). It now requires the island's own
+  header to name the current selection — a strictly stronger check.
+- **`custom-controls` was measuring timer drift, not coalescing.** Its
+  scrub-cadence burst slept 250ms between `applyLiteral` calls, but a renderer's
+  `setTimeout` runs ~450ms for a 250ms delay while the Electron window isn't the
+  frontmost app (measured in both renderers; `visibilityState` is `visible` and
+  rAF is prompt, so this is timer throttling, not a blocked thread). That alone
+  pushed the burst past edit-history's 500ms window. It now paces against a
+  fixed deadline and spins rather than sleeps — also the faithful model, since
+  `CustomPanel`'s throttle fires every `WRITE_THROTTLE_MS` regardless of when the
+  previous write resolved. Main-side apply latency is 15–135ms typically but was
+  seen at 496ms once under load, so a rare flake here remains possible.
+
+`src/main/index.ts` (panel:request-state), `src/preload/index.ts`,
+`src/shared/api.ts` (`panel.requestState`),
+`src/renderer/src/components/PanelApp.tsx`, `src/main/devserver-net.ts`
+(`isPortFree`), `test/devserver-net.mjs` (both occupant shapes — the regression
+test), `test/style-edit.mjs`, `test/custom-controls.mjs`.
+
 ## 2026-08-07 — An unsent message stays in the chat it was typed in
 
 User-reported: type into the composer, switch chats, and the text is still

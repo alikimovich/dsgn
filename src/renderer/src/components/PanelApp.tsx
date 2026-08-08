@@ -31,13 +31,28 @@ export default function PanelApp(): React.JSX.Element | null {
   // selection: a fresh pick re-fetches, so stale tombstones must not outlive it.
   const [removedPanels, setRemovedPanels] = useState<string[]>([])
 
-  useEffect(() => window.api.panel.onState(setState), [])
+  // Subscribe, then PULL: this view is created by the main renderer's first
+  // `panel:show`, which it sends after its first `panel:setState` — that push is
+  // gone before this page exists. Asking for the state here (rather than having
+  // main re-push on load) is the only order that can't race this listener.
+  useEffect(() => {
+    const off = window.api.panel.onState(setState)
+    window.api.panel.requestState()
+    return off
+  }, [])
 
   const elKey = state ? `${state.element.source ?? ''}|${state.element.selector}` : ''
   // biome-ignore lint/correctness/useExhaustiveDependencies: elKey is the selection identity — tombstones reset only on a new selection.
   useEffect(() => setRemovedPanels([]), [elKey])
 
   // Report rendered size (includes the shadow padding) whenever it changes.
+  // Re-reported on EVERY state push, not just when the card appears: PanelHost
+  // is remounted (with its size state back at the 160px default) each time the
+  // island is closed and reopened, while this page lives on — so a reopened
+  // selection whose card happens to render at the same height would move no
+  // observed box, fire no ResizeObserver callback, and leave the view stuck at
+  // that default with the card clipped inside it. A push always accompanies a
+  // reopen, so measuring on the push is what closes that hole.
   useEffect(() => {
     const el = ref.current
     if (!el) return
@@ -49,7 +64,7 @@ export default function PanelApp(): React.JSX.Element | null {
     const ro = new ResizeObserver(report)
     ro.observe(el)
     return () => ro.disconnect()
-  }, [state === null, collapsed])
+  }, [state, collapsed])
 
   if (!state) return null
   const controls = (state.controls ?? []).filter((p) => !removedPanels.includes(p.manifest.id))

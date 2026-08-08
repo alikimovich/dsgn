@@ -3,6 +3,31 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Props island + preview port (2026-08-07, five failing Electron tests)
+
+- [x] **The island's first state push had nowhere to land.** ✅ 2026-08-07 — the
+      view is created by `panel:show`, which follows the first `setState`, and
+      the `did-finish-load` re-push races the island's own listener. The island
+      now PULLS (`panel:request-state`) after subscribing. See PROGRESS.
+- [x] **A reopened island could stay at its 160px default.** ✅ 2026-08-07 —
+      `PanelHost` remounts with a fresh size state while the island page (and its
+      ResizeObserver) lives on, so an unchanged card height reported nothing.
+      `PanelApp` re-measures on every state push.
+- [x] **`isPortFree` missed a dual-stack occupant.** ✅ 2026-08-07 — SO_REUSEADDR
+      lets a 127.0.0.1 bind succeed under a wildcard listener, so praxis handed
+      out an occupied port and then previewed whatever already answered there.
+      Both probes now run; the wildcard one only votes on `EADDRINUSE`.
+- [ ] **`custom-controls`'s burst assert is still latency-sensitive.** It needs
+      three `applyLiteral` records inside edit-history's 500ms window; main-side
+      apply latency is usually 15–135ms but was measured at 496ms once under
+      load. If it flakes again, the honest fix is main-side (why does a
+      read-splice-write occasionally take half a second?), not a bigger
+      COALESCE_MS.
+- [ ] **Leaked fixture dev servers survive a killed test run.** Seven `node
+      server.mjs` processes from July/August runs were still holding 7777–7783 on
+      this machine (`before-quit` → `stopAll` only runs on a graceful quit). The
+      port fix makes praxis route around them; nothing reaps them.
+
 ## Settings "Connecting…" hang + publish guidance (2026-08-07, user-reported)
 
 - [ ] **STILL NOT REPRODUCED — the user's Connect hangs, mine doesn't.** They see

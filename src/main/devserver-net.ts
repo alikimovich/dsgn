@@ -7,14 +7,36 @@ import type { Framework } from '../shared/api'
  * a free port, and detecting an already-running dev server.
  */
 
-/** Can we bind `port` on `host`? (Used to pick a free preview port.) */
-export function isPortFree(port: number, host = '127.0.0.1'): Promise<boolean> {
+/** `host` undefined = bind the unspecified address (node's dual-stack default). */
+function tryBind(port: number, host?: string): Promise<'free' | 'in-use' | 'error'> {
   return new Promise((resolve) => {
     const srv = createServer()
-    srv.once('error', () => resolve(false))
-    srv.once('listening', () => srv.close(() => resolve(true)))
-    srv.listen(port, host)
+    srv.once('error', (err: NodeJS.ErrnoException) =>
+      resolve(err.code === 'EADDRINUSE' ? 'in-use' : 'error')
+    )
+    srv.once('listening', () => srv.close(() => resolve('free')))
+    if (host === undefined) srv.listen(port)
+    else srv.listen(port, host)
   })
+}
+
+/**
+ * Can we bind `port` on `host`? (Used to pick a free preview port.)
+ *
+ * The `host` bind alone does NOT see every occupant: node sets SO_REUSEADDR, so
+ * on macOS/BSD binding 127.0.0.1 succeeds while another process holds the
+ * dual-stack wildcard on that port — the shape any `server.listen(port)` takes.
+ * A false "free" is not a harmless retry: start() hands the port to the dev
+ * server AND settles on the first thing that answers `http://host:port`, so the
+ * squatter answers before our own server fails to bind and praxis previews a
+ * stranger's app under the user's project name. Hence the second, wildcard
+ * probe. It only ever votes "occupied" on an explicit EADDRINUSE — a wildcard
+ * bind refused for any other reason (a sandbox, no IPv6) says nothing about the
+ * port, and must not starve allocation of every port in the range.
+ */
+export async function isPortFree(port: number, host = '127.0.0.1'): Promise<boolean> {
+  if ((await tryBind(port, host)) !== 'free') return false
+  return (await tryBind(port)) !== 'in-use'
 }
 
 // Ports browsers (Chromium) and the WHATWG fetch spec refuse to connect to — so

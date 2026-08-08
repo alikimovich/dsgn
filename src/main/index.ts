@@ -470,10 +470,11 @@ function ensurePanelView(): WebContentsView {
       query: { praxisPanel: '1' }
     })
   }
-  // The panel page is stateless — re-push the latest state after any (re)load.
-  panelView.webContents.on('did-finish-load', () => {
-    if (panelState) panelView?.webContents.send('panel:state', panelState)
-  })
+  // The panel page is stateless — it pulls the latest state itself once it is
+  // listening (panel:request-state below). Re-pushing here on `did-finish-load`
+  // instead would race the island's own ipcRenderer registration (React commits
+  // its effect after the page's load event as often as not) and the island would
+  // stay blank until some unrelated selection change happened to re-push.
   mainWindow?.contentView.addChildView(panelView)
   return panelView
 }
@@ -956,6 +957,14 @@ function registerPreviewIpc(): void {
     if (!fromMainWindow(e)) return
     panelState = state
     panelView?.webContents.send('panel:state', state)
+  })
+  // Island → "I'm listening, send me what you have". The first setState always
+  // predates the view (show creates it), so without this pull the island's very
+  // first render would have nothing to draw. Same channel as the pushes, so the
+  // reply can never overtake a newer state.
+  ipcMain.on('panel:request-state', (e) => {
+    if (e.sender !== panelView?.webContents) return
+    if (panelState) e.sender.send('panel:state', panelState)
   })
   // Panel → main renderer: user actions (close/dock/seed/…) and content height.
   ipcMain.on('panel:action', (e, action: unknown) => {

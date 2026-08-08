@@ -1134,6 +1134,12 @@ export interface PraxisApi {
     setState: (state: PanelState) => void
     /** Island → receive state pushes. */
     onState: (cb: (state: PanelState) => void) => () => void
+    /** Island → ask main to (re)send the latest state on `onState`. The island
+     *  view is created by the first `show`, which the main renderer sends AFTER
+     *  its first `setState`, so that push has nowhere to land — and a re-push on
+     *  the view's load event races the island's own listener registration. The
+     *  island pulling once it is listening is the only order that can't lose. */
+    requestState: () => void
     /** Island → relay a user action to the main renderer. */
     action: (action: PanelAction) => void
     /** Main renderer → handle island actions. */
