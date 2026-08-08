@@ -3,6 +3,41 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Settings "Connecting…" hang + publish guidance (2026-08-07, user-reported)
+
+- [ ] **STILL NOT REPRODUCED — the user's Connect hangs, mine doesn't.** They see
+      "Contacting ai-gateway.vercel.sh… 94s" with no error. Measured inside the
+      BUILT app's main process on this machine, every case ends promptly: real
+      gateway + bogus key → 401 in 0.7s, closed port → instant, blackhole IP →
+      the 10s abort fires. So main is healthy here and the difference is on their
+      machine or in their build. Two theories, neither confirmed: (a) they run
+      `bun run dev`, where React.StrictMode double-invokes mount effects — the
+      `live` ref was cleanup-only, so `live.current` would stay false forever and
+      `stale()` would be permanently true, meaning the probe could never render,
+      error, OR hit its own deadline. Fixed the ref regardless (it was a real
+      bug), but a `--mode development` build did NOT reproduce it, so this is
+      unproven. (b) something network-level (proxy/VPN/DNS) that main's own abort
+      somehow doesn't cover. NEXT: ask which command they launch with, and get
+      the error text now that the state-driven deadline forces one after 12s.
+- [x] **Made the hang structurally impossible instead of guessing.** ✅
+      2026-08-07 — the deadline is now driven by the rendered `inFlight` state,
+      not by a closure gated on `stale()`. Any path that disowns a probe without
+      clearing the state used to strand the button; now if `inFlight` is set it
+      is cleared when the deadline passes, whatever went wrong. Plus the first
+      real UI test of the dialog (`test/settings-connect.mjs`) — two rounds of
+      fixing this shipped without one, which is why both missed.
+- [ ] **The never-answering-IPC path isn't test-reachable.** The preload bridge is
+      frozen so a test can't stub `providers.catalog` to hang, and main always
+      answers within its 10s abort — so the state-driven deadline is reasoned,
+      not asserted. Needs either an injectable IPC seam or a main-side switch to
+      stall a probe on demand.
+- [x] **Publish failure now says how to fix it.** ✅ 2026-08-07 — "this folder
+      isn't the repository root" named no repo and no action. It now distinguishes
+      "not a git repository at all" (→ `git init` here) from "inside the repo at
+      <path>" (→ open that, or `git init` here), and `scaffold.ts` no longer
+      SWALLOWS a failed `git init`/first commit — that silence is what let a new
+      project look fine until publish blamed something unrelated.
+
 ## Stop / interrupt (2026-08-07, user-reported)
 
 - [x] **Stop was a dead button on Claude, and a silent no-op on Gemini.** ✅

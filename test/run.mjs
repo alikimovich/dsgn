@@ -123,6 +123,7 @@ const ELECTRON = [
   'prop-svelte-self',
   'code-peek',
   'code-drawer',
+  'settings-connect',
   'annotations',
   'tokens',
   'tokens-scaffold',

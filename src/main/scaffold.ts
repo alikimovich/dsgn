@@ -1,6 +1,6 @@
 import { execFile } from 'child_process'
 import { mkdir, readdir, writeFile } from 'fs/promises'
-import { join, basename } from 'path'
+import { basename, join } from 'path'
 import { promisify } from 'util'
 
 /**
@@ -17,6 +17,15 @@ export interface CreateProjectResult {
   ok: boolean
   root?: string
   error?: string
+  /**
+   * The project was created, but something non-fatal went wrong that the user
+   * needs to know about NOW rather than discover later. Today that means the
+   * `git init` + first commit didn't work: everything still runs, but praxis's
+   * branch and publish flow both need a repository, so publish would otherwise
+   * fail much later with a message that never mentions git (see
+   * `annotations.ts`'s "isn't the repository root").
+   */
+  warning?: string
 }
 
 /** Folder basename → a valid npm package name. */
@@ -166,16 +175,36 @@ export async function createProject(
   }
 
   // Git first (fast, and the initial commit captures the clean template even if
-  // the install below fails); non-fatal — praxis's branch flow just stays off.
+  // the install below fails). Still non-fatal — the project runs either way — but
+  // NOT silent any more. A swallowed failure here is invisible until the user
+  // hits Publish, which then reports "this folder isn't the repository root"
+  // (annotations.ts) without ever mentioning git: if the new folder sits inside
+  // some other repo, that parent is what git resolves to, so praxis looks like it
+  // is refusing for a reason the user can't act on. Say it here, while they're
+  // looking at the thing that just failed.
+  let warning: string | undefined
   try {
     await execFileP('git', ['init', '-b', 'main'], { cwd: root, timeout: 10000 })
-    await execFileP('git', ['add', '-A'], { cwd: root, timeout: 10000 })
-    await execFileP('git', ['commit', '-m', 'Initial commit from Praxis'], {
-      cwd: root,
-      timeout: 10000
-    })
-  } catch {
-    /* no git or no identity configured — the project still works */
+  } catch (e) {
+    warning =
+      `Project created, but \`git init\` failed: ${msg(e)}. Praxis needs a repository ` +
+      `to create work branches and to publish, so run \`git init\` in ${root} before publishing.`
+  }
+  if (!warning) {
+    try {
+      await execFileP('git', ['add', '-A'], { cwd: root, timeout: 10000 })
+      await execFileP('git', ['commit', '-m', 'Initial commit from Praxis'], {
+        cwd: root,
+        timeout: 10000
+      })
+    } catch (e) {
+      // The repo exists, so branching and publishing work — only the first commit
+      // is missing, and the usual cause is a machine with no git identity set.
+      warning =
+        `Project created and \`git init\` succeeded, but the first commit failed: ${msg(e)}. ` +
+        `If git has no identity here, set one with \`git config --global user.email "you@example.com"\` ` +
+        `and \`git config --global user.name "Your Name"\`, then commit.`
+    }
   }
 
   if (opts.install !== false) {
@@ -191,5 +220,5 @@ export async function createProject(
     }
   }
 
-  return { ok: true, root }
+  return { ok: true, root, ...(warning ? { warning } : {}) }
 }

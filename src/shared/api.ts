@@ -1149,7 +1149,11 @@ export interface PraxisApi {
     /** Save-dialog for a folder to create (New Project…). Null when cancelled. */
     pickNew: () => Promise<string | null>
     /** Scaffold a minimal Vite+React app there, git init, install deps. */
-    create: (root: string) => Promise<{ ok: boolean; root?: string; error?: string }>
+    /** `warning` = created, but a non-fatal step failed and the user must be told
+     *  now (today: `git init` / the first commit — see scaffold.ts). */
+    create: (
+      root: string
+    ) => Promise<{ ok: boolean; root?: string; error?: string; warning?: string }>
   }
   devServer: {
     start: (opts: {

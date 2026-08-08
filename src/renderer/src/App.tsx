@@ -1086,6 +1086,10 @@ export default function App(): React.JSX.Element {
       setStatus({ kind: 'error', message })
       return
     }
+    // A git step that didn't work is reported HERE, not swallowed. Without it the
+    // project looks fine until Publish, which then complains that the folder isn't
+    // a repository root — a message that never mentions git and reads as a bug.
+    if (res.warning) log.append(res.warning, 'error')
     log.append('Project created — starting its dev server…', 'success')
     await attempt(res.root, undefined, !!useSession.getState().projectRoot)
   }

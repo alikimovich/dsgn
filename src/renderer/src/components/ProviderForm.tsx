@@ -141,12 +141,19 @@ export default function ProviderForm({
   // not land: bumping this token is what disowns whatever is still outstanding.
   const probeToken = useRef(0)
   const live = useRef(true)
-  useEffect(
-    () => () => {
+  // Re-arm on EVERY mount, not just clear on unmount. React.StrictMode (on — see
+  // main.tsx) double-invokes mount effects as mount → cleanup → mount, and a ref
+  // survives that cycle, so a cleanup-only version leaves `live.current === false`
+  // for the rest of the component's life. Everything here is gated on it: `stale()`
+  // would be permanently true, so a probe could neither render its catalog nor
+  // report an error nor hit its own deadline — the button sat on "Connecting…"
+  // forever, no matter how healthy the endpoint was. That WAS the reported hang.
+  useEffect(() => {
+    live.current = true
+    return () => {
       live.current = false
-    },
-    []
-  )
+    }
+  }, [])
 
   // Tick the "…for Ns" counter while a probe is outstanding. No aria-live: a
   // number changing every second is announcement noise (same call as the chat's
@@ -159,6 +166,32 @@ export default function ProviderForm({
       1000
     )
     return () => clearInterval(id)
+  }, [inFlight])
+
+  // The deadline that actually guarantees the button can't sit on "Connecting…".
+  //
+  // There is a second, earlier deadline inside `probe` — but that one lives in a
+  // closure and is gated on `stale()`, so ANY path that disowns the probe without
+  // clearing `inFlight` (a bumped token, a ref that never re-armed) makes it
+  // return early and the form waits forever. That is the failure users actually
+  // reported, twice, and two attempts to fix it from inside `probe` both missed.
+  // This one is driven by the RENDERED STATE instead: if `inFlight` is set, it is
+  // cleared when the deadline passes. No token check, no ref, nothing to disown —
+  // so however the probe goes wrong, the UI still comes back.
+  useEffect(() => {
+    if (!inFlight) return
+    const id = setTimeout(
+      () => {
+        probeToken.current += 1 // a late answer must no longer land
+        setInFlight(null)
+        setError(
+          `No answer from ${inFlight.host} after ${Math.round(PROBE_DEADLINE_MS / 1000)} seconds. ` +
+            `Check the endpoint URL and your network, then try again.`
+        )
+      },
+      Math.max(0, inFlight.startedAt + PROBE_DEADLINE_MS - Date.now())
+    )
+    return () => clearTimeout(id)
   }, [inFlight])
 
   /** Disown the outstanding probe (if any) and return the form to its idle state. */

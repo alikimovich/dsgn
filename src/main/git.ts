@@ -41,13 +41,28 @@ export async function isGitRepo(root: string): Promise<boolean> {
  * in a monorepo), where switching the whole repo's branch would be surprising.
  */
 export async function isRepoRoot(root: string): Promise<boolean> {
+  // '' means "this folder IS the top level"; a path or null both mean it isn't.
+  return (await enclosingRepoRoot(root)) === ''
+}
+
+/**
+ * Which repository this folder actually belongs to, for explaining a refusal.
+ *
+ * Returns `''` when the folder IS the top level, the enclosing repo's path when
+ * it's a subdirectory of one, and `null` when git can't see a repo at all. The
+ * three cases need three different pieces of advice, and telling them apart is
+ * the difference between "open the repo's top-level folder" (useless when the
+ * user has never heard of that repo) and naming the path they should open — or
+ * telling them there's no repo here and `git init` is the answer.
+ */
+export async function enclosingRepoRoot(root: string): Promise<string | null> {
   try {
     const { stdout } = await git(root, ['rev-parse', '--show-toplevel'])
     const top = stdout.trim()
-    if (!top) return false
-    return (await realpath(top)) === (await realpath(root))
+    if (!top) return null
+    return (await realpath(top)) === (await realpath(root)) ? '' : top
   } catch {
-    return false
+    return null
   }
 }
 

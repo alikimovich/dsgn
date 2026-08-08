@@ -6,7 +6,7 @@ import { promisify } from 'util'
 import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
 import { buildPublishMessage } from '../shared/publish-message'
-import { ensureBranch } from './git'
+import { enclosingRepoRoot, ensureBranch } from './git'
 import { aheadOfBase, changedSince, defaultBase } from './publish-scope'
 
 /**
@@ -199,9 +199,19 @@ async function shipToMain(
     // checkouts (a subdir of a larger repo), which stays a hard error.
     const healed = await ensureBranch(root)
     if (!healed.isRepo) {
+      // The old message just said "open the repo's top-level folder", which is a
+      // dead end: it never said WHICH repo, and for a freshly created project the
+      // answer usually isn't "open something else" at all — it's that this folder
+      // never became a repo (a scaffold whose `git init` failed used to be
+      // swallowed silently), so git resolved to whatever repo happens to sit
+      // above it. Name the actual situation and the actual next step.
+      const enclosing = await enclosingRepoRoot(root)
       return {
         ok: false,
-        error: `You're on ${base}, and this folder isn't the repository root — open the repo's top-level folder to publish.`
+        error:
+          enclosing === null
+            ? `This folder isn't a git repository, so there's nothing to publish from. Run \`git init\` in ${root} (and make a first commit), then try again.`
+            : `Can't publish: this folder is inside the repository at ${enclosing}, but isn't its top level, so Praxis won't switch that whole repo onto a work branch. Either open ${enclosing} as the project and publish from there, or make this folder its own repository with \`git init\` in ${root}.`
       }
     }
     if (!healed.branch || healed.branch === base || healed.error) {
