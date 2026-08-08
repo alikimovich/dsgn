@@ -46,6 +46,7 @@ const UNIT = [
   'providers-store',
   'model-catalog',
   'codex-retry-cause',
+  'codex-stream',
   'interrupt-escalation',
   'chat-title',
   'chat-settings',

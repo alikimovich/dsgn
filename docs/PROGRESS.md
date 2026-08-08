@@ -29,6 +29,38 @@ element's rounded rect (not just that *some* digits are there), and captures the
 preview WebContentsView's own pixels to `07b-selection-badge.png` — that test had
 no visual record of the in-preview overlay before, since the overlay never
 appears in a renderer screenshot.
+## 2026-08-08 — DeepSeek really runs; and replies were losing their opening
+
+**The feature works.** The user ran `deepseek/deepseek-v4-flash` through a gateway
+connection and got real multi-turn replies. An open model genuinely drives a chat
+on the Codex harness — the thing that had been reasoned about but never seen.
+
+**But the replies were beheaded, mid-word.** "ve reliable visibility…", "ing
+else?". Codex streams whole `ThreadItem`s rather than deltas, so praxis remembers
+how much of each item it has emitted and sends the suffix. The trap: the CLI
+numbers items PER TURN (`item_0`, `item_1`, … restarting each turn) while
+`emittedLen`/`statused` were session-scoped and never cleared. Turn 2's `item_0`
+therefore inherited turn 1's length and had exactly that many leading characters
+sliced off. It hid well because a longer reply still renders — just missing its
+start — and because the first turn of any session is always correct.
+
+The same map ran the "surface this step once" guard, so later turns also DROPPED
+tool steps whose ids had been seen before. That is very likely why the chat showed
+"Steps · 1 step" for turns that did more.
+
+Fix: a per-turn `ItemTracker` (new pure `backends/codex-stream.ts`), reset at the
+top of every turn, with the suffix logic and the once-per-turn guard as its two
+methods. `test/codex-stream.mjs` pins both, including the exact shape of the bug
+(an unreset tracker mangling turn 2) so it can't come back quietly.
+
+**Process note, worth keeping.** Partway through this the working tree was moved
+off `candidate` onto `main` by something outside this session (the agent-runner
+daemon holds worktrees in this repo), and an edit landed on the wrong branch. It
+was caught because a `grep` for a symbol that certainly existed came back empty.
+Nothing was lost — the merge was already committed and pushed — but if you script
+against this repo, re-check `git branch --show-current` after any long-running
+step rather than trusting it across one.
+
 
 ## 2026-08-07 — The props island could open blank, and the preview could show a stranger's app
 

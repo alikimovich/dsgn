@@ -3,6 +3,29 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Codex turn streaming (2026-08-08, user-reported)
+
+- [x] **A connection running DeepSeek works end-to-end.** ✅ 2026-08-08 — the user
+      ran `deepseek/deepseek-v4-flash` through a gateway connection and got real
+      multi-turn replies (38k in / 513 out). That closes the "Kimi/DeepSeek
+      unproven" item below for DeepSeek: an open model really does drive a chat on
+      the Codex harness. Its `apply_patch` reliability is still unmeasured — that
+      needs a turn that actually EDITS a file.
+- [x] **Assistant replies were missing their opening, mid-word.** ✅ 2026-08-08 —
+      "ve reliable visibility…", "ing else?". Codex streams whole items and praxis
+      emits the unsent SUFFIX, but the CLI numbers items PER TURN while the
+      tracker lived for the whole SESSION — so turn 2's `item_0` inherited turn
+      1's length and lost exactly that many leading characters. Longer replies
+      still rendered, just beheaded, which is why it went unnoticed. New pure
+      `backends/codex-stream.ts`, reset each turn. Same bug silently DROPPED tool
+      steps on later turns (an id already "surfaced"). `test/codex-stream.mjs`.
+- [ ] **"Model metadata for `<model>` not found" is repeated every turn.** The
+      string lives in the vendored `codex` binary, so it's the CLI warning about a
+      non-OpenAI model id, and it lands in the chat's step list on EVERY turn —
+      pure noise after the first. Worth finding which event carries it (it renders
+      as a step, not a red error) and showing it at most once per session, or
+      dropping it: the user can't act on it and it isn't wrong, just loud.
+
 ## Props island + preview port (2026-08-07, five failing Electron tests)
 
 - [x] **The island's first state push had nowhere to land.** ✅ 2026-08-07 — the

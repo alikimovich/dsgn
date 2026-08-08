@@ -23,6 +23,7 @@ import { resolveConnection } from '../providers'
 import { scrubSecret } from '../providers-store'
 import { praxisRules } from '../rules'
 import { createRetryCause } from './codex-retry'
+import { createItemTracker } from './codex-stream'
 import { createRecordCapture } from './record'
 import { describeTool, sendToRenderer } from './tools'
 import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
@@ -269,32 +270,28 @@ async function startSession(
   // Codex streams whole `ThreadItem`s (often started→updated→completed), not raw deltas.
   // Track per-item: how much agent_message text we've emitted (so updates stream as a
   // suffix), and which tool items we've already surfaced (so we emit each step once).
-  const emittedLen = new Map<string, number>()
-  const statused = new Set<string>()
+  // Item ids restart every turn, so this tracker is RESET per turn — see
+  // codex-stream.ts for what went wrong when it wasn't.
+  const items = createItemTracker()
 
   const handleItem = (item: ThreadItem, terminal: boolean): void => {
     switch (item.type) {
       case 'agent_message': {
-        const prev = emittedLen.get(item.id) ?? 0
-        const full = item.text ?? ''
-        if (full.length > prev) {
-          const delta = full.slice(prev)
-          emittedLen.set(item.id, full.length)
+        const delta = items.delta(item.id, item.text)
+        if (delta) {
           cap.appendAssistant(delta)
           emit({ type: 'delta', text: delta })
         }
         break
       }
       case 'reasoning': {
-        if (terminal && item.text?.trim() && !statused.has(item.id)) {
-          statused.add(item.id)
+        if (terminal && item.text?.trim() && items.first(item.id)) {
           emit({ type: 'status', text: `Thinking · ${oneLine(item.text)}` })
         }
         break
       }
       case 'command_execution': {
-        if (!statused.has(item.id)) {
-          statused.add(item.id)
+        if (items.first(item.id)) {
           emit({ type: 'status', text: `$ ${oneLine(item.command, 100)}` })
           cap.noteTool('Bash', { command: item.command })
         }
@@ -302,8 +299,7 @@ async function startSession(
       }
       case 'file_change': {
         // "Emitted once the patch succeeds or fails" → handle on the terminal event.
-        if (terminal && !statused.has(item.id)) {
-          statused.add(item.id)
+        if (terminal && items.first(item.id)) {
           for (const ch of item.changes ?? []) {
             emit({ type: 'status', text: describeTool('Edit', { file_path: ch.path }) })
             cap.noteTool('Edit', { file_path: ch.path }) // → filesTouched in the record
@@ -312,15 +308,13 @@ async function startSession(
         break
       }
       case 'web_search': {
-        if (!statused.has(item.id)) {
-          statused.add(item.id)
+        if (items.first(item.id)) {
           emit({ type: 'status', text: `Search · ${oneLine(item.query, 80)}` })
         }
         break
       }
       case 'mcp_tool_call': {
-        if (!statused.has(item.id)) {
-          statused.add(item.id)
+        if (items.first(item.id)) {
           emit({ type: 'status', text: `${item.server} · ${item.tool}` })
           cap.noteTool(item.tool, item.arguments)
         }
@@ -354,6 +348,10 @@ async function startSession(
     // Per turn, not per session: a retry cause from an earlier turn must not be
     // grafted onto a later, unrelated failure.
     const retryCause = createRetryCause()
+    // Codex numbers items per TURN, so turn 2's `item_0` is a NEW item. Without
+    // this reset the tracker treats it as a continuation of turn 1's and emits
+    // only the longer tail — which is why replies arrived starting mid-word.
+    items.reset()
     try {
       const { events } = await thread.runStreamed(text, { signal: turnAbort.signal })
       for await (const ev of events) {
