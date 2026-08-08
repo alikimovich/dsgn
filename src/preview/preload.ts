@@ -158,7 +158,8 @@ function setStatusPill(text: string | null): void {
 // Persistent selection highlight — outlines that STAY while the mouse hovers
 // other elements (the hover box is separate). When the picked element resolves
 // to a source stamp, every element with the same stamp is outlined too (a
-// component rendered in a loop), with an "h3 × 4" count badge on the pick.
+// component rendered in a loop), with an "h3 × 4" count badge on the pick. The
+// badge also carries the pick's rendered size (see makeChip).
 let selLayer: HTMLDivElement | null = null
 let selEls: Element[] = []
 
@@ -177,11 +178,7 @@ function ensureOverlay(): void {
     'border:2px solid #2563eb;border-radius:3px;background:rgba(37,99,235,0.08);' +
     'transition:all 60ms ease-out;display:none;'
 
-  const label = document.createElement('div')
-  label.style.cssText =
-    'position:fixed;pointer-events:none;font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;' +
-    'color:#fff;background:#2563eb;padding:2px 6px;border-radius:4px;white-space:nowrap;' +
-    'transform:translateY(-100%);display:none;'
+  const label = makeChip()
 
   const pins = document.createElement('div')
   pins.style.cssText = 'position:fixed;inset:0;pointer-events:none;'
@@ -418,14 +415,12 @@ function setSelectionHighlight(el: Element | null): void {
       'border:1px solid #2563eb;border-radius:3px;'
     selLayer.appendChild(b)
   }
-  const badge = document.createElement('div')
+  const badge = makeChip()
   badge.setAttribute('data-praxis-selbadge', '')
-  badge.style.cssText =
-    'position:fixed;pointer-events:none;display:none;font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;' +
-    'color:#fff;background:#2563eb;padding:2px 6px;border-radius:4px;white-space:nowrap;' +
-    'transform:translateY(-100%);'
   const tag = (els[0] ?? el).tagName.toLowerCase()
-  badge.textContent = els.length > 1 ? `${tag} × ${els.length}` : shortLabel(el)
+  chipName(badge, els.length > 1 ? `${tag} × ${els.length}` : shortLabel(el))
+  // Size comes from positionSelection — it holds the anchor's live rect, and
+  // re-runs on every scroll/resize/mutation, so the numbers track the layout.
   selLayer.appendChild(badge)
   positionSelection()
 }
@@ -457,6 +452,7 @@ function positionSelection(): void {
       badge.style.display = 'block'
       badge.style.left = `${a.left}px`
       badge.style.top = `${Math.max(a.top - 2, 12)}px`
+      chipSize(badge, a)
     } else {
       badge.style.display = 'none'
     }
@@ -562,6 +558,40 @@ function isOverlay(el: Element | null): boolean {
   return !!el && !!overlayHost && (el === overlayHost || overlayHost.contains(el))
 }
 
+// The blue chip that names the element — both the hover label and the selection
+// badge are one. It holds two spans: the name (`div.card`, or `h3 × 4` for a
+// multi-instance pick) and a dimmed `w × h` size read off the element's box.
+const CHIP_CSS =
+  'position:fixed;pointer-events:none;font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;' +
+  'color:#fff;background:#2563eb;padding:2px 6px;border-radius:4px;white-space:nowrap;' +
+  'transform:translateY(-100%);display:none;'
+
+function makeChip(): HTMLDivElement {
+  const chip = document.createElement('div')
+  chip.style.cssText = CHIP_CSS
+  const name = document.createElement('span')
+  const size = document.createElement('span')
+  size.setAttribute('data-praxis-size', '')
+  size.style.cssText = 'margin-left:6px;font-weight:500;opacity:0.72;'
+  chip.append(name, size)
+  return chip
+}
+
+function chipName(chip: HTMLElement, text: string): void {
+  setText(chip.firstElementChild, text)
+}
+
+/** Rounded to whole px — sub-pixel rects are layout noise at this size. */
+function chipSize(chip: HTMLElement, r: DOMRect): void {
+  setText(chip.lastElementChild, `${Math.round(r.width)} × ${Math.round(r.height)}`)
+}
+
+/** Both chips are rewritten on every hover move and scroll frame; skip the
+ *  no-op writes so the overlay doesn't churn the DOM while nothing changed. */
+function setText(el: Element | null, text: string): void {
+  if (el && el.textContent !== text) el.textContent = text
+}
+
 function shortLabel(el: Element): string {
   const id = el.id ? `#${el.id}` : ''
   const cls =
@@ -583,7 +613,8 @@ function drawOverlay(el: Element): void {
   overlayLabel.style.display = 'block'
   overlayLabel.style.left = `${r.left}px`
   overlayLabel.style.top = `${Math.max(r.top - 2, 12)}px`
-  overlayLabel.textContent = shortLabel(el)
+  chipName(overlayLabel, shortLabel(el))
+  chipSize(overlayLabel, r)
 }
 
 /** A short, reasonably-stable CSS selector path (id wins; else tag:nth-of-type). */
