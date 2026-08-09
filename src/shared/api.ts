@@ -294,6 +294,12 @@ export interface AgentOptions {
   connectionId?: string
 }
 
+/** Praxis-managed durable context for one project, stored outside the repo. */
+export interface ProjectMemory {
+  content: string
+  updatedAt: number
+}
+
 /**
  * A user-added model endpoint (v10). Praxis's two built-in seats — Claude (Agent
  * SDK) and Codex (`@openai/codex-sdk`) — log in with the user's own subscription and
@@ -1412,6 +1418,9 @@ export interface PraxisApi {
       sessionKey: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; error?: string }>
+    /** Archive Main's current transcript and restart its provider context under
+     * the same stable project session key. Project memory is not modified. */
+    clearMainContext: (root: string) => Promise<{ ok: boolean; error?: string }>
     /**
      * Resume a past ("previous agent") session by its history record id — requires
      * the record to carry a Claude `sdkSessionId` (else `ok:false`). Starts a live
@@ -1461,6 +1470,7 @@ export interface PraxisApi {
     spawnComment: (
       root: string,
       text: string,
+      parentSessionKey: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }>
     /** F1 Phase 3 — cancel a running or queued comment spawn (the rail row's ×). */
@@ -1489,6 +1499,10 @@ export interface PraxisApi {
      *  transcripts) — used to reattach the renderer after a reload without tearing
      *  down any session. Read-only: never suspends/starts/closes anything. */
     workspaceSnapshot: () => Promise<WorkspaceSnapshot>
+  }
+  projectMemory: {
+    get: (root: string) => Promise<ProjectMemory>
+    set: (root: string, content: string) => Promise<ProjectMemory>
   }
   /**
    * User-added model endpoints (v10) — see `ProviderConnection`. Global, not

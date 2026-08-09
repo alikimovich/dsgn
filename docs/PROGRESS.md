@@ -2,6 +2,31 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-08 — Main is stable; child agents have parents; decisions outlive context
+
+The project rail now describes the actual ownership tree instead of flattening live
+chats, comment spawns, and history together. Main is pinned first and non-closeable;
+secondary chats keep their generated names; background comment agents nest beneath the
+exact session that launched them and show the inherited model; Project memory and
+History are explicit separate sections. Main/child working state aggregates up to the
+project row. The rail grew from 168px to 208px so these identities remain readable.
+
+Spawn routing now carries the parent `sessionKey` end-to-end rather than filing every
+worker under the bare project key. The selected chat's provider/model/connection still
+flows into the spawn; Claude remains the only backend declaring detached-spawn support,
+so unsupported backends now explain the fallback into the active chat instead of doing
+it invisibly.
+
+Durable project memory lives under Praxis userData, never inside the repo or `.praxis/`,
+and is capped at 16k characters. Every provider receives it in initial instructions;
+an edited revision reaches an already-live chat once on its next turn. Clearing Main
+saves the visible memory, archives the old transcript, restarts the same stable Main key
+with the same model/posture, and leaves files, secondary chats, and memory untouched.
+
+`src/main/project-memory.ts`, `src/main/agent.ts`, `src/main/rules.ts`,
+`src/renderer/src/components/Rail.tsx`, `src/renderer/src/components/ProjectMemoryDialog.tsx`,
+`test/project-memory.mjs`, `test/project-memory-ui.mjs`, `test/rail-chat-status.mjs`.
+
 ## 2026-08-08 — Failed turns park once; only successful turns publish
 
 The old turn hook treated `done` and `error` identically: both auto-landed whatever was

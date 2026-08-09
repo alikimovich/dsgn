@@ -13,9 +13,11 @@
  *
  * Bump PRAXIS_RULES_VERSION whenever the rule text changes (so logs/tests can pin it).
  */
-export const PRAXIS_RULES_VERSION = 10
+import { projectMemoryRules } from './project-memory'
 
-export function praxisRules(opts?: { previewTools?: boolean }): string {
+export const PRAXIS_RULES_VERSION = 11
+
+export function praxisRules(opts?: { previewTools?: boolean; projectMemory?: string }): string {
   const lines: string[] = [
     `# Praxis operating rules (v${PRAXIS_RULES_VERSION})`,
     `Praxis is a design tool: you edit the user's real repository while they watch a`,
@@ -57,6 +59,8 @@ export function praxisRules(opts?: { previewTools?: boolean }): string {
     `  ends, report it as a bug instead of working around it.`,
     `Read-only git (status, log, diff, show) is always fine.`
   ]
+
+  lines.push(...projectMemoryRules(opts?.projectMemory ?? ''))
 
   if (opts?.previewTools) {
     lines.push(

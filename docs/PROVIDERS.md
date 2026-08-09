@@ -23,6 +23,11 @@ for the preview/control tools, injected into Codex and gateway sessions. Questio
 resume, image transport, and background-agent support should remain separately declared;
 they have different lifecycle and security requirements.
 
+Preview comments inherit the originating chat's selected provider/model settings. A
+detached child starts only when that provider declares background-spawn support (Claude
+today); otherwise Praxis explains the limitation and routes the comment into its parent
+chat. The rail always shows the harness/model the child actually received.
+
 Until capability negotiation exists in `src/shared/api.ts`, the product should avoid
 promising unsupported actions in backend-agnostic copy. Open-model connections inherit
 the Codex harness's strengths and gaps; changing the model id does not grant Claude's

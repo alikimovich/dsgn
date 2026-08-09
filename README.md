@@ -21,6 +21,11 @@ GitHub PR.
   Claude (via the Agent SDK), Codex, and Gemini behind one provider seam
   (Gemini is experimental, gated behind `PRAXIS_EXPERIMENTAL_GEMINI`). Their
   capabilities differ; see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
+- **Main, secondary chats, and project memory.** Every project has a stable Main
+  chat, isolated secondary chats, and child background agents nested under the
+  chat that launched them. Durable decisions live outside Git in project memory;
+  Main's provider context can be cleared without deleting those decisions or its
+  archived transcript. See [`docs/MEMORY.md`](docs/MEMORY.md).
 - **Bring your own model.** Beyond the two subscription seats, Settings →
   Models & Providers connects any OpenAI-compatible endpoint serving the
   `/responses` API — Vercel AI Gateway, Groq, or a custom host — so open models

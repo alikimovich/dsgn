@@ -3,6 +3,23 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Main chat, child agents, and project memory (2026-08-08)
+
+- [x] **Make Main a stable, visible project role.** ✅ 2026-08-08 — Main is pinned
+      first, cannot be closed like a secondary, and History is a separate rail section.
+- [x] **Show comment agents under the chat that launched them.** ✅ 2026-08-08 —
+      spawn identity now carries the parent session key; rows show their inherited
+      model and aggregate onto the parent/project working status.
+- [x] **Durable per-project memory + clear Main context.** ✅ 2026-08-08 — curated,
+      16k-bounded memory lives outside Git in Praxis userData, enters every provider,
+      and survives a Main reset; the old transcript is archived into History.
+- [ ] **Suggest memory updates from conversation decisions.** Keep this reviewable:
+      propose additions/removals in the memory editor instead of silently rewriting
+      standing project context.
+- [ ] **Enable detached background agents on Codex/gateway sessions.** Parent-model
+      inheritance is already wired, but the provider capability remains Claude-only;
+      unsupported comments explicitly fall back into their chat.
+
 ## Per-chat isolation (2026-08-08, user-reported)
 
 - [x] **Merge conflict on almost every turn, listing `node_modules`.** ✅ 2026-08-08

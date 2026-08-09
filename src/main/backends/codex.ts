@@ -418,7 +418,9 @@ async function startSession(
     options,
     // Codex CLI is text-only here; images (paste/drop) are ignored for now.
     send: (text, _images) => {
-      const prompt = firstTurn ? `${praxisRules()}\n\n---\n\n${text}` : text
+      const prompt = firstTurn
+        ? `${praxisRules({ projectMemory: ctx?.projectMemory })}\n\n---\n\n${text}`
+        : text
       firstTurn = false
       chain = chain.then(() => runTurn(prompt))
     },

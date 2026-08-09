@@ -76,6 +76,9 @@ export interface SpawnContext {
    *  this root, not the worktree — a worktree write would be stranded when the
    *  worktree is merged/dropped. Absent ⇒ cwd IS the live root. */
   liveRoot?: string
+  /** Durable Praxis-managed project decisions captured when this provider
+   * session starts. Backends inject them into their initial instructions. */
+  projectMemory?: string
 }
 
 /**

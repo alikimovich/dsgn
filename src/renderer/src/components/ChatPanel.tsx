@@ -601,8 +601,12 @@ export default function ChatPanel(): React.JSX.Element {
               event.summary ? `${head}\n\n${event.summary}` : head,
               pkey,
             );
+          // `pkey` is the PARENT SESSION key now, not the bare project key — a
+          // spawn from a secondary chat reads `<projectKey>#<uuid>`. Match on the
+          // project prefix so the finished agent still refreshes its history.
           const root = useSession.getState().projectRoot;
-          if (root && projectKey(root) === pkey)
+          const pk = root ? projectKey(root) : null;
+          if (root && pk && (pkey === pk || pkey.startsWith(`${pk}#`)))
             void useHistory.getState().load(root);
         }
         return;

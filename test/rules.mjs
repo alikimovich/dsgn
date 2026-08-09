@@ -17,7 +17,7 @@ const assert = (cond, msg) => {
 const r = praxisRules()
 assert(typeof r === 'string' && r.length > 0, 'rules render to a non-empty string')
 assert(typeof PRAXIS_RULES_VERSION === 'number', 'version is a number')
-assert(PRAXIS_RULES_VERSION === 10, 'version bumped to 10')
+assert(PRAXIS_RULES_VERSION === 11, 'version bumped to 11')
 assert(r.includes(`v${PRAXIS_RULES_VERSION}`), 'rules carry the version marker')
 // v3 naming — the product is Praxis in the rule text now.
 assert(/praxis/i.test(r), 'names the product Praxis')
@@ -45,6 +45,11 @@ assert(
 )
 // Deterministic (same output every call — safe to inject per turn).
 assert(praxisRules() === r, 'praxisRules is deterministic')
+
+const withMemory = praxisRules({ projectMemory: '- Use praxis/master as integration.' })
+assert(/project memory/i.test(withMemory), 'memory: durable context section present')
+assert(/Use praxis\/master as integration/.test(withMemory), 'memory: saved decision injected')
+assert(!/<project-memory>/.test(r), 'memory: empty default adds no section')
 
 // R3 — preview tools appear ONLY when previewTools is requested (Claude), never
 // for the plain (Codex/Gemini) rendering.

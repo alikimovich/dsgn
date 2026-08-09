@@ -100,6 +100,7 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
 The concurrency/landing contract is documented in `docs/WORKTREES.md`; provider
 capability differences are documented in `docs/PROVIDERS.md`. Keep both current when
 changing lifecycle or backend behavior.
+Project-memory persistence and Main-context reset are documented in `docs/MEMORY.md`.
 
 - **Lifecycle:** `install.sh` (curl one-liner) clones to `~/.praxis`, builds, and
   puts `praxis` on PATH. `praxis` launches the built app; `praxis --update` pulls

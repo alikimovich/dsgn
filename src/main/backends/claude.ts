@@ -1146,7 +1146,7 @@ async function startSession(
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
-        append: praxisRules({ previewTools: true })
+        append: praxisRules({ previewTools: true, projectMemory: ctx?.projectMemory })
       },
       // The praxis MCP server (preview_location / preview_screenshot / define_controls /
       // spring_to_css / check_contrast / fluid_clamp / color_scale / layered_shadow /

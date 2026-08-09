@@ -1,16 +1,17 @@
 /**
- * Rail chat-list overflow — a project's previous chats are capped at 5 rows
- * (MAX_CHAT_ROWS, minus any live/working rows), with a muted "Show N more" row
+ * Rail chat-list overflow — a project's previous chats are capped at 3 rows
+ * in their own History section, with a muted "Show N more" row
  * that expands to the full list and a "Show less" that re-tucks it. History is
  * seeded straight into the exposed useHistory store (no real sessions needed).
  *
  * Run with: bun run test:rail-overflow
  */
-import { _electron as electron } from 'playwright'
-import electronPath from 'electron'
-import { fileURLToPath } from 'node:url'
-import { dirname, join } from 'node:path'
+
 import { mkdirSync } from 'node:fs'
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import electronPath from 'electron'
+import { _electron as electron } from 'playwright'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = join(root, 'test', 'fixtures', 'static-app')
@@ -20,7 +21,10 @@ mkdirSync(artifacts, { recursive: true })
 const rows = (win) =>
   win.evaluate(() => ({
     chats: document.querySelectorAll('.rail__chats .rail__chat-item').length,
-    more: document.querySelector('.rail__chat--more .rail__chat-name')?.textContent ?? null
+    history: document.querySelectorAll('.rail__history .rail__chat-item').length,
+    more:
+      document.querySelector('.rail__history .rail__chat--more .rail__chat-name')?.textContent ??
+      null
   }))
 
 let app
@@ -59,14 +63,14 @@ try {
     window.__praxisHistory.setState((s) => ({ byKey: { ...s.byKey, [key]: recs } }))
   }, fixture)
 
-  // Capped: 5 chat rows (no live chats — none has messages) + the toggle row.
+  // Main remains visible; History is capped to 3 records + the toggle row.
   await win.waitForFunction(
-    () => document.querySelectorAll('.rail__chats .rail__chat-item').length === 6,
+    () => document.querySelectorAll('.rail__history .rail__chat-item').length === 4,
     undefined,
     { timeout: 3000 }
   )
   const capped = await rows(win)
-  if (capped.more !== 'Show 4 more') throw new Error(`toggle row reads "${capped.more}"`)
+  if (capped.more !== 'Show 6 more') throw new Error(`toggle row reads "${capped.more}"`)
   await win.screenshot({ path: join(artifacts, '19-rail-overflow-capped.png') })
 
   // JS-click: the rail re-renders on unrelated store ticks, so Playwright's
@@ -80,7 +84,7 @@ try {
     })
   const waitRows = (n) =>
     win.waitForFunction(
-      (want) => document.querySelectorAll('.rail__chats .rail__chat-item').length === want,
+      (want) => document.querySelectorAll('.rail__history .rail__chat-item').length === want,
       n,
       { timeout: 3000 }
     )
@@ -94,9 +98,9 @@ try {
 
   // Collapse back.
   await clickMore()
-  await waitRows(6)
+  await waitRows(4)
 
-  console.log('RAIL-OVERFLOW OK — 5 capped + toggle, 9 expanded, re-tucked')
+  console.log('RAIL-OVERFLOW OK — 3 capped + toggle, 9 expanded, re-tucked')
 } catch (err) {
   console.error('RAIL-OVERFLOW FAILED:', err?.message ?? err)
   process.exitCode = 1

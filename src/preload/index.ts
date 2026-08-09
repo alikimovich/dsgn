@@ -31,6 +31,7 @@ import type {
   PermissionMode,
   PraxisApi,
   PreviewComment,
+  ProjectMemory,
   PropEdit,
   PropEditResult,
   PropInspection,
@@ -393,6 +394,8 @@ const api: PraxisApi = {
       options?: AgentOptions
     ): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:restart-chat', root, sessionKey, options),
+    clearMainContext: (root: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:clear-main-context', root),
     resumeSession: (
       root: string,
       recordId: string,
@@ -426,9 +429,10 @@ const api: PraxisApi = {
     spawnComment: (
       root: string,
       text: string,
+      parentSessionKey: string,
       options?: AgentOptions
     ): Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }> =>
-      ipcRenderer.invoke('agent:spawn-comment', root, text, options),
+      ipcRenderer.invoke('agent:spawn-comment', root, text, parentSessionKey, options),
     spawnInterrupt: (spawnId: string): Promise<void> =>
       ipcRenderer.invoke('agent:spawn-interrupt', spawnId),
     spawnApply: (
@@ -455,6 +459,11 @@ const api: PraxisApi = {
     },
     workspaceSnapshot: (): Promise<WorkspaceSnapshot> =>
       ipcRenderer.invoke('agent:workspace-snapshot')
+  },
+  projectMemory: {
+    get: (root: string): Promise<ProjectMemory> => ipcRenderer.invoke('project-memory:get', root),
+    set: (root: string, content: string): Promise<ProjectMemory> =>
+      ipcRenderer.invoke('project-memory:set', root, content)
   },
   providers: {
     list: (): Promise<ProviderConnection[]> => ipcRenderer.invoke('providers:list'),

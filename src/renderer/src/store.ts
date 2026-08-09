@@ -38,6 +38,7 @@ export {
   agentModelId,
   agentOptionsFor,
   chatAgentSettingsFor,
+  chatModelLabel,
   chatAgentSettingsFromOptions,
   defaultChatAgentSettings,
   resumeChatSettings,
@@ -299,7 +300,15 @@ export const useChat = create<ChatState>((set, get) => {
       set((s) => {
         const byKey = { ...s.byKey }
         delete byKey[key]
-        return { byKey }
+        return key === s.activeKey
+          ? {
+              byKey,
+              messages: [],
+              isRunning: false,
+              isolation: 'live' as const,
+              isolationFiles: undefined
+            }
+          : { byKey }
       })
     },
     markReviewed: (key) =>
@@ -1159,7 +1168,8 @@ export const useHistory = create<HistoryState>((set) => ({
 }))
 
 /**
- * v8 F1: detached comment spawns currently running, keyed by `projectKey`. A row
+ * v8 F1: detached comment spawns currently running, keyed by their parent
+ * `sessionKey`, so the rail can nest each agent beneath the chat that created it. A row
  * appears the moment a comment is dispatched and is removed on `spawn-finished` (the
  * finished run reappears in `useHistory` as a "previous agent" carrying its branch).
  * These never enter `useChat` — the main chat stream stays byte-clean.
@@ -1168,6 +1178,8 @@ export interface SpawnRow {
   id: string
   branch: string | null
   label: string
+  /** Actual inherited harness/model, captured when the spawn was dispatched. */
+  modelLabel: string
   /** 'queued' until a per-repo slot frees (Phase 3), then 'running'. */
   status: 'running' | 'queued'
 }

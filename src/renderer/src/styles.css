@@ -561,13 +561,13 @@ body.is-fullscreen .sidebar-toggle {
    lights, which overlay this corner (no titlebar). Collapsing hides it entirely
    (Rail returns null); the floating toggle brings it back. */
 /* The rail stays mounted when collapsed (see Rail.tsx) so it can animate in/out.
-   The outer element is the clip box whose width animates 168px ↔ 0; the fixed-
+   The outer element is the clip box whose width animates 208px ↔ 0; the fixed-
    width inner slides with it (translateX + fade), so the sidebar appears from the
    left and disappears to the left instead of popping. */
 .rail {
     position: relative;
     flex: 0 0 auto;
-    width: 168px;
+    width: 208px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
@@ -594,7 +594,7 @@ body.is-fullscreen .sidebar-toggle {
     pointer-events: none;
 }
 .rail__inner {
-    width: 168px;
+    width: 208px;
     flex: 1 1 auto;
     min-height: 0;
     box-sizing: border-box;
@@ -720,6 +720,17 @@ body.is-fullscreen .sidebar-toggle {
     white-space: nowrap;
     font-size: 13px;
 }
+.rail__project-count {
+    flex: 0 0 auto;
+    min-width: 16px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--border);
+    color: var(--text-muted);
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+}
 .rail__close {
     flex: 0 0 auto;
     width: 20px;
@@ -791,6 +802,62 @@ body.is-fullscreen .sidebar-toggle {
     display: flex;
     flex-direction: column;
     gap: 1px;
+}
+.rail__project-body {
+    padding-bottom: 5px;
+}
+.rail__section-label {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 8px 3px 31px;
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+.rail__section-label--history {
+    padding-top: 10px;
+}
+.rail__section-label span {
+    opacity: 0.65;
+}
+.rail__agents,
+.rail__history {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+.rail__agents {
+    margin: 0 0 2px 15px;
+    padding-left: 7px;
+    border-left: 1px solid var(--border);
+}
+.rail__agents .rail__chat {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    font-size: 11px;
+}
+.rail__memory {
+    width: calc(100% - 12px);
+    margin: 3px 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 8px;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font: inherit;
+    font-size: 11px;
+    text-align: left;
+}
+.rail__memory:hover {
+    background: rgb(from var(--rail-text) r g b / 0.075);
+    color: var(--text);
 }
 /* An expanded project with nothing to list yet (freshly opened, or its only chat
    hasn't been sent) still renders the list — drop its margin so it doesn't leave
@@ -864,6 +931,17 @@ body.is-fullscreen .sidebar-toggle {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+.rail__model {
+    flex: 0 1 auto;
+    max-width: 66px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-muted);
+    font-size: 9px;
+    font-weight: 500;
+    opacity: 0.75;
 }
 .rail__chat-time {
     flex: 0 0 auto;
@@ -1001,7 +1079,7 @@ body.is-fullscreen .sidebar-toggle {
 /* Praxis self-update — pinned at the rail's bottom (a rail__inner sibling, not
    its last child, so a long project list can't scroll it away). Stacked
    (text above button) rather than the old horizontal top banner — the rail is
-   only 168px wide. */
+   only 208px wide. */
 .rail__update {
     flex: 0 0 auto;
     display: flex;

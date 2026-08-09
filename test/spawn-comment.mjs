@@ -23,6 +23,7 @@ import { tmpdir } from 'node:os'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const nonRepo = join(root, 'test', 'fixtures', 'editable-app') // a subdir of THIS repo
 const work = mkdtempSync(join(tmpdir(), 'praxis-spawn-'))
+const userData = mkdtempSync(join(tmpdir(), 'praxis-spawn-ud-'))
 const g = (cwd, ...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
 const assert = (cond, msg) => {
@@ -49,7 +50,8 @@ try {
   app = await electron.launch({
     executablePath: electronPath,
     args: [join(root, 'out', 'main', 'index.js')],
-    cwd: root
+    cwd: root,
+    env: { ...process.env, PRAXIS_USER_DATA: userData }
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
@@ -57,7 +59,10 @@ try {
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   // --- A1: non-repo → fall back (no worktree possible) ---
-  const nr = await win.evaluate((p) => window.api.agent.spawnComment(p, 'make it blue', {}), nonRepo)
+  const nr = await win.evaluate(
+    (p) => window.api.agent.spawnComment(p, 'make it blue', p, {}),
+    nonRepo
+  )
   assert(!nr.ok && nr.reason === 'not-a-repo', `non-repo should fall back: ${JSON.stringify(nr)}`)
 
   // --- A2: a sessionId-tagged event must NOT enter the active chat; spawn-finished
@@ -70,6 +75,7 @@ try {
       id: 's1',
       branch: 'praxis/comment-s1',
       label: 'make it blue',
+      modelLabel: 'Claude',
       status: 'running'
     })
   }, KEY)
@@ -173,7 +179,13 @@ try {
   // --- A4 (Phase 3): a queued row flips to running on spawn-started, then is removed
   // on spawn-finished (the cap/queue rail lifecycle). ---
   await win.evaluate((key) => {
-    window.__praxisSpawns.getState().add(key, { id: 'q1', branch: null, label: 'queued one', status: 'queued' })
+    window.__praxisSpawns.getState().add(key, {
+      id: 'q1',
+      branch: null,
+      label: 'queued one',
+      modelLabel: 'Claude',
+      status: 'queued'
+    })
   }, KEY)
   let q = await win.evaluate((key) => window.__praxisSpawns.getState().byKey[key].find((r) => r.id === 'q1'), KEY)
   assert(q.status === 'queued', 'row starts queued')
@@ -200,7 +212,7 @@ try {
     `Edit the file app.txt in this project: replace the word PLACEHOLDER with exactly ` +
     `${MARKER}. Edit the file directly with your tools and do not ask for confirmation.`
   const res = await win.evaluate(
-    (args) => window.api.agent.spawnComment(args.repo, args.prompt, { model: 'haiku' }),
+    (args) => window.api.agent.spawnComment(args.repo, args.prompt, args.repo, { model: 'haiku' }),
     { repo, prompt }
   )
   assert(res.ok && res.spawnId && res.branch, `spawn should start: ${JSON.stringify(res)}`)
@@ -235,5 +247,6 @@ try {
   process.exitCode = 1
 } finally {
   rmSync(work, { recursive: true, force: true })
+  rmSync(userData, { recursive: true, force: true })
   await app?.close()
 }

@@ -5,6 +5,11 @@ Models edit there; the preview and the user's editor remain on the live checkout
 isolation boundary is the worktree, while convergence is owned by one repository-scoped
 landing queue.
 
+The rail's **Main** label is a product role, not a concurrency bypass: Main remains an
+isolated chat today and crosses the same landing queue as secondary chats. Secondary
+chat identity and worktree identity are independent; closing/clearing a conversation
+does not justify retaining a stale branch.
+
 ## State model
 
 ```text
@@ -42,6 +47,11 @@ from growing with every chat.
 - `.env` and non-template `.env.*`, `node_modules`, `*.tsbuildinfo`, `.praxis/`, and
   legacy `.dsgn/` are excluded from snapshots, worktree commits, and live commits.
 - Parked work keeps a durable branch. Successfully landed or discarded work does not.
+- Comment-created background agents are attributed to their exact parent chat in the
+  rail, but still count against the repository-wide concurrency cap and land through
+  the same repository writer. Closing a parent chat does not stop its agent, so an
+  agent left without a live parent re-parents onto the project's first chat rather
+  than disappearing from the rail with its cancel control.
 
 ## What “conflict” means in Praxis
 

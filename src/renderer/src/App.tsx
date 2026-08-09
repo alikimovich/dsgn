@@ -11,12 +11,14 @@ import SessionReview from './components/SessionReview'
 import FeedbackDialog from './components/FeedbackDialog'
 import ConnectDialog from './components/ConnectDialog'
 import SettingsDialog from './components/SettingsDialog'
+import ProjectMemoryDialog from './components/ProjectMemoryDialog'
 import { useProviders } from './providers-store'
 import {
   agentOptionsFor,
   chatAgentSettingsFromSession,
   describeSelectionForPrompt,
   chatAgentSettingsFor,
+  chatModelLabel,
   isAuthError,
   resumeChatSettings,
   messagesFromTranscript,
@@ -212,6 +214,7 @@ export default function App(): React.JSX.Element {
   }
   // v5-D: the past session open for review (rendered as a modal over the panes).
   const [reviewing, setReviewing] = useState<SessionRecord | null>(null)
+  const [memoryTarget, setMemoryTarget] = useState<{ root: string; name: string } | null>(null)
   // The review modal is renderer DOM; the native preview WebContentsView paints
   // ABOVE it (same reason PropPanel reserves an inset strip). Freeze-frame the
   // preview while the modal is open — the snapshot <img> keeps it visually in
@@ -407,17 +410,30 @@ export default function App(): React.JSX.Element {
         // several and keep working. A non-repo project can't worktree → fall back
         // to seeding the composer (the prior behavior).
         if (root) {
+          const parentSessionKey = useChat.getState().activeKey || projectKey(root)
+          const agentSettings = useSession.getState()
           void window.api.agent
-            .spawnComment(root, prompt, toAgentOptions(useSession.getState()))
+            .spawnComment(root, prompt, parentSessionKey, toAgentOptions(agentSettings))
             .then((r) => {
               if (r.ok && r.spawnId) {
-                useSpawns.getState().add(projectKey(root), {
+                useSpawns.getState().add(parentSessionKey, {
                   id: r.spawnId,
                   branch: r.branch ?? null,
                   label: oneLine(c.text, 60),
+                  modelLabel: chatModelLabel({
+                    model: agentSettings.model,
+                    modelId: agentSettings.modelId,
+                    provider: agentSettings.provider,
+                    connectionId: agentSettings.connectionId
+                  }),
                   status: r.queued ? 'queued' : 'running'
                 })
               } else {
+                if (r.reason === 'unsupported-backend') {
+                  useLog.getState().append(
+                    'This model cannot run a detached background agent yet; the comment was sent to its chat.'
+                  )
+                }
                 useComposer.getState().setSubmit(prompt)
               }
             })
@@ -741,9 +757,9 @@ export default function App(): React.JSX.Element {
       const left = document.querySelector('.pane--chat')?.getBoundingClientRect().left ?? 0
       // Also clamp against the window so the preview card keeps ~400px — its
       // header now holds the controls (Publish/tabs/icons), which must never be
-      // clipped out of reach by dragging the chat wide (rail 168 + divider 0 +
-      // card gutters ≈ 184 → 584 with the 400px floor).
-      const maxChat = Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, window.innerWidth - 584))
+      // clipped out of reach by dragging the chat wide (rail 208 + divider 0 +
+      // card gutters ≈ 224 → 624 with the 400px floor).
+      const maxChat = Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, window.innerWidth - 624))
       setChatWidth(Math.min(maxChat, Math.max(MIN_CHAT_WIDTH, e.clientX - left)))
     }
     const endDrag = (): void => {
@@ -1302,11 +1318,11 @@ export default function App(): React.JSX.Element {
   const newChatForProject = async (key: string): Promise<void> => {
     const entry = useWorkspace.getState().projects.find((p) => p.key === key)
     if (!entry) return
-    // An empty live chat already IS a "new chat" — switch to it instead of
-    // stacking another session, so mashing "+" can't mint unlimited empty
-    // chats (the rail hides message-less chats until their first prompt).
+    // An empty secondary chat already IS a "new chat" — switch to it instead of
+    // stacking another session, so mashing "+" can't mint unlimited empty chats.
+    // Main is a permanent role, not a reusable secondary slot.
     const chats = useChat.getState().byKey
-    const empty = (entry.sessionKeys ?? [key]).find(
+    const empty = (entry.sessionKeys ?? [key]).filter((sk) => sk !== key).find(
       (sk) => (chats[sk]?.messages.length ?? 0) === 0
     )
     if (empty) {
@@ -1848,6 +1864,7 @@ export default function App(): React.JSX.Element {
             onNewChat={(key) => void newChatForProject(key)}
             onSwitchSession={(key, sessionKey) => void switchSession(key, sessionKey)}
             onCloseChat={(key, sessionKey) => void closeChatForProject(key, sessionKey)}
+            onOpenMemory={(root, name) => setMemoryTarget({ root, name })}
           />
           {/* Hidden = width 0, still MOUNTED: a running turn keeps streaming into
               the live ChatPanel and nothing re-mounts on unhide. The native
@@ -2156,6 +2173,22 @@ export default function App(): React.JSX.Element {
       <ConnectDialog />
       {/* v10: app settings (Cmd+, / the model picker's "Manage providers…"). */}
       <SettingsDialog />
+      <ProjectMemoryDialog
+        root={memoryTarget?.root ?? null}
+        name={memoryTarget?.name ?? 'Project'}
+        open={!!memoryTarget}
+        onOpenChange={(open) => {
+          if (!open) setMemoryTarget(null)
+        }}
+        onMainCleared={(root) => {
+          const key = projectKey(root)
+          const chat = useChat.getState()
+          chat.clearChat(key)
+          if (chat.activeKey === key) chat.setActiveChat(key)
+          useWorkspace.getState().patchEntry(key, { publishedMsgCount: 0 })
+          void useHistory.getState().load(root)
+        }}
+      />
     </div>
   )
 }

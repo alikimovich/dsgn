@@ -63,6 +63,18 @@ export const defaultChatAgentSettings = (): ChatAgentSettings => ({
   permissionMode: 'auto'
 })
 
+/** Compact rail label for the harness/model a chat or child agent actually uses. */
+export const chatModelLabel = (
+  s: Pick<ChatAgentSettings, 'model' | 'modelId' | 'provider' | 'connectionId'>
+): string => {
+  const model = s.modelId ?? (s.model === DEFAULT_MODEL ? '' : s.model)
+  if (s.connectionId) return model || 'Connection'
+  if (s.provider === 'codex') return model || 'Codex'
+  if (s.provider === 'gemini') return model || 'Gemini'
+  if (!model) return 'Claude'
+  return model.toLowerCase().startsWith('claude') ? model : `Claude ${model}`
+}
+
 /** This chat's settings out of a project entry (structurally typed so this module
  *  stays free of the store's `ProjectEntry`). Missing entries are legacy workspace
  *  data and safely use the defaults. */
