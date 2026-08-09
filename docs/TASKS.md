@@ -13,6 +13,10 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 - [x] **Durable per-project memory + clear Main context.** ✅ 2026-08-08 — curated,
       16k-bounded memory lives outside Git in Praxis userData, enters every provider,
       and survives a Main reset; the old transcript is archived into History.
+- [x] **Sort the rail's per-project controls by what they act on.** ✅ 2026-08-09 —
+      project memory is a brain action on the project row (× is hover-only now),
+      "New chat" is a full-width button under the chat list it appends to, and
+      History folds as an accordion. See PROGRESS 2026-08-09.
 - [ ] **Suggest memory updates from conversation decisions.** Keep this reviewable:
       propose additions/removals in the memory editor instead of silently rewriting
       standing project context.

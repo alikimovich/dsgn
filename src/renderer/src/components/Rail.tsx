@@ -72,6 +72,13 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
  * folders share a centre line; the names stay flush-left at the project name's
  * level. Clicking a project switches; × closes; clicking a chat opens/reviews it.
  *
+ * Where the per-project controls live: the project ROW carries the two things
+ * that act on the project itself — the memory brain (always visible) and ×
+ * (hover-only, it's the destructive one). "New chat" is not a row glyph: it's a
+ * full-width button under the chat list, because it appends to that list. The
+ * previous-chats section is an accordion — its "History n" heading folds the
+ * list away (open by default, session-only state, same as "Show N more").
+ *
  * The collapse/expand toggle no longer lives here — it floats by the traffic lights
  * (see App's `.sidebar-toggle`) so it stays reachable once the rail is gone. When
  * collapsed the rail stays mounted but slides out to the left (width → 0); the
@@ -106,6 +113,10 @@ export default function Rail({
   // Projects whose FULL previous-chats list is shown (session-only, resets on
   // relaunch — a long history should re-tuck itself, like Cursor's sidebar).
   const [moreShown, setMoreShown] = useState<Set<string>>(new Set())
+  // Projects whose History accordion is folded shut. Open is the default (a
+  // project's past chats are worth seeing at a glance); this only remembers the
+  // ones the user deliberately closed, and it resets on relaunch like moreShown.
+  const [historyClosed, setHistoryClosed] = useState<Set<string>>(new Set())
 
   // Every EXPANDED project lists its previous chats, not just the active one, so
   // pull the history of any that hasn't been fetched yet. App only loads it for
@@ -196,6 +207,7 @@ export default function Rail({
             const orphanAgents = ownedSpawnKeys
               .filter((sk) => !sessionKeys.includes(sk))
               .flatMap((sk) => spawns[sk])
+            const historyOpen = !historyClosed.has(p.key)
             const showAllPast = moreShown.has(p.key)
             const pastVisible = showAllPast ? past : past.slice(0, MAX_HISTORY_ROWS)
             const hiddenPast = past.length - pastVisible.length
@@ -243,20 +255,22 @@ export default function Rail({
                       )}
                     </button>
                   </div>
-                  {active && (
-                    <button
-                      type="button"
-                      className="rail__new-chat"
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        onNewChat(p.key)
-                      }}
-                      aria-label={`Start another chat for ${p.name}`}
-                      title="Start another chat for this project"
-                    >
-                      <Plus className="size-3.5" aria-hidden="true" />
-                    </button>
-                  )}
+                  {/* Project memory is an ACTION on the project row (it's about the
+                      project, not about a chat), sitting where the quiet icon
+                      buttons live. Unlike ×, it stays visible without a hover —
+                      it's a place to go, not a destructive control. */}
+                  <button
+                    type="button"
+                    className="rail__memory"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      onOpenMemory(p.root, p.name)
+                    }}
+                    aria-label={`Open project memory for ${p.name}`}
+                    title="Project memory"
+                  >
+                    <Brain className="size-3.5" aria-hidden="true" />
+                  </button>
                   <button
                     type="button"
                     className="rail__close"
@@ -352,65 +366,88 @@ export default function Rail({
                       })}
                     </ul>
 
+                    {/* "New chat" reads as the last item of the chat list rather
+                        than a header glyph — it's how you ADD to the list above,
+                        so it sits directly under it. */}
                     <button
                       type="button"
-                      className="rail__memory"
-                      onClick={() => onOpenMemory(p.root, p.name)}
+                      className="rail__new-chat"
+                      onClick={() => onNewChat(p.key)}
+                      aria-label={`Start another chat for ${p.name}`}
+                      title="Start another chat for this project"
                     >
-                      <Brain className="size-3.5" aria-hidden="true" />
-                      <span>Project memory</span>
+                      <Plus className="size-3.5" aria-hidden="true" />
+                      <span>New chat</span>
                     </button>
 
                     {past.length > 0 && (
                       <>
-                        <div className="rail__section-label rail__section-label--history">
-                          History <span>{past.length}</span>
-                        </div>
-                        <ul className="rail__history" aria-label={`${p.name}'s chat history`}>
-                          {pastVisible.map((rec) => {
-                            const name = rec.title ?? chatTitle(firstUserText(rec.transcript))
-                            return (
-                              <RailChatRow
-                                key={rec.id}
-                                name={name}
-                                status="idle"
-                                title={`${name} — ${rec.filesTouched.length} file(s)`}
-                                onOpen={() => onReview(rec)}
-                                onRename={(next) =>
-                                  void useHistory.getState().rename(rec.projectRoot, rec.id, next)
-                                }
-                                onClose={() =>
-                                  void useHistory.getState().remove(rec.projectRoot, rec.id)
-                                }
-                                closeLabel="Delete chat"
-                                closeTitle="Delete from history"
-                              >
-                                <span className="rail__chat-time">{shortAgo(rec.startedAt)}</span>
-                              </RailChatRow>
-                            )
-                          })}
-                          {past.length > MAX_HISTORY_ROWS && (
-                            <li className="rail__chat-item">
-                              <button
-                                type="button"
-                                className="rail__chat rail__chat--more"
-                                onClick={() =>
-                                  setMoreShown((prev) => {
-                                    const next = new Set(prev)
-                                    if (showAllPast) next.delete(p.key)
-                                    else next.add(p.key)
-                                    return next
-                                  })
-                                }
-                              >
-                                <span className="rail__chat-status" aria-hidden="true" />
-                                <span className="rail__chat-name">
-                                  {showAllPast ? 'Show less' : `Show ${hiddenPast} more`}
-                                </span>
-                              </button>
-                            </li>
-                          )}
-                        </ul>
+                        <button
+                          type="button"
+                          className="rail__section-label rail__section-label--history rail__section-toggle"
+                          onClick={() =>
+                            setHistoryClosed((prev) => {
+                              const next = new Set(prev)
+                              if (historyOpen) next.add(p.key)
+                              else next.delete(p.key)
+                              return next
+                            })
+                          }
+                          aria-expanded={historyOpen}
+                        >
+                          <ChevronRight
+                            className={`rail__section-chevron size-3 ${historyOpen ? 'rail__section-chevron--open' : ''}`}
+                            aria-hidden="true"
+                          />
+                          History <span className="rail__section-count">{past.length}</span>
+                        </button>
+                        {historyOpen && (
+                          <ul className="rail__history" aria-label={`${p.name}'s chat history`}>
+                            {pastVisible.map((rec) => {
+                              const name = rec.title ?? chatTitle(firstUserText(rec.transcript))
+                              return (
+                                <RailChatRow
+                                  key={rec.id}
+                                  name={name}
+                                  status="idle"
+                                  title={`${name} — ${rec.filesTouched.length} file(s)`}
+                                  onOpen={() => onReview(rec)}
+                                  onRename={(next) =>
+                                    void useHistory.getState().rename(rec.projectRoot, rec.id, next)
+                                  }
+                                  onClose={() =>
+                                    void useHistory.getState().remove(rec.projectRoot, rec.id)
+                                  }
+                                  closeLabel="Delete chat"
+                                  closeTitle="Delete from history"
+                                >
+                                  <span className="rail__chat-time">{shortAgo(rec.startedAt)}</span>
+                                </RailChatRow>
+                              )
+                            })}
+                            {past.length > MAX_HISTORY_ROWS && (
+                              <li className="rail__chat-item">
+                                <button
+                                  type="button"
+                                  className="rail__chat rail__chat--more"
+                                  onClick={() =>
+                                    setMoreShown((prev) => {
+                                      const next = new Set(prev)
+                                      if (showAllPast) next.delete(p.key)
+                                      else next.add(p.key)
+                                      return next
+                                    })
+                                  }
+                                >
+                                  <span className="rail__chat-status" aria-hidden="true" />
+                                  <span className="rail__chat-name">
+                                    {showAllPast ? 'Show less' : `Show ${hiddenPast} more`}
+                                  </span>
+                                </button>
+                              </li>
+                            )}
+                          </ul>
+                        )}
                       </>
                     )}
                   </div>
