@@ -380,6 +380,13 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       `test/live-commit.mjs`. See PROGRESS 2026-08-05.
       Not done deliberately: no user-facing toggle (the whole point is that it's
       always on) and no UI surfacing of the commit sha — `git log` is the UI.
+- [x] **One repository landing writer + ephemeral chat branches.** ✅ 2026-08-08 —
+      per-chat chains did not protect the shared live index from two different chats.
+      Every snapshot/landing/resolve/teardown now crosses a repo-scoped queue. A chat's
+      `praxis/chat-*` branch exists only during a turn or while parked; successful
+      landing/discard detaches the still-live worktree and deletes the branch, and the
+      next `beforeTurn` recreates it for crash recovery. `src/main/repo-write-queue.ts`,
+      `src/main/{chat-isolation,chat-worktrees,worktrees}.ts`, `test/live-commit.mjs`.
 
 ## v10 — Styles tab + AI-surfaced control panels (2026-07-18, user-requested) — SHIPPED
 

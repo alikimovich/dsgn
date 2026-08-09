@@ -5,7 +5,8 @@
  *  A. Opening a project on a RUNTIME-CREATED temp git repo gives its default
  *     chat a private `praxis/chat-<id>` worktree under
  *     `<PRAXIS_USER_DATA>/praxis/worktrees/<id>`, and `agent:workspace-snapshot`
- *     reports its isolation state — proving the real create-on-open wiring
+ *     reports its isolation state. Its recovery branch is ephemeral: absent while the
+ *     chat is idle, recreated at turn start, and deleted after a successful landing.
  *     (agent.ts's `isolatedCwd`/`adoptSession` calling into `chat-isolation.ts`).
  *  B. Feeding synthetic `isolation` `AgentEvent`s (mirrors spawn-comment.mjs's
  *     event-injection pattern, using a fake project key so no real backend is
@@ -93,17 +94,14 @@ try {
   const wtId = branch.replace('praxis/chat-', '')
   const wtDir = join(userData, 'praxis', 'worktrees', wtId)
   assert(existsSync(wtDir), `worktree checkout should exist on disk at ${wtDir}`)
-  assert(
-    g(repo, 'branch', '--list', branch).length > 0,
-    `branch ${branch} should exist in the repo`
-  )
+  assert(g(repo, 'branch', '--list', branch).length === 0, `idle branch ${branch} should be retired`)
   // The checkout is a REAL linked worktree of `repo` (not a stray directory).
   assert(
     g(repo, 'worktree', 'list').includes(wtId),
     'git worktree list should show the chat checkout'
   )
 
-  console.log('CHAT-ISOLATION OK (A) — open-project forks a real praxis/chat-<id> worktree, snapshot reports it')
+  console.log('CHAT-ISOLATION OK (A) — open-project forks a detached chat worktree without a stale branch')
 
   // --- B: synthetic isolation events -> store state, merged note, parked
   // ConflictCard (mirrors spawn-comment.mjs's event injection: a fake key, no

@@ -8,6 +8,7 @@ import {
   autoApplyWorktree,
   diffWorktree,
   applyToWorkingTree,
+  attachWorktreeBranch,
   captureBase,
   type Worktree
 } from './worktrees'
@@ -85,10 +86,14 @@ export async function syncFromLive(liveRoot: string, wt: Worktree): Promise<{ sy
   const live = await captureBase(liveRoot, indexFile)
   const liveTree = await revParse(liveRoot, `${live}^{tree}`)
   const wtTree = await revParse(wt.path, 'HEAD^{tree}')
-  if (liveTree === wtTree) return { synced: false }
+  if (liveTree === wtTree) {
+    await attachWorktreeBranch(wt)
+    return { synced: false }
+  }
   await git(wt.path, ['clean', '-fd'])
   await git(wt.path, ['reset', '--hard', live])
   wt.baseSha = live
+  await attachWorktreeBranch(wt)
   return { synced: true }
 }
 
@@ -121,7 +126,8 @@ export async function completeTurn(liveRoot: string, wt: Worktree, message: stri
   // refused the batch (drift/binary/delete); a non-empty edits list with no write means
   // the live tree already matched the target — a no-op, not a park.
   if (edits.length === 0) return { outcome: 'parked', files, edits: [] }
-  return { outcome: 'noop', files, edits: [] }
+  const newBase = await revParse(wt.path, 'HEAD')
+  return { outcome: 'noop', files, edits: [], newBase }
 }
 
 export interface ApplyOutcome {

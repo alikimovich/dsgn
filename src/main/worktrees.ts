@@ -203,6 +203,28 @@ export async function deleteBranch(repoRoot: string, branch: string): Promise<vo
   await git(repoRoot, ['branch', '-D', branch]).catch(() => {})
 }
 
+/**
+ * Re-create and attach a chat's ephemeral branch before a turn can edit its worktree.
+ * Successful turns retire the branch immediately; attaching at the next turn boundary
+ * keeps crash recovery durable while avoiding one permanent branch per idle chat.
+ */
+export async function attachWorktreeBranch(wt: Worktree): Promise<void> {
+  const current = (await git(wt.path, ['branch', '--show-current'])).stdout.trim()
+  if (current === wt.branch) return
+  await git(wt.path, ['checkout', '-B', wt.branch, 'HEAD'])
+}
+
+/**
+ * Detach a clean/landed worktree and delete its now-redundant branch. The worktree
+ * remains available as the session cwd; `attachWorktreeBranch` recreates the branch
+ * before the next turn. Parked branches never call this helper.
+ */
+export async function retireWorktreeBranch(wt: Worktree): Promise<void> {
+  const current = (await git(wt.path, ['branch', '--show-current'])).stdout.trim()
+  if (current === wt.branch) await git(wt.path, ['checkout', '--detach', 'HEAD'])
+  await deleteBranch(wt.repoRoot, wt.branch)
+}
+
 /** Does this branch exist locally? */
 export async function branchExists(repoRoot: string, branch: string): Promise<boolean> {
   try {

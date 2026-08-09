@@ -48,6 +48,14 @@ const commitFiles = (repo) =>
 // meaningful (" M" = modified but unstaged vs "M " = staged).
 const porcelain = (repo) =>
   g(repo, 'status', '--porcelain').replace(/\n$/, '').split('\n').filter(Boolean)
+const branchExists = (repo, branch) => g(repo, 'branch', '--list', branch).trim().length > 0
+const waitFor = async (condition) => {
+  for (let i = 0; i < 200; i++) {
+    if (condition()) return true
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+  return false
+}
 
 let n = 0
 function makeRepo(files = { 'a.txt': 'a\n' }) {
@@ -191,6 +199,8 @@ try {
     const key = 'live-commit-test'
     const cwd = await isolatedCwd(repo, key)
     ok(cwd !== repo, `the chat got its own worktree (got ${cwd})`)
+    const branch = `praxis/chat-${cwd.split('/').at(-1)}`
+    ok(!branchExists(repo, branch), 'an idle chat does not retain a stale branch')
 
     /** afterTurn is fire-and-forget (queued on the chat's chain) — wait for the commit. */
     const waitForCommits = async (want) => {
@@ -201,23 +211,61 @@ try {
       return false
     }
 
+    await beforeTurn(key, 'first')
+    ok(branchExists(repo, branch), 'the branch is attached before the turn can edit')
     writeFileSync(join(cwd, 'a.txt'), 'turn one\n')
     afterTurn(key, 'make the header blue', [])
     ok(await waitForCommits(2), 'turn 1 committed on the live checkout')
+    ok(await waitFor(() => !branchExists(repo, branch)), 'a successfully landed turn deletes its branch')
     ok(log(repo)[0] === 'make the header blue', `turn 1 subject (got ${log(repo)[0]})`)
 
     await beforeTurn(key, 'next')
+    ok(branchExists(repo, branch), 'the next turn recreates the recovery branch')
     writeFileSync(join(cwd, 'b.txt'), 'turn two\n')
     afterTurn(key, 'add a footer', [])
     ok(await waitForCommits(3), 'turn 2 committed too (it merged, i.e. did not park)')
     ok(log(repo)[0] === 'add a footer', `turn 2 subject (got ${log(repo)[0]})`)
     ok(commitFiles(repo).join(',') === 'b.txt', 'turn 2 commits only its own file')
     ok(porcelain(repo).length === 0, 'the live checkout is clean between turns')
+    ok(await waitFor(() => !branchExists(repo, branch)), 'the second successful landing deletes the branch again')
 
     await releaseChat(key)
   }
 
-  // --- 9. Committed turns must stay PUBLISHABLE (`publish-scope.ts`). A session whose
+  // --- 9. Two chats landing together share one repository writer. Both commits must
+  // survive; before the repo queue, their per-chat chains raced through the same live
+  // index and one commit was commonly swallowed by commitLiveTurn's best-effort catch. ---
+  {
+    const repo = makeRepo({ 'a.txt': 'a\n', 'b.txt': 'b\n' })
+    const store = { get: () => undefined, save: () => {}, remove: () => {} }
+    initChatIsolation({
+      worktreesDir: () => join(base, 'wt-concurrent'),
+      store: () => store,
+      getWindow: () => null
+    })
+    const one = 'concurrent-one'
+    const two = 'concurrent-two'
+    const [cwdOne, cwdTwo] = await Promise.all([isolatedCwd(repo, one), isolatedCwd(repo, two)])
+    await Promise.all([beforeTurn(one, 'edit a'), beforeTurn(two, 'edit b')])
+    writeFileSync(join(cwdOne, 'a.txt'), 'one\n')
+    writeFileSync(join(cwdTwo, 'b.txt'), 'two\n')
+    afterTurn(one, 'concurrent one', [])
+    afterTurn(two, 'concurrent two', [])
+    for (let i = 0; i < 200 && log(repo).length < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    }
+    ok(log(repo).length === 3, `both concurrent turns committed (got ${log(repo).length - 1})`)
+    ok(g(repo, 'show', 'HEAD:a.txt') === 'one\n', 'chat one landed')
+    ok(g(repo, 'show', 'HEAD:b.txt') === 'two\n', 'chat two landed')
+    ok(porcelain(repo).length === 0, 'concurrent landings leave no live index debris')
+    ok(
+      await waitFor(() => g(repo, 'branch', '--list', 'praxis/chat-*').trim() === ''),
+      'successful concurrent landings leave no chat branches'
+    )
+    await Promise.all([releaseChat(one), releaseChat(two)])
+  }
+
+  // --- 10. Committed turns must stay PUBLISHABLE (`publish-scope.ts`). A session whose
   // turns all committed leaves a spotless working tree, so the old "diff vs HEAD" scope
   // would have reported nothing to publish and shipped an empty file list in the PR. ---
   {

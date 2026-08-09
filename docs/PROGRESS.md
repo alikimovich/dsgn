@@ -2,6 +2,32 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-08 — Concurrent chats share one landing queue, not one racing Git index
+
+Git worktrees isolated where models EDITED, but each chat had its own finalization
+promise and all of those promises converged on the same live checkout/index. Two chats
+finishing together could both run `git add`/`git commit` there; `commitLiveTurn` treats
+Git failures as best-effort, so one commit could disappear while its file write remained
+uncommitted. A real two-chat regression now lands both edits as two commits and leaves a
+clean live index.
+
+`src/main/repo-write-queue.ts` is the missing repository-level coordinator. Worktree
+creation/snapshots, turn landing, parked apply/discard/resolve, and final teardown all
+pass through it. Per-chat chains still order one conversation's turns; the repo queue
+orders every writer that ultimately targets the one shared checkout.
+
+Chat branches are now recovery refs, not permanent session furniture. An idle chat keeps
+its linked worktree detached with no `praxis/chat-*` branch. `beforeTurn` recreates and
+attaches the branch before the model can edit, so a crash or conflict still has a durable
+ref. A successful landing (including clean resolution and discard) detaches the worktree
+and deletes the branch immediately. Parked work alone retains its branch. The next turn
+recreates the same name, so long-lived projects no longer accumulate one stale branch per
+chat.
+
+`src/main/repo-write-queue.ts`, `src/main/worktrees.ts`,
+`src/main/chat-worktrees.ts`, `src/main/chat-isolation.ts`,
+`test/live-commit.mjs`, `test/chat-isolation.mjs`.
+
 ## 2026-08-08 — The selection badge reports the element's size
 
 The overlay chip named the element (`svg`, `h1#hero-title`) but never said how
