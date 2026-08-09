@@ -314,90 +314,114 @@ try {
     "the chat's resolved image landed on the live tree"
   )
 
-  // repo9 — secrets and generated machine artifacts never enter a synthetic base,
-  // turn commit, patch, or live checkout. Env templates remain editable.
+  // repo9 — a trailing-slash node_modules/ rule ignores the live directory but not
+  // the worktree symlink. Explicit filtering/clean exclusions keep it runtime-only.
   const repo9 = join(base, 'repo9')
   mkdirSync(repo9, { recursive: true })
   g(repo9, 'init', '-q', '-b', 'main')
   g(repo9, 'config', 'user.name', 'Test')
   g(repo9, 'config', 'user.email', 'test@local')
-  writeFileSync(join(repo9, 'README.md'), 'base\n')
-  writeFileSync(join(repo9, '.env.example'), 'PUBLIC_VALUE=\n')
+  writeFileSync(join(repo9, '.gitignore'), 'node_modules/\ndist/\n')
+  mkdirSync(join(repo9, 'node_modules'), { recursive: true })
+  writeFileSync(join(repo9, 'node_modules', '.marker'), 'dep\n')
+  writeFileSync(join(repo9, 'App.tsx'), 'v1\n')
   g(repo9, 'add', '-A')
   g(repo9, 'commit', '-q', '-m', 'init')
-  writeFileSync(join(repo9, '.env'), 'SECRET=live\n')
-  mkdirSync(join(repo9, 'node_modules'), { recursive: true })
-  writeFileSync(join(repo9, 'node_modules', 'generated.js'), 'generated\n')
-  writeFileSync(join(repo9, 'tsconfig.tsbuildinfo'), 'live generated\n')
   const wt9 = await createChatWorktree(repo9, 'chatnine', worktreesDir)
-  ok(!existsSync(join(wt9.path, '.env')), 'an unignored .env is neither captured nor symlinked')
-  ok(!existsSync(join(wt9.path, 'node_modules')), 'unignored node_modules is neither captured nor symlinked')
-  ok(!existsSync(join(wt9.path, 'tsconfig.tsbuildinfo')), '*.tsbuildinfo is excluded from the base')
-  writeFileSync(join(wt9.path, '.env.local'), 'SECRET=agent\n')
-  mkdirSync(join(wt9.path, 'node_modules'), { recursive: true })
-  writeFileSync(join(wt9.path, 'node_modules', 'agent.js'), 'generated\n')
-  writeFileSync(join(wt9.path, 'tsconfig.tsbuildinfo'), 'agent generated\n')
-  writeFileSync(join(wt9.path, '.env.example'), 'PUBLIC_VALUE=example\n')
-  writeFileSync(join(wt9.path, 'Safe.tsx'), 'safe\n')
-  const clean9 = await completeTurn(repo9, wt9, 'exclude machine files')
-  ok(clean9.outcome === 'merged', `safe part of artifact-heavy turn still lands: ${clean9.outcome}`)
+  ok(existsSync(join(wt9.path, 'node_modules', '.marker')), 'trailing-slash ignored node_modules is symlinked')
+  writeFileSync(join(wt9.path, 'App.tsx'), 'v2\n')
+  const t9 = await completeTurn(repo9, wt9, 'edit app')
+  ok(t9.outcome === 'merged', `runtime symlink must not force a park: ${JSON.stringify(t9)}`)
   ok(
-    clean9.files.length === 2 && clean9.files.includes('.env.example') && clean9.files.includes('Safe.tsx'),
-    `only product files enter the turn commit: ${JSON.stringify(clean9.files)}`
+    t9.files.length === 1 && t9.files[0] === 'App.tsx',
+    `only the real edit enters the turn: ${JSON.stringify(t9.files)}`
   )
-  ok(readFileSync(join(repo9, '.env'), 'utf8') === 'SECRET=live\n', 'live .env is untouched')
-  ok(!existsSync(join(repo9, '.env.local')), 'agent .env.local never lands')
+  ok(existsSync(join(wt9.path, 'node_modules', '.marker')), 'sync/commit cleanup spares the runtime symlink')
+
+  // repo10 — secrets and generated machine artifacts never enter a synthetic base,
+  // turn commit, patch, or live checkout. Env templates remain editable.
+  const repo10 = join(base, 'repo10')
+  mkdirSync(repo10, { recursive: true })
+  g(repo10, 'init', '-q', '-b', 'main')
+  g(repo10, 'config', 'user.name', 'Test')
+  g(repo10, 'config', 'user.email', 'test@local')
+  writeFileSync(join(repo10, 'README.md'), 'base\n')
+  writeFileSync(join(repo10, '.env.example'), 'PUBLIC_VALUE=\n')
+  g(repo10, 'add', '-A')
+  g(repo10, 'commit', '-q', '-m', 'init')
+  writeFileSync(join(repo10, '.env'), 'SECRET=live\n')
+  mkdirSync(join(repo10, 'node_modules'), { recursive: true })
+  writeFileSync(join(repo10, 'node_modules', 'generated.js'), 'generated\n')
+  writeFileSync(join(repo10, 'tsconfig.tsbuildinfo'), 'live generated\n')
+  const wt10 = await createChatWorktree(repo10, 'chatten', worktreesDir)
+  ok(!existsSync(join(wt10.path, '.env')), 'an unignored .env is neither captured nor symlinked')
+  ok(!existsSync(join(wt10.path, 'node_modules')), 'unignored node_modules is neither captured nor symlinked')
+  ok(!existsSync(join(wt10.path, 'tsconfig.tsbuildinfo')), '*.tsbuildinfo is excluded from the base')
+  writeFileSync(join(wt10.path, '.env.local'), 'SECRET=agent\n')
+  mkdirSync(join(wt10.path, 'node_modules'), { recursive: true })
+  writeFileSync(join(wt10.path, 'node_modules', 'agent.js'), 'generated\n')
+  writeFileSync(join(wt10.path, 'tsconfig.tsbuildinfo'), 'agent generated\n')
+  writeFileSync(join(wt10.path, '.env.example'), 'PUBLIC_VALUE=example\n')
+  writeFileSync(join(wt10.path, 'Safe.tsx'), 'safe\n')
+  const clean10 = await completeTurn(repo10, wt10, 'exclude machine files')
+  ok(clean10.outcome === 'merged', `safe part of artifact-heavy turn still lands: ${clean10.outcome}`)
   ok(
-    readFileSync(join(repo9, 'tsconfig.tsbuildinfo'), 'utf8') === 'live generated\n',
+    clean10.files.length === 2 && clean10.files.includes('.env.example') && clean10.files.includes('Safe.tsx'),
+    `only product files enter the turn commit: ${JSON.stringify(clean10.files)}`
+  )
+  ok(readFileSync(join(repo10, '.env'), 'utf8') === 'SECRET=live\n', 'live .env is untouched')
+  ok(!existsSync(join(repo10, '.env.local')), 'agent .env.local never lands')
+  ok(
+    readFileSync(join(repo10, 'tsconfig.tsbuildinfo'), 'utf8') === 'live generated\n',
     'agent tsbuildinfo never lands'
   )
 
-  // repo10 — an incomplete AI resolution cannot publish Git conflict markers.
-  const repo10 = makeRepo('repo10', { 'README.md': 'base\n' })
-  const wt10 = await createChatWorktree(repo10, 'chatten', worktreesDir)
+  // repo11 — an incomplete AI resolution cannot publish Git conflict markers.
+  const repo11 = makeRepo('repo11', { 'README.md': 'base\n' })
+  const wt11 = await createChatWorktree(repo11, 'chateleven', worktreesDir)
   writeFileSync(
-    join(wt10.path, 'README.md'),
+    join(wt11.path, 'README.md'),
     '<<<<<<< live\nuser version\n=======\nchat version\n>>>>>>> chat\n'
   )
-  const marker10 = await completeTurn(repo10, wt10, 'unfinished resolution')
-  ok(marker10.outcome === 'parked', 'unresolved markers keep the turn parked')
-  ok(readFileSync(join(repo10, 'README.md'), 'utf8') === 'base\n', 'markers never reach live')
+  const marker11 = await completeTurn(repo11, wt11, 'unfinished resolution')
+  ok(marker11.outcome === 'parked', 'unresolved markers keep the turn parked')
+  ok(readFileSync(join(repo11, 'README.md'), 'utf8') === 'base\n', 'markers never reach live')
 
-  // repo11 — 3-way apply uses a temporary index. The user's real staged version may
+  // repo12 — 3-way apply uses a temporary index. The user's real staged version may
   // differ from their working file without producing "does not match index".
-  const repo11 = makeRepo('repo11', { 'README.md': 'line1\nline2\nline3\n' })
-  const wt11 = await createChatWorktree(repo11, 'chateleven', worktreesDir)
-  writeFileSync(join(wt11.path, 'README.md'), 'line1\nline2\nCHAT\n')
-  writeFileSync(join(repo11, 'README.md'), 'STAGED\nline2\nline3\n')
-  g(repo11, 'add', 'README.md')
-  writeFileSync(join(repo11, 'README.md'), 'WORKING\nline2\nline3\n')
-  const p11 = await completeTurn(repo11, wt11, 'park against staged drift')
-  ok(p11.outcome === 'parked', 'working-tree drift parks before explicit apply')
-  const ap11 = await applyParked(repo11, wt11)
-  ok(ap11.ok, `temporary-index 3-way apply succeeds: ${JSON.stringify(ap11)}`)
+  const repo12 = makeRepo('repo12', { 'README.md': 'line1\nline2\nline3\n' })
+  const wt12 = await createChatWorktree(repo12, 'chattwelve', worktreesDir)
+  writeFileSync(join(wt12.path, 'README.md'), 'line1\nline2\nCHAT\n')
+  writeFileSync(join(repo12, 'README.md'), 'STAGED\nline2\nline3\n')
+  g(repo12, 'add', 'README.md')
+  writeFileSync(join(repo12, 'README.md'), 'WORKING\nline2\nline3\n')
+  const p12 = await completeTurn(repo12, wt12, 'park against staged drift')
+  ok(p12.outcome === 'parked', 'working-tree drift parks before explicit apply')
+  const ap12 = await applyParked(repo12, wt12)
+  ok(ap12.ok, `temporary-index 3-way apply succeeds: ${JSON.stringify(ap12)}`)
   ok(
-    readFileSync(join(repo11, 'README.md'), 'utf8') === 'WORKING\nline2\nCHAT\n',
+    readFileSync(join(repo12, 'README.md'), 'utf8') === 'WORKING\nline2\nCHAT\n',
     '3-way result combines working-tree and chat edits'
   )
   ok(
-    g(repo11, 'show', ':README.md') === 'STAGED\nline2\nline3\n',
+    g(repo12, 'show', ':README.md') === 'STAGED\nline2\nline3\n',
     "the user's real staged version is untouched"
   )
 
-  // repo12 — a failed provider turn is preserved for review, never auto-landed.
-  const repo12 = makeRepo('repo12', { 'README.md': 'base\n' })
-  const wt12 = await createChatWorktree(repo12, 'chattwelve', worktreesDir)
-  writeFileSync(join(wt12.path, 'README.md'), 'partial edit before provider failure\n')
-  const failed12 = await completeTurn(repo12, wt12, 'failed turn', { land: false })
-  ok(failed12.outcome === 'parked', 'a failed turn with edits parks')
-  ok(readFileSync(join(repo12, 'README.md'), 'utf8') === 'base\n', 'failed partial work never lands')
+  // repo13 — a failed provider turn is preserved for review, never auto-landed.
+  const repo13 = makeRepo('repo13', { 'README.md': 'base\n' })
+  const wt13 = await createChatWorktree(repo13, 'chatthirteen', worktreesDir)
+  writeFileSync(join(wt13.path, 'README.md'), 'partial edit before provider failure\n')
+  const failed13 = await completeTurn(repo13, wt13, 'failed turn', { land: false })
+  ok(failed13.outcome === 'parked', 'a failed turn with edits parks')
+  ok(readFileSync(join(repo13, 'README.md'), 'utf8') === 'base\n', 'failed partial work never lands')
   ok(
-    g(wt12.path, 'show', 'HEAD:README.md') === 'partial edit before provider failure\n',
+    g(wt13.path, 'show', 'HEAD:README.md') === 'partial edit before provider failure\n',
     'failed partial work remains durable on the chat branch'
   )
 
   if (failed === 0)
-    console.log('CHAT-WORKTREES OK — isolation/resolve/artifact-filter/temp-index/marker-safety')
+    console.log('CHAT-WORKTREES OK — isolation/resolve/artifact-filter/temp-index/marker-safety/runtime-symlink')
   else console.error(`CHAT-WORKTREES: ${failed} assertion(s) failed`)
   process.exitCode = failed === 0 ? 0 : 1
 } catch (err) {

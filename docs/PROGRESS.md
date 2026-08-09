@@ -81,6 +81,40 @@ chat.
 `src/main/repo-write-queue.ts`, `src/main/worktrees.ts`,
 `src/main/chat-worktrees.ts`, `src/main/chat-isolation.ts`,
 `test/live-commit.mjs`, `test/chat-isolation.mjs`.
+## 2026-08-08 — A conflict on almost every turn: the node_modules symlink
+
+**Symptom (user-reported):** the "These changes couldn't be merged automatically"
+card appeared on nearly every chat turn, listing `node_modules` next to the file
+the chat actually edited (`components/arkane-experience.tsx`).
+
+**Cause.** Per-chat isolation symlinks `node_modules`/`.env` into every worktree
+(`worktrees.ts` `doCreateWorktree`) and trusted the target repo's `.gitignore` to
+keep them out of commits. But a `.gitignore` pattern with a *trailing slash*
+(`node_modules/`, the Next.js/CRA/Vite default) is **directory-only** and git
+never classifies a symlink as a directory — so the pattern doesn't match the
+symlink. `commitWorktree`'s `git add -A` then staged it, and the turn-end
+auto-merge (`autoApplyWorktree`) did `readFile(worktree/node_modules)` on a
+symlink-to-a-directory → `EISDIR` → the code treats any read failure as "refuse
+the whole batch" → the turn **parked** every time. The real edit rode along in
+the parked file list but was never the problem. `.env` didn't leak only because
+its rule (`.env`, no slash) *does* match the symlink — that asymmetry was the
+fingerprint.
+
+**Fix (all Praxis-side, so it holds for any repo regardless of its `.gitignore`).**
+A new `RUNTIME_DEPS = ['node_modules', '.env']` export in `worktrees.ts` is now
+excluded explicitly at every stage: `captureBase` and `commitWorktree` unstage it
+after `git add -A` (mirroring the existing `.praxis` unstage), and
+`chat-worktrees.ts`'s three `git clean -fd` sites gained `-e node_modules -e .env`
+(via a `cleanArgs()` helper) so the now-untracked symlinks survive resets and the
+worktree keeps building. `scaffold.ts` also ships new projects with a fuller,
+deliberately **slash-free** `.gitignore`.
+
+**Tests.** `test/chat-worktrees.mjs` gains a repo9 regression: a `node_modules/`
+(trailing-slash) `.gitignore` must still merge a turn cleanly with `node_modules`
+absent from the file list (it fails pre-fix: parks with `node_modules`).
+`test/worktrees.mjs`'s first fixture now gitignores node_modules/.env — it had
+been silently relying on the very leak this fixes (the symlink got committed and
+applied into the live tree, so later worktrees saw it as tracked → "clean").
 
 ## 2026-08-08 — The selection badge reports the element's size
 

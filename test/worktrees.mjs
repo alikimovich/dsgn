@@ -52,6 +52,10 @@ try {
   g(repo, 'config', 'user.email', 'test@local')
   const appFile = join(repo, 'App.tsx')
   writeFileSync(appFile, 'export const App = () => <div className="root">hi</div>\n')
+  // Real projects gitignore node_modules/.env, so the worktree's symlinks to them are
+  // ignored (never staged, never leaked into the live tree by an apply). Without this a
+  // clean orphan's dangling symlinks show as untracked → a false "dirty".
+  writeFileSync(join(repo, '.gitignore'), 'node_modules\n.env\n')
   g(repo, 'add', '-A')
   g(repo, 'commit', '-q', '-m', 'init')
 

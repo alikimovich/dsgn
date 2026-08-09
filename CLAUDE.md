@@ -353,6 +353,19 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   Drift from concurrent live edits syncs at turn start; conflicts park on the
   branch for review. One worktree per open chat costs disk (~node_modules are
   symlinked); worktree directories live under `<userData>/praxis/worktrees`.
+- **A worktree's symlinked node_modules/.env must be excluded by NAME, never via
+  the target's `.gitignore`.** They're symlinked into every worktree so it can
+  build, but a `.gitignore` pattern with a trailing slash (`node_modules/`, the
+  Next.js/CRA/Vite default) is *directory-only* and git never treats a symlink as
+  a directory — so it fails to match the symlink. Left to `.gitignore`, the
+  symlink is staged by `git add -A`, the turn-end auto-merge chokes reading it
+  (`EISDIR` → the whole batch is refused), and EVERY turn parks with `node_modules`
+  in the conflict card (this shipped, user-reported 2026-08-08). `worktrees.ts`
+  exports `RUNTIME_DEPS` and unstages it in `captureBase`/`commitWorktree`;
+  `chat-worktrees.ts` spares it from `git clean` with `-e` (`cleanArgs`). Never
+  re-route these through `.gitignore`, and keep any scaffolded `.gitignore`
+  slash-free. `.env` (rule has no slash) hides the bug — it DOES match the symlink,
+  so only `node_modules` leaks; don't let that asymmetry mislead the diagnosis.
 - **The merge onto the live tree is also COMMITTED there — one commit per turn**
   (`live-commit.ts`, called from `chat-isolation.ts` + the comment-spawn
   finalizer). Only the files that turn changed are staged, and it's a pathspec

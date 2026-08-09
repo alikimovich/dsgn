@@ -3,6 +3,16 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Per-chat isolation (2026-08-08, user-reported)
+
+- [x] **Merge conflict on almost every turn, listing `node_modules`.** ✅ 2026-08-08
+      — a trailing-slash `node_modules/` `.gitignore` is directory-only and doesn't
+      match the symlink Praxis stitches into each worktree, so `git add -A` staged
+      it and the auto-merge choked (`EISDIR`) → parked every turn. Fixed by
+      excluding `RUNTIME_DEPS` (node_modules/.env) from every stage explicitly
+      instead of trusting `.gitignore` (`worktrees.ts`, `chat-worktrees.ts`), plus a
+      slash-free scaffold `.gitignore`. Regression: `test/chat-worktrees.mjs` repo9.
+
 ## Codex turn streaming (2026-08-08, user-reported)
 
 - [x] **A connection running DeepSeek works end-to-end.** ✅ 2026-08-08 — the user

@@ -61,6 +61,16 @@ const git = (
     ...(env ? { env: { ...process.env, ...env } } : {})
   }) as Promise<{ stdout: string; stderr: string }>
 
+// Runtime deps a worktree needs to build/typecheck but that must NEVER enter a
+// commit, snapshot, or merge: they're symlinked into every worktree (see
+// `doCreateWorktree`) and are enormous/churning. We can't rely on the target repo's
+// `.gitignore` to keep them out, because the common `node_modules/` (trailing-slash,
+// directory-only) pattern does NOT match the SYMLINK we create — git never treats a
+// symlink as a directory — so `git add -A` would stage the symlink, and the merge-back
+// then chokes reading it (`EISDIR`) and parks every turn. So we exclude these paths
+// explicitly at every stage instead. Consumers also spare them from `git clean` (`-e`).
+export const RUNTIME_DEPS = ['node_modules', '.env'] as const
+
 // `git worktree add` mutates shared admin state under .git/worktrees and is NOT
 // concurrency-safe (firing several comment spawns at once can race). Serialize the
 // create path behind a single in-process chain — creates are fast, so this is cheap.
@@ -84,7 +94,8 @@ export interface Worktree {
  * its index. `git stash create` omits untracked files (no `-u`), and the praxis
  * interactive agent constantly creates new files, so we build the snapshot in a
  * throwaway index instead: seed it from HEAD, `add -A` the whole working tree,
- * explicitly remove machine-only/sensitive paths, write a tree, commit it off HEAD.
+ * explicitly remove machine-only/sensitive paths (including runtime symlinks that
+ * escape a trailing-slash ignore pattern), write a tree, and commit it off HEAD.
  * A clean tree just yields HEAD.
  */
 export async function captureBase(repoRoot: string, indexFile: string): Promise<string> {
@@ -148,7 +159,7 @@ async function doCreateWorktree(
   // Symlink gitignored runtime deps so the spawn can build (best-effort). Never add
   // an unignored symlink: if `.gitignore` changes during a turn it would become part
   // of the patch (the root cause of issue #203's committed `.env` symlink).
-  for (const name of ['node_modules', '.env']) {
+  for (const name of RUNTIME_DEPS) {
     try {
       await git(repoRoot, ['check-ignore', '-q', '--', name])
       await symlink(join(repoRoot, name), join(dir, name))
