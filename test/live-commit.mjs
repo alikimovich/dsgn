@@ -21,6 +21,7 @@ import { commitLiveTurn, commitTitle, committableFiles } from '../src/main/live-
 import {
   afterTurn,
   beforeTurn,
+  discardParkedChat,
   initChatIsolation,
   isolatedCwd,
   releaseChat
@@ -277,7 +278,39 @@ try {
     await Promise.all([releaseChat(one), releaseChat(two)])
   }
 
-  // --- 10. Committed turns must stay PUBLISHABLE (`publish-scope.ts`). A session whose
+  // --- 10. Failed terminal outcomes park partial work and keep it out of live. ---
+  {
+    const repo = makeRepo({ 'a.txt': 'a\n' })
+    const store = { get: () => undefined, save: () => {}, remove: () => {} }
+    initChatIsolation({
+      worktreesDir: () => join(base, 'wt-failed'),
+      store: () => store,
+      getWindow: () => null
+    })
+    const key = 'failed-terminal'
+    const cwd = await isolatedCwd(repo, key)
+    const branch = `praxis/chat-${cwd.split('/').at(-1)}`
+    await beforeTurn(key, 'partial edit')
+    writeFileSync(join(cwd, 'a.txt'), 'partial\n')
+    afterTurn(key, 'partial edit', [], 'failed')
+    ok(
+      await waitFor(() => {
+        try {
+          return g(repo, 'show', `${branch}:a.txt`) === 'partial\n'
+        } catch {
+          return false
+        }
+      }),
+      'failed work is committed durably on its recovery branch'
+    )
+    ok(g(repo, 'show', 'HEAD:a.txt') === 'a\n', 'failed work is not committed live')
+    ok(porcelain(repo).length === 0, 'failed work is not written into the live checkout')
+    ok((await discardParkedChat(key)).ok, 'the failed parked turn can be discarded')
+    ok(await waitFor(() => !branchExists(repo, branch)), 'discard deletes the failed-turn branch')
+    await releaseChat(key)
+  }
+
+  // --- 11. Committed turns must stay PUBLISHABLE (`publish-scope.ts`). A session whose
   // turns all committed leaves a spotless working tree, so the old "diff vs HEAD" scope
   // would have reported nothing to publish and shipped an empty file list in the PR. ---
   {

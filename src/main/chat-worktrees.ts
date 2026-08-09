@@ -130,9 +130,20 @@ export interface TurnOutcome {
  *  - refused (live drifted)       → `parked` (work stays on the branch for review)
  *  - already at target (no write) → `noop`
  */
-export async function completeTurn(liveRoot: string, wt: Worktree, message: string): Promise<TurnOutcome> {
+export async function completeTurn(
+  liveRoot: string,
+  wt: Worktree,
+  message: string,
+  opts: { land?: boolean } = {}
+): Promise<TurnOutcome> {
   const { committed, files } = await commitWorktree(wt, message)
-  if (!committed) return { outcome: 'noop', files: [], edits: [] }
+  if (!committed) {
+    const newBase = await revParse(wt.path, 'HEAD')
+    return { outcome: 'noop', files: [], edits: [], newBase }
+  }
+  // Failed/interrupted turns are durable on their recovery branch but never land
+  // automatically. The user can inspect, resolve or discard the partial result.
+  if (opts.land === false) return { outcome: 'parked', files, edits: [] }
   if (await hasConflictMarkers(wt, files)) return { outcome: 'parked', files, edits: [] }
   const { applied, edits } = await autoApplyWorktree(liveRoot, wt, files)
   if (applied) {

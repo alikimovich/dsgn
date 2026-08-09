@@ -48,6 +48,7 @@ const UNIT = [
   'codex-retry-cause',
   'codex-stream',
   'interrupt-escalation',
+  'turn-terminal',
   'chat-title',
   'chat-settings',
   'run-stats',

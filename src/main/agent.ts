@@ -39,6 +39,7 @@ import { isRepoRoot } from './git'
 import { commitLiveTurn } from './live-commit'
 import { registerProviderIpc } from './providers'
 import { createSessionStore, type SessionStore } from './sessions-store'
+import { TurnTerminalTracker } from './turn-terminal'
 import {
   applyToWorkingTree,
   autoApplyWorktree,
@@ -137,13 +138,13 @@ let intendedKey: string | null = null
 const opening = new Map<string, Promise<void>>()
 
 // v9 workspace-snapshot: sessionKeys with a turn currently in flight. Driven by
-// the ProviderSession contract's own terminal event ("`done` — exactly one per
-// turn — clean finish AND interrupt", per backends/types.ts), observed through
-// each backend's `ctx.onEvent` hook (already wired for spawns; extended here to
-// every interactive session) — never a separately-invented busy flag. Added to on
+// provider terminal events, observed through each backend's `ctx.onEvent` hook
+// (already wired for spawns; extended here to every interactive session). Providers
+// can emit error→done, so `turnTerminals` separately deduplicates finalization. Added on
 // `agent:send`, removed on that session's next `done`/`error`, and swept wherever
 // a sessionKey leaves the `sessions` map so it can't outlive its session.
 const runningKeys = new Set<string>()
+const turnTerminals = new TurnTerminalTracker()
 const trackRunning =
   (sessionKey: string) =>
   (e: AgentEvent): void => {
@@ -195,13 +196,15 @@ const interactiveEvents =
   (e: AgentEvent): void => {
     trackRunning(sessionKey)(e)
     if (e.type === 'done') void maybeGenerateTitle(sessionKey)
-    // Turn boundary — merge the isolated chat's work back onto the live tree (on
-    // `error` too, to salvage interrupted edits). No-op for a non-isolated chat. The
-    // transcript rides along so a PARKED turn's record shows its last exchange.
+    // Providers disagree about terminal sequences: Codex can emit error→done while
+    // Claude may emit only error. Claim one outcome. Success may auto-land; failure
+    // persists partial work on the chat branch but never writes it into the project.
     if (e.type === 'done' || e.type === 'error') {
+      const terminal = turnTerminals.claim(sessionKey, e.type)
+      if (!terminal) return
       const transcript = sessions.get(sessionKey)?.record.transcript ?? []
       const last = [...transcript].reverse().find((t) => t.role === 'user')?.text
-      afterTurn(sessionKey, firstLine(last ?? 'praxis chat edit'), transcript)
+      afterTurn(sessionKey, firstLine(last ?? 'praxis chat edit'), transcript, terminal)
     }
   }
 
@@ -465,12 +468,13 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
       // Reopening the same project starts a fresh session — close the old one.
       const existing = sessions.get(key)
       if (existing) {
+        const terminal = runningKeys.has(key) ? 'failed' : 'success'
         closeSession(existing)
         sessions.delete(key)
         runningKeys.delete(key)
         // Merge + tear down the replaced chat's worktree BEFORE forking the new one,
         // so the fresh worktree's captureBase includes the old chat's merged output.
-        await releaseChat(key)
+        await releaseChat(key, terminal)
       }
       // Isolated chats run in a private `praxis/chat-<id>` worktree (repo roots only);
       // isolatedCwd returns the live root otherwise. adoptSession re-stamps the record
@@ -527,10 +531,11 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     for (const sk of sessionKeysForProject(key)) {
       const s = sessions.get(sk)
       if (s) {
+        const terminal = runningKeys.has(sk) ? 'failed' : 'success'
         closeSession(s)
         sessions.delete(sk)
         runningKeys.delete(sk)
-        void releaseChat(sk) // final merge + drop the chat's worktree (keeps branch if parked)
+        void releaseChat(sk, terminal) // running partial work parks; idle work tears down
       }
     }
     activeSessionKeyByProject.delete(key)
@@ -744,10 +749,11 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
       const key = projectKey(root)
       const s = sessions.get(sessionKey)
       if (s) {
+        const terminal = runningKeys.has(sessionKey) ? 'failed' : 'success'
         closeSession(s)
         sessions.delete(sessionKey)
         runningKeys.delete(sessionKey)
-        void releaseChat(sessionKey) // final merge + drop the chat's worktree (keeps branch if parked)
+        void releaseChat(sessionKey, terminal) // running partial work parks; idle work tears down
       }
       const remaining = sessionKeysForProject(key)
       // Prefer the project's default chat as the survivor, else the first remaining.
@@ -846,7 +852,10 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     // activeKey is the sessionKey `session` was looked up under (activeSession()
     // derives it from the same variable) — mark it running before the turn starts
     // so a workspace-snapshot taken mid-turn sees it.
-    if (activeKey) runningKeys.add(activeKey)
+    if (activeKey) {
+      runningKeys.add(activeKey)
+      turnTerminals.begin(activeKey)
+    }
     // Turn-start: sync the user's between-turn live edits into this chat's worktree
     // (serialized behind the chat's chain — waits out any in-flight merge). No-op for
     // a non-isolated chat.

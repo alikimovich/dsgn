@@ -97,6 +97,10 @@ test/             hand-rolled .mjs tests + fixtures/ + artifacts/ (PNGs, gitigno
 docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec)
 ```
 
+The concurrency/landing contract is documented in `docs/WORKTREES.md`; provider
+capability differences are documented in `docs/PROVIDERS.md`. Keep both current when
+changing lifecycle or backend behavior.
+
 - **Lifecycle:** `install.sh` (curl one-liner) clones to `~/.praxis`, builds, and
   puts `praxis` on PATH. `praxis` launches the built app; `praxis --update` pulls
   + rebuilds. The app checks its git remote in the background (`update-ipc.ts`)

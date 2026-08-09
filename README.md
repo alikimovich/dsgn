@@ -2,7 +2,7 @@
 
 An AI design & prototyping tool for your own repos. Open a project, Praxis
 launches its dev server in a live preview on the right, and an AI chat on the
-left edits the running app — respecting the repo's own `CLAUDE.md` and skills.
+left edits the running app using the selected provider's native harness.
 
 Unlike a sandbox (Figma Make, Claude Code's scratch dir), Praxis edits *your
 real repository* with live hot-reload, and hands the result off as a branch +
@@ -19,7 +19,8 @@ GitHub PR.
 - **AI chat that edits the running app.** A persistent multi-turn agent session
   streams over IPC and edits source with hot-reload. Backends are pluggable —
   Claude (via the Agent SDK), Codex, and Gemini behind one provider seam
-  (Gemini is experimental, gated behind `PRAXIS_EXPERIMENTAL_GEMINI`).
+  (Gemini is experimental, gated behind `PRAXIS_EXPERIMENTAL_GEMINI`). Their
+  capabilities differ; see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
 - **Bring your own model.** Beyond the two subscription seats, Settings →
   Models & Providers connects any OpenAI-compatible endpoint serving the
   `/responses` API — Vercel AI Gateway, Groq, or a custom host — so open models
@@ -36,6 +37,10 @@ GitHub PR.
 - **Review → handoff.** Pin comments/notes to elements and **Publish** a branch
   + GitHub PR. Comments can spawn parallel background agent sessions (each in
   its own git worktree).
+- **Concurrent-chat isolation.** Git-root projects give each chat a private
+  worktree and serialize publication through one live-checkout writer. Recovery
+  branches exist only during active or parked work and are deleted after a
+  successful landing; see [`docs/WORKTREES.md`](docs/WORKTREES.md).
 - **iOS Simulator preview** for Expo/React Native projects (Metro detect + an
   MJPEG bridge into the preview pane).
 - Tool calls run behind approve/deny cards, or an Auto mode. Edits are
@@ -111,8 +116,8 @@ Electron
 - **Preview** is a native `WebContentsView`, not an iframe, so a second preload
   is injected into the previewed app for element selection.
 - **Chat** streams over `agent:*` IPC into a zustand store (the seam between
-  transport and UI). It respects the opened repo's `CLAUDE.md` + skills via
-  `settingSources` + the `claude_code` system-prompt preset.
+  transport and UI). Claude loads the opened repo's `CLAUDE.md` + skills via
+  `settingSources`; other backends keep their own instruction/tool behavior.
 - **Conventions travel with the opened repo** — its `CLAUDE.md`, skills, and
   `DESIGN.md` describe how Praxis should edit it.
 

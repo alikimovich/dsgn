@@ -384,6 +384,18 @@ try {
     "the user's real staged version is untouched"
   )
 
+  // repo12 — a failed provider turn is preserved for review, never auto-landed.
+  const repo12 = makeRepo('repo12', { 'README.md': 'base\n' })
+  const wt12 = await createChatWorktree(repo12, 'chattwelve', worktreesDir)
+  writeFileSync(join(wt12.path, 'README.md'), 'partial edit before provider failure\n')
+  const failed12 = await completeTurn(repo12, wt12, 'failed turn', { land: false })
+  ok(failed12.outcome === 'parked', 'a failed turn with edits parks')
+  ok(readFileSync(join(repo12, 'README.md'), 'utf8') === 'base\n', 'failed partial work never lands')
+  ok(
+    g(wt12.path, 'show', 'HEAD:README.md') === 'partial edit before provider failure\n',
+    'failed partial work remains durable on the chat branch'
+  )
+
   if (failed === 0)
     console.log('CHAT-WORKTREES OK — isolation/resolve/artifact-filter/temp-index/marker-safety')
   else console.error(`CHAT-WORKTREES: ${failed} assertion(s) failed`)

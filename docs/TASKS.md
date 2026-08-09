@@ -349,11 +349,11 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 ## Per-chat worktree isolation (2026-07-16, concurrent-chat safety) — SHIPPED
 
 - [x] **Isolate concurrent chats in per-repo worktrees.** ✅ 2026-07-16 —
-      Every interactive chat on a git repo root gets its own long-lived worktree
-      on branch `praxis/chat-<id>`, created before `startSession` and removed on
-      close. Turn edits commit to the worktree branch; on `done`/`error` they
-      auto-merge to the live tree (the preview always serves live, never a
-      worktree). Conflicts park on the branch for review via the existing
+      Every interactive chat on a git repo root gets its own long-lived worktree,
+      created before `startSession` and removed on close. A `praxis/chat-<id>`
+      recovery branch is attached during a turn; successful `done` events land via
+      the repo queue and delete it, while errors/interruption or conflicts park on
+      the branch for review. The preview always serves live, never a worktree. The
       `SessionReview` UI. `src/main/chat-worktrees.ts` (turn operations),
       `src/main/chat-isolation.ts` (lifecycle + crash recovery), extended
       `src/main/worktrees.ts` (C1 primitives), `test/chat-worktrees.mjs` (unit),
@@ -394,6 +394,11 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       snapshot/turn/live-commit boundaries; unresolved marker triplets remain parked.
       Isolation setup fails closed. `src/main/{worktrees,chat-worktrees,live-commit}.ts`,
       `test/{chat-worktrees,live-commit}.mjs`.
+- [x] **Terminal outcomes are explicit and idempotent.** ✅ 2026-08-08 — only a
+      clean `done` auto-lands; `error`/interruption commits partial work to the recovery
+      branch and parks it. A per-turn tracker collapses Codex's `error→done` sequence so
+      finalization runs once. `src/main/turn-terminal.ts`, `src/main/{agent,
+      chat-isolation,chat-worktrees}.ts`, `test/{turn-terminal,live-commit}.mjs`.
 
 ## v10 — Styles tab + AI-surfaced control panels (2026-07-18, user-requested) — SHIPPED
 

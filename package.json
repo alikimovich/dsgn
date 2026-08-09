@@ -113,6 +113,7 @@
     "test:worktrees": "bun test/worktrees.mjs",
     "test:chat-worktrees": "bun test/chat-worktrees.mjs",
     "test:live-commit": "bun test/live-commit.mjs",
+    "test:turn-terminal": "bun test/turn-terminal.mjs",
     "test:file-tree": "bun test/file-tree.mjs",
     "test:file-ops": "bun test/file-ops.mjs",
     "test:attachments": "bun test/attachments.mjs",

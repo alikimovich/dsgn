@@ -2,6 +2,31 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-08 — Failed turns park once; only successful turns publish
+
+The old turn hook treated `done` and `error` identically: both auto-landed whatever was
+in the worktree. That made a provider crash or forced interruption publish partial code.
+It also assumed one terminal event, but Codex deliberately reports a failure as `error`
+and then closes the stream with `done`; Praxis finalized that one turn twice.
+
+`TurnTerminalTracker` now claims exactly one outcome after each `agent:send`. A clean
+`done` is `success`; the first `error` is `failed`, and any later terminal event for that
+turn is ignored. Successful work follows the normal repository landing queue. Failed or
+interrupted work is squashed durably onto its attached chat branch and parked without a
+single live write. A failure with no edits simply detaches and removes its empty branch.
+
+The real isolation regression drives a failed terminal through `afterTurn`, confirms the
+partial file exists on `praxis/chat-*` while live HEAD and the working tree stay clean,
+then discards it and confirms the branch is deleted. The pure tracker test pins Codex's
+`error→done`, duplicate `done`, and Claude's error-only shape.
+
+This pass also adds `docs/WORKTREES.md` (state machine, invariants, recovery/limits) and
+`docs/PROVIDERS.md` (the actual Claude/Codex/gateway/Gemini capability matrix), correcting
+README's backend-agnostic instruction/tool claims.
+
+`src/main/turn-terminal.ts`, `src/main/agent.ts`, `src/main/chat-isolation.ts`,
+`src/main/chat-worktrees.ts`, `test/turn-terminal.mjs`, `test/live-commit.mjs`.
+
 ## 2026-08-08 — Conflict resolution no longer borrows the user's Git index
 
 Issues #203, #210 and #211 all showed the same family of failure: `.env` or generated

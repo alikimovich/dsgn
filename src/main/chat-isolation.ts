@@ -20,6 +20,7 @@ import { isRepoRoot } from './git'
 import { commitLiveTurn } from './live-commit'
 import { enqueueRepoWrite, resetRepoWriteQueues } from './repo-write-queue'
 import type { SessionStore } from './sessions-store'
+import type { TurnTerminalOutcome } from './turn-terminal'
 import {
   branchPatch,
   deleteBranch,
@@ -204,7 +205,12 @@ function lastTurn(transcript: SessionTranscriptEntry[]): SessionTranscriptEntry[
  * `parked`, upserts the park record (with the last turn's transcript) for the review UI.
  * `noop` does nothing.
  */
-export function afterTurn(sessionKey: string, message: string, transcript: SessionTranscriptEntry[] = []): void {
+export function afterTurn(
+  sessionKey: string,
+  message: string,
+  transcript: SessionTranscriptEntry[] = [],
+  terminal: TurnTerminalOutcome = 'success'
+): void {
   const st = states.get(sessionKey)
   if (!st) return
   const turn = lastTurn(transcript)
@@ -212,7 +218,9 @@ export function afterTurn(sessionKey: string, message: string, transcript: Sessi
     .then(() =>
       enqueueRepoWrite(st.liveRoot, async () => {
         const turnNo = ++st.turnNo
-        const outcome = await completeTurn(st.liveRoot, st.wt, message)
+        const outcome = await completeTurn(st.liveRoot, st.wt, message, {
+          land: terminal === 'success'
+        })
         if (outcome.outcome === 'merged') {
           const group = `chat:${st.wt.id}:${turnNo}`
           for (const e of outcome.edits) {
@@ -589,7 +597,10 @@ export async function handleReclaimed(
  * checkout — keeping the branch only when parked (its work still awaits review).
  * Never throws (teardown runs in finalizers).
  */
-export async function releaseChat(sessionKey: string): Promise<void> {
+export async function releaseChat(
+  sessionKey: string,
+  pendingTerminal: TurnTerminalOutcome = 'success'
+): Promise<void> {
   const st = states.get(sessionKey)
   if (!st) return
   states.delete(sessionKey)
@@ -598,7 +609,9 @@ export async function releaseChat(sessionKey: string): Promise<void> {
     await enqueueRepoWrite(st.liveRoot, async () => {
       if (!st.parked) {
         const turnNo = ++st.turnNo
-        const outcome = await completeTurn(st.liveRoot, st.wt, 'praxis chat changes')
+        const outcome = await completeTurn(st.liveRoot, st.wt, 'praxis chat changes', {
+          land: pendingTerminal === 'success'
+        })
         if (outcome.outcome === 'merged') {
           for (const e of outcome.edits) {
             recordEdit(
