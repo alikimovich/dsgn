@@ -2,6 +2,30 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-09 — The rail's per-project controls sort themselves out
+
+Each rail section now sits where its meaning is. Project memory was a full-width row
+buried under the chat list even though it is a property of the PROJECT, so it moved up
+onto the project row as an always-visible brain action next to ×; × in turn became
+hover-only, since two equally loud controls a few pixels apart made the destructive one
+too easy to hit. "New chat" made the opposite trip: it was a header glyph that only
+appeared for the active project, and it is now a full-width button directly under the
+chat list it appends to — visible for every expanded project (`newChatForProject`
+already handled a backgrounded one by adding the session without stealing the screen).
+
+History became an accordion. Its heading folds the whole section away — open by
+default, session-only state per project, the same shape as "Show N more", which still
+caps the open list at three rows. A project with a long history can now be quiet
+without being collapsed entirely.
+
+The brain's `aria-label` deliberately reads "Open project memory for X", not
+"X's project memory": the memory dialog's textarea is found by
+`[aria-label$="project memory"]`, and a suffix collision would have made the rail
+button answer to the dialog's selector.
+
+`src/renderer/src/components/Rail.tsx`, `src/renderer/src/styles.css`,
+`test/rail-chat-overflow.mjs`.
+
 ## 2026-08-08 — Main is stable; child agents have parents; decisions outlive context
 
 The project rail now describes the actual ownership tree instead of flattening live

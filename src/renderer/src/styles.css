@@ -746,8 +746,10 @@ body.is-fullscreen .sidebar-toggle {
     cursor: pointer;
     opacity: 0;
 }
-.rail__item:hover .rail__close,
-.rail__item--active .rail__close {
+/* Hover-only: closing a project is the row's one destructive control, and the
+   brain next to it is always on — leaving × visible at rest would put the two a
+   few pixels apart with equal weight. */
+.rail__item:hover .rail__close {
     opacity: 1;
 }
 .rail__close:hover {
@@ -820,8 +822,34 @@ body.is-fullscreen .sidebar-toggle {
 .rail__section-label--history {
     padding-top: 10px;
 }
-.rail__section-label span {
+.rail__section-count {
     opacity: 0.65;
+}
+/* A section label that FOLDS its list (History): same label, plus a leading
+   chevron that eats the label's indent (15px pad + 12px chevron + 4px gap =
+   the 31px the names sit at), so the heading text doesn't shift. */
+.rail__section-toggle {
+    width: 100%;
+    padding-left: 15px;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font: inherit;
+    font-size: 9px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    text-align: left;
+}
+.rail__section-toggle:hover {
+    color: var(--text);
+}
+.rail__section-chevron {
+    flex: 0 0 auto;
+    transition: transform 0.12s ease;
+}
+.rail__section-chevron--open {
+    transform: rotate(90deg);
 }
 .rail__agents,
 .rail__history {
@@ -839,25 +867,27 @@ body.is-fullscreen .sidebar-toggle {
     padding-bottom: 4px;
     font-size: 11px;
 }
+/* Project memory — an icon action on the project row, next to ×. Sized like the
+   other row buttons but always visible (opacity, not hover-gated): it's a
+   destination, and hiding it made a per-project feature undiscoverable. */
 .rail__memory {
-    width: calc(100% - 12px);
-    margin: 3px 6px 0;
+    flex: 0 0 auto;
+    width: 20px;
+    height: 20px;
     display: flex;
     align-items: center;
-    gap: 7px;
-    padding: 5px 8px;
+    justify-content: center;
     border: none;
-    border-radius: 6px;
+    border-radius: 4px;
     background: none;
     color: var(--text-muted);
     cursor: pointer;
-    font: inherit;
-    font-size: 11px;
-    text-align: left;
+    opacity: 0.7;
 }
 .rail__memory:hover {
-    background: rgb(from var(--rail-text) r g b / 0.075);
+    background: var(--border);
     color: var(--text);
+    opacity: 1;
 }
 /* An expanded project with nothing to list yet (freshly opened, or its only chat
    hasn't been sent) still renders the list — drop its margin so it doesn't leave
@@ -1050,29 +1080,30 @@ body.is-fullscreen .sidebar-toggle {
     }
 }
 
-/* v9 multi-chat — "+" to start another live chat for the active project. Echoes
-   .rail__close's quiet, hover-revealed styling so they read as one family. */
+/* v9 multi-chat — "New chat" starts another live chat for this project. It sits
+   under the chat list as a full-width quiet row (it appends to that list), and
+   is inset to the chat rows' own margin so the two read as one stack. */
 .rail__new-chat {
-    flex: 0 0 auto;
-    width: 20px;
-    height: 20px;
-    margin-right: 2px;
+    width: calc(100% - 12px);
+    margin: 1px 6px 0;
     display: flex;
     align-items: center;
-    justify-content: center;
+    gap: 7px;
+    padding: 5px 8px;
     border: none;
-    border-radius: 4px;
+    border-radius: 6px;
     background: none;
     color: var(--text-muted);
     cursor: pointer;
-    opacity: 0;
+    font: inherit;
+    font-size: 11px;
+    text-align: left;
 }
-.rail__item:hover .rail__new-chat,
-.rail__item--active .rail__new-chat {
-    opacity: 1;
+.rail__new-chat svg {
+    flex: 0 0 auto;
 }
 .rail__new-chat:hover {
-    background: var(--border);
+    background: rgb(from var(--rail-text) r g b / 0.075);
     color: var(--text);
 }
 

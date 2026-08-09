@@ -1,7 +1,8 @@
 /**
  * Rail chat-list overflow — a project's previous chats are capped at 3 rows
  * in their own History section, with a muted "Show N more" row
- * that expands to the full list and a "Show less" that re-tucks it. History is
+ * that expands to the full list and a "Show less" that re-tucks it. That section
+ * is also an accordion — its heading folds the list away entirely. History is
  * seeded straight into the exposed useHistory store (no real sessions needed).
  *
  * Run with: bun run test:rail-overflow
@@ -100,7 +101,29 @@ try {
   await clickMore()
   await waitRows(4)
 
-  console.log('RAIL-OVERFLOW OK — 3 capped + toggle, 9 expanded, re-tucked')
+  // The History heading is an accordion on top of that cap: folding it takes the
+  // whole list away (the heading — and its count — stays, so the chats are still
+  // findable), and re-opening restores the capped list.
+  const clickHeading = () =>
+    win.evaluate(() => {
+      const b = document.querySelector('.rail__section-toggle')
+      if (!b) throw new Error('history heading missing')
+      b.click()
+    })
+  await clickHeading()
+  await win.waitForFunction(() => !document.querySelector('.rail__history'), undefined, {
+    timeout: 3000
+  })
+  const folded = await win.evaluate(() => {
+    const b = document.querySelector('.rail__section-toggle')
+    return { expanded: b?.getAttribute('aria-expanded'), text: b?.textContent }
+  })
+  if (folded.expanded !== 'false') throw new Error(`folded heading reads ${folded.expanded}`)
+  if (!folded.text?.includes('9')) throw new Error(`folded heading lost its count: ${folded.text}`)
+  await clickHeading()
+  await waitRows(4)
+
+  console.log('RAIL-OVERFLOW OK — 3 capped + toggle, 9 expanded, re-tucked, accordion folds')
 } catch (err) {
   console.error('RAIL-OVERFLOW FAILED:', err?.message ?? err)
   process.exitCode = 1
