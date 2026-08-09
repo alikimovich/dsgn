@@ -9,6 +9,7 @@ import {
   diffWorktree,
   applyToWorkingTree,
   captureBase,
+  RUNTIME_DEPS,
   type Worktree
 } from './worktrees'
 
@@ -36,6 +37,12 @@ const git = (cwd: string, args: string[], timeout = 15000): Promise<{ stdout: st
     stdout: string
     stderr: string
   }>
+
+// `git clean -fd` that spares the symlinked runtime deps. They're untracked (kept out
+// of every commit — see RUNTIME_DEPS) AND may not be gitignored in a way that matches
+// the symlink, so a bare `clean -fd` would delete them and break the next build. `-e`
+// re-excludes each so the checkout keeps its node_modules/.env across resets.
+const cleanArgs = (): string[] => ['clean', '-fd', ...RUNTIME_DEPS.flatMap((d) => ['-e', d])]
 
 /** Binary-safe `git show <ref>:<path>` — `null` when the path didn't exist at that ref. */
 const readBlobAt = async (cwd: string, ref: string, rel: string): Promise<Buffer | null> => {
@@ -75,8 +82,8 @@ export function createChatWorktree(liveRoot: string, id: string, worktreesDir: s
 /**
  * Turn-start drift sync (live → worktree). Snapshot the live tree; if the worktree's
  * HEAD tree already matches it there's no drift — no-op. Otherwise reset the worktree
- * hard onto the fresh live snapshot (`clean -fd` first drops any stray files but spares
- * gitignored node_modules/.env symlinks — no `-x`). The caller guarantees the worktree
+ * hard onto the fresh live snapshot (`clean` first drops any stray files but spares the
+ * symlinked runtime deps via `-e` — see `cleanArgs`). The caller guarantees the worktree
  * is CLEAN at turn start (everything was committed at the previous turn's `done`), so
  * the reset can never conflict. Advances `wt.baseSha` in place to the new fork point.
  */
@@ -86,7 +93,7 @@ export async function syncFromLive(liveRoot: string, wt: Worktree): Promise<{ sy
   const liveTree = await revParse(liveRoot, `${live}^{tree}`)
   const wtTree = await revParse(wt.path, 'HEAD^{tree}')
   if (liveTree === wtTree) return { synced: false }
-  await git(wt.path, ['clean', '-fd'])
+  await git(wt.path, cleanArgs())
   await git(wt.path, ['reset', '--hard', live])
   wt.baseSha = live
   return { synced: true }
@@ -188,7 +195,7 @@ export async function stageResolve(liveRoot: string, wt: Worktree): Promise<Reso
   const oldBase = wt.baseSha
   const indexFile = join(dirname(wt.path), `.index-resolve-${wt.id}`)
   const live = await captureBase(liveRoot, indexFile) // snapshot the user's live tree
-  await git(wt.path, ['clean', '-fd'])
+  await git(wt.path, cleanArgs())
   await git(wt.path, ['reset', '--hard', live]) // worktree := live
   wt.baseSha = live
   const tmpDir = join(dirname(wt.path), '.resolve-tmp')
@@ -231,5 +238,5 @@ export async function stageResolve(liveRoot: string, wt: Worktree): Promise<Reso
  */
 export async function discardParked(wt: Worktree): Promise<void> {
   await git(wt.path, ['reset', '--hard', wt.baseSha]).catch(() => {})
-  await git(wt.path, ['clean', '-fd']).catch(() => {})
+  await git(wt.path, cleanArgs()).catch(() => {})
 }

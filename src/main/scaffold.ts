@@ -57,7 +57,11 @@ const templateFiles = (name: string): Record<string, string> => ({
     null,
     2
   )}\n`,
-  '.gitignore': 'node_modules\ndist\n.DS_Store\n',
+  // Patterns are intentionally slash-free (`node_modules`, not `node_modules/`): a
+  // trailing-slash pattern is directory-only and won't match the node_modules SYMLINK
+  // Praxis stitches into each chat worktree (see worktrees.ts's RUNTIME_DEPS note).
+  '.gitignore':
+    'node_modules\ndist\ndist-ssr\n.DS_Store\n*.local\n.env\n.env.*\n!.env.example\nnpm-debug.log*\nyarn-error.log*\n',
   'index.html': `<!doctype html>
 <html lang="en">
   <head>

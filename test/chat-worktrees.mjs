@@ -314,8 +314,40 @@ try {
     "the chat's resolved image landed on the live tree"
   )
 
+  // ============================================================================
+  // repo9 — REGRESSION: a `.gitignore` with the trailing-slash `node_modules/`
+  //         (directory-only) pattern does NOT match the node_modules SYMLINK we stitch
+  //         in. Pre-fix, `git add -A` staged that symlink, the merge choked reading it
+  //         (EISDIR), and EVERY turn parked with `node_modules` in the file list. The
+  //         turn must merge cleanly and node_modules must never appear.
+  // ============================================================================
+  const repo9 = join(base, 'repo9')
+  mkdirSync(repo9, { recursive: true })
+  g(repo9, 'init', '-q', '-b', 'main')
+  g(repo9, 'config', 'user.name', 'Test')
+  g(repo9, 'config', 'user.email', 'test@local')
+  writeFileSync(join(repo9, '.gitignore'), 'node_modules/\ndist/\n') // trailing slash — the bug trigger
+  mkdirSync(join(repo9, 'node_modules'), { recursive: true })
+  writeFileSync(join(repo9, 'node_modules', '.marker'), 'dep\n')
+  writeFileSync(join(repo9, 'App.tsx'), 'v1\n')
+  g(repo9, 'add', '-A')
+  g(repo9, 'commit', '-q', '-m', 'init')
+
+  const wt9 = await createChatWorktree(repo9, 'chatnine', worktreesDir)
+  ok(existsSync(join(wt9.path, 'node_modules', '.marker')), 'node_modules symlinked in despite trailing-slash ignore')
+  writeFileSync(join(wt9.path, 'App.tsx'), 'v2\n') // the only real edit this turn
+  const t9 = await completeTurn(repo9, wt9, 'edit app')
+  ok(t9.outcome === 'merged', `trailing-slash node_modules/ must NOT force a park: ${JSON.stringify(t9)}`)
+  ok(!t9.files.includes('node_modules'), `node_modules must never be in the turn's file list: ${JSON.stringify(t9.files)}`)
+  ok(
+    t9.files.length === 1 && t9.files[0] === 'App.tsx',
+    `only the real edit is in the merge: ${JSON.stringify(t9.files)}`
+  )
+  ok(readFileSync(join(repo9, 'App.tsx'), 'utf8') === 'v2\n', 'the edit landed on the live tree')
+  ok(existsSync(join(wt9.path, 'node_modules', '.marker')), 'clean -fd spared the symlink even with trailing-slash ignore')
+
   if (failed === 0)
-    console.log('CHAT-WORKTREES OK — fork/turn-merge/incremental/sync/park/apply/discard/resolve/deletion-resolve/binary-resolve')
+    console.log('CHAT-WORKTREES OK — fork/turn-merge/incremental/sync/park/apply/discard/resolve/deletion-resolve/binary-resolve/trailing-slash')
   else console.error(`CHAT-WORKTREES: ${failed} assertion(s) failed`)
   process.exitCode = failed === 0 ? 0 : 1
 } catch (err) {

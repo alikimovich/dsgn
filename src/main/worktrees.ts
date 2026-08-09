@@ -32,6 +32,16 @@ const git = (
     ...(env ? { env: { ...process.env, ...env } } : {})
   }) as Promise<{ stdout: string; stderr: string }>
 
+// Runtime deps a worktree needs to build/typecheck but that must NEVER enter a
+// commit, snapshot, or merge: they're symlinked into every worktree (see
+// `doCreateWorktree`) and are enormous/churning. We can't rely on the target repo's
+// `.gitignore` to keep them out, because the common `node_modules/` (trailing-slash,
+// directory-only) pattern does NOT match the SYMLINK we create — git never treats a
+// symlink as a directory — so `git add -A` would stage the symlink, and the merge-back
+// then chokes reading it (`EISDIR`) and parks every turn. So we exclude these paths
+// explicitly at every stage instead. Consumers also spare them from `git clean` (`-e`).
+export const RUNTIME_DEPS = ['node_modules', '.env'] as const
+
 // `git worktree add` mutates shared admin state under .git/worktrees and is NOT
 // concurrency-safe (firing several comment spawns at once can race). Serialize the
 // create path behind a single in-process chain — creates are fast, so this is cheap.
@@ -54,9 +64,10 @@ export interface Worktree {
  * untracked files — into a dangling base commit, WITHOUT touching the live tree or
  * its index. `git stash create` omits untracked files (no `-u`), and the praxis
  * interactive agent constantly creates new files, so we build the snapshot in a
- * throwaway index instead: seed it from HEAD, `add -A` the whole working tree
- * (`.gitignore` keeps node_modules/.env out), write a tree, commit it off HEAD.
- * A clean tree just yields HEAD.
+ * throwaway index instead: seed it from HEAD, `add -A` the whole working tree, write
+ * a tree, commit it off HEAD. `RUNTIME_DEPS` are unstaged after the add so a repo
+ * that doesn't gitignore them (or gitignores them with a symlink-missing
+ * trailing-slash pattern) can't bloat the snapshot. A clean tree just yields HEAD.
  */
 export async function captureBase(repoRoot: string, indexFile: string): Promise<string> {
   const head = (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
@@ -70,6 +81,9 @@ export async function captureBase(repoRoot: string, indexFile: string): Promise<
   try {
     await git(repoRoot, ['read-tree', 'HEAD'], env)
     await git(repoRoot, ['add', '-A'], env)
+    // Keep symlinked runtime deps out of the snapshot even when the repo's ignore
+    // rules don't catch them (see RUNTIME_DEPS). No-op when they were never staged.
+    await git(repoRoot, ['reset', '-q', '--', ...RUNTIME_DEPS], env).catch(() => {})
     const tree = (await git(repoRoot, ['write-tree'], env)).stdout.trim()
     if (!tree) return head
     const commit = (
@@ -117,8 +131,9 @@ async function doCreateWorktree(
   const baseSha = await captureBase(repoRoot, join(worktreesDir, `.index-${id}`))
   await git(repoRoot, ['worktree', 'add', '-b', branch, dir, baseSha])
 
-  // Symlink gitignored runtime deps so the spawn can build (best-effort).
-  for (const name of ['node_modules', '.env']) {
+  // Symlink runtime deps so the spawn can build (best-effort). These are kept out of
+  // every commit/snapshot/merge explicitly (see RUNTIME_DEPS), not via .gitignore.
+  for (const name of RUNTIME_DEPS) {
     try {
       await symlink(join(repoRoot, name), join(dir, name))
     } catch {
@@ -149,8 +164,10 @@ export async function commitWorktree(
   await git(wt.path, ['add', '-A'])
   // `.praxis/` is praxis-managed and NOT gitignored in target repos, so unstage it: a
   // spawn's accidental sidecar writes must never reach the durable branch or the
-  // apply patch. (The Bash allowlist is deferred.)
-  await git(wt.path, ['reset', '-q', '--', '.praxis']).catch(() => {})
+  // apply patch. (The Bash allowlist is deferred.) RUNTIME_DEPS are unstaged for the
+  // same reason — the `node_modules` symlink escapes a trailing-slash gitignore and,
+  // if committed, poisons the auto-merge (unreadable → the whole turn parks).
+  await git(wt.path, ['reset', '-q', '--', '.praxis', ...RUNTIME_DEPS]).catch(() => {})
   const staged = (await git(wt.path, ['diff', '--cached', '--name-only'])).stdout
     .split('\n')
     .map((s) => s.trim())
