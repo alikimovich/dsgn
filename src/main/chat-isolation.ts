@@ -121,8 +121,8 @@ function emitIsolation(
  * The cwd a chat's session should run in: its private worktree when `liveRoot` is a
  * git repo root, else `liveRoot` itself (all hooks then no-op). Idempotent — a known
  * `sessionKey` (e.g. `agent:restart-chat` reusing the same chat) returns its existing
- * worktree rather than forking a second. On any `createWorktree` failure, falls back
- * to `liveRoot` so a broken repo never blocks the chat.
+ * worktree rather than forking a second. A repository-root isolation failure rejects
+ * the open instead of silently running the chat in the shared live checkout.
  */
 export async function isolatedCwd(liveRoot: string, sessionKey: string): Promise<string> {
   const existing = states.get(sessionKey)
@@ -147,8 +147,9 @@ export async function isolatedCwd(liveRoot: string, sessionKey: string): Promise
     })
     emitIsolation(sessionKey, 'isolated', wt.branch)
     return wt.path
-  } catch {
-    return liveRoot // fork failed — run on the live root, hooks no-op
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`Praxis couldn't create an isolated chat workspace: ${detail}`)
   }
 }
 

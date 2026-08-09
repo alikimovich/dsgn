@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { excludedWorktreePath } from './worktrees'
 
 /**
  * Per-turn commits on the LIVE checkout.
@@ -51,7 +52,7 @@ export function committableFiles(files: string[]): string[] {
   const seen = new Set<string>()
   for (const raw of files) {
     const rel = (raw ?? '').trim()
-    if (!rel || rel === '.praxis' || rel.startsWith('.praxis/')) continue
+    if (!rel || excludedWorktreePath(rel)) continue
     seen.add(rel)
   }
   return [...seen]

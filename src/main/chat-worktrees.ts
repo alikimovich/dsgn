@@ -64,6 +64,22 @@ async function changedFiles(wt: Worktree): Promise<string[]> {
     .filter(Boolean)
 }
 
+/** Git-style unresolved markers must never cross from a resolution worktree to live. */
+async function hasConflictMarkers(wt: Worktree, files: string[]): Promise<boolean> {
+  for (const rel of files) {
+    let text: string
+    try {
+      text = await readFile(join(wt.path, rel), 'utf8')
+    } catch {
+      continue
+    }
+    if (/^<<<<<<< .+$/m.test(text) && /^=======$/m.test(text) && /^>>>>>>> .+$/m.test(text)) {
+      return true
+    }
+  }
+  return false
+}
+
 /**
  * Fork a fresh worktree for a chat on branch `praxis/chat-<id>`, forking from the live
  * tree's CURRENT state (uncommitted WIP included, via `captureBase`) and symlinking
@@ -117,6 +133,7 @@ export interface TurnOutcome {
 export async function completeTurn(liveRoot: string, wt: Worktree, message: string): Promise<TurnOutcome> {
   const { committed, files } = await commitWorktree(wt, message)
   if (!committed) return { outcome: 'noop', files: [], edits: [] }
+  if (await hasConflictMarkers(wt, files)) return { outcome: 'parked', files, edits: [] }
   const { applied, edits } = await autoApplyWorktree(liveRoot, wt, files)
   if (applied) {
     const newBase = await revParse(wt.path, 'HEAD')

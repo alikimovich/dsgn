@@ -2,6 +2,35 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-08 — Conflict resolution no longer borrows the user's Git index
+
+Issues #203, #210 and #211 all showed the same family of failure: `.env` or generated
+typecheck/dependency artifacts entered a chat patch, then `git apply --3way` consulted
+the live checkout's real index and refused with `does not match index`. That index is
+allowed to differ — it may contain the user's own staged work — so it was never a sound
+resolver dependency.
+
+The 3-way fallback now snapshots the current working tree, seeds a temporary index from
+that synthetic commit, refreshes its stat data, and applies through it. The user's real
+index is neither read nor mutated. A regression stages one version of a file, leaves a
+different version in the working tree, and proves the chat's non-overlapping edit merges
+while the staged blob stays byte-for-byte unchanged.
+
+Snapshots, chat commits and live commits now share an explicit exclusion policy:
+`.env`/non-template `.env.*`, any `node_modules`, `*.tsbuildinfo`, and Praxis's current
+or legacy sidecars cannot enter a synthetic base or landing. `.env.example`/sample/
+template/defaults remain normal product files. Runtime dependency/env symlinks are only
+created when Git confirms the path is ignored, closing #203's committed `.env` symlink
+path. Snapshot failure now fails the isolated chat open instead of quietly forking from
+stale HEAD and later manufacturing conflicts.
+
+Finally, a committed resolution that still contains complete Git marker triplets remains
+parked; it can no longer be auto-written into the live project. `test/chat-worktrees.mjs`
+now covers all three regressions with real temporary repositories.
+
+`src/main/worktrees.ts`, `src/main/chat-worktrees.ts`, `src/main/live-commit.ts`,
+`src/main/chat-isolation.ts`, `test/chat-worktrees.mjs`, `test/live-commit.mjs`.
+
 ## 2026-08-08 — Concurrent chats share one landing queue, not one racing Git index
 
 Git worktrees isolated where models EDITED, but each chat had its own finalization

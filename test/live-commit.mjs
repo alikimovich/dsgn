@@ -139,6 +139,18 @@ try {
       ) === 'a.txt,b.txt',
       'committableFiles drops sidecar paths, blanks and duplicates'
     )
+    ok(
+      committableFiles([
+        '.env',
+        '.env.local',
+        'node_modules/pkg/index.js',
+        'tsconfig.tsbuildinfo',
+        '.dsgn/state.json',
+        '.env.example',
+        'src/app.tsx'
+      ]).join(',') === '.env.example,src/app.tsx',
+      'live commits reject secrets/generated paths but allow env templates'
+    )
     const repo = makeRepo()
     mkdirSync(join(repo, '.praxis'), { recursive: true })
     writeFileSync(join(repo, '.praxis', 'annotations.json'), '[]\n')

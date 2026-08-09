@@ -19,6 +19,35 @@ import { normalizeBranchName } from './git'
 const execFileP = promisify(execFile)
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
+const SAFE_ENV_TEMPLATES = new Set([
+  '.env.example',
+  '.env.sample',
+  '.env.template',
+  '.env.defaults'
+])
+
+/** Paths that belong to the machine/tooling, not to an agent turn. */
+export function excludedWorktreePath(raw: string): boolean {
+  const rel = raw.replaceAll('\\', '/').replace(/^\.\//, '')
+  const parts = rel.split('/').filter(Boolean)
+  if (parts.includes('node_modules')) return true
+  if (parts[0] === '.praxis' || parts[0] === '.dsgn') return true
+  const name = parts.at(-1) ?? ''
+  if (name.endsWith('.tsbuildinfo')) return true
+  if (name === '.env') return true
+  return name.startsWith('.env.') && !SAFE_ENV_TEMPLATES.has(name)
+}
+
+/** Reset excluded staged paths back to HEAD in either the real or a temporary index. */
+async function unstageExcluded(cwd: string, env?: NodeJS.ProcessEnv): Promise<void> {
+  const staged = (await git(cwd, ['diff', '--cached', '--name-only'], env)).stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const excluded = staged.filter(excludedWorktreePath)
+  if (excluded.length) await git(cwd, ['reset', '-q', 'HEAD', '--', ...excluded], env)
+}
+
 const git = (
   cwd: string,
   args: string[],
@@ -54,8 +83,8 @@ export interface Worktree {
  * untracked files — into a dangling base commit, WITHOUT touching the live tree or
  * its index. `git stash create` omits untracked files (no `-u`), and the praxis
  * interactive agent constantly creates new files, so we build the snapshot in a
- * throwaway index instead: seed it from HEAD, `add -A` the whole working tree
- * (`.gitignore` keeps node_modules/.env out), write a tree, commit it off HEAD.
+ * throwaway index instead: seed it from HEAD, `add -A` the whole working tree,
+ * explicitly remove machine-only/sensitive paths, write a tree, commit it off HEAD.
  * A clean tree just yields HEAD.
  */
 export async function captureBase(repoRoot: string, indexFile: string): Promise<string> {
@@ -70,14 +99,13 @@ export async function captureBase(repoRoot: string, indexFile: string): Promise<
   try {
     await git(repoRoot, ['read-tree', 'HEAD'], env)
     await git(repoRoot, ['add', '-A'], env)
+    await unstageExcluded(repoRoot, env)
     const tree = (await git(repoRoot, ['write-tree'], env)).stdout.trim()
     if (!tree) return head
     const commit = (
       await git(repoRoot, ['commit-tree', tree, '-p', head, '-m', 'praxis: spawn base (WIP snapshot)'], env)
     ).stdout.trim()
     return commit || head
-  } catch {
-    return head // any hiccup — fork off HEAD rather than fail the spawn
   } finally {
     await rm(indexFile, { force: true }).catch(() => {})
   }
@@ -117,9 +145,12 @@ async function doCreateWorktree(
   const baseSha = await captureBase(repoRoot, join(worktreesDir, `.index-${id}`))
   await git(repoRoot, ['worktree', 'add', '-b', branch, dir, baseSha])
 
-  // Symlink gitignored runtime deps so the spawn can build (best-effort).
+  // Symlink gitignored runtime deps so the spawn can build (best-effort). Never add
+  // an unignored symlink: if `.gitignore` changes during a turn it would become part
+  // of the patch (the root cause of issue #203's committed `.env` symlink).
   for (const name of ['node_modules', '.env']) {
     try {
+      await git(repoRoot, ['check-ignore', '-q', '--', name])
       await symlink(join(repoRoot, name), join(dir, name))
     } catch {
       /* absent or already present — fine */
@@ -147,10 +178,7 @@ export async function commitWorktree(
   // `branchPatch`'s `branch^..branch`. The reset is a no-op when HEAD == baseSha.
   await git(wt.path, ['reset', '--soft', wt.baseSha]).catch(() => {})
   await git(wt.path, ['add', '-A'])
-  // `.praxis/` is praxis-managed and NOT gitignored in target repos, so unstage it: a
-  // spawn's accidental sidecar writes must never reach the durable branch or the
-  // apply patch. (The Bash allowlist is deferred.)
-  await git(wt.path, ['reset', '-q', '--', '.praxis']).catch(() => {})
+  await unstageExcluded(wt.path)
   const staged = (await git(wt.path, ['diff', '--cached', '--name-only'])).stdout
     .split('\n')
     .map((s) => s.trim())
@@ -253,6 +281,8 @@ export async function applyToWorkingTree(
   if (!patchText.trim()) return { ok: true, conflict: false }
   await mkdir(tmpDir, { recursive: true })
   const patchFile = join(tmpDir, `apply-${randomUUID().slice(0, 8)}.patch`)
+  const applyIndex = join(tmpDir, `.index-apply-${randomUUID().slice(0, 8)}`)
+  const captureIndex = join(tmpDir, `.index-capture-${randomUUID().slice(0, 8)}`)
   await writeFile(patchFile, patchText, 'utf8')
   try {
     try {
@@ -262,7 +292,16 @@ export async function applyToWorkingTree(
       // Context drifted — fall back to a 3-way merge against the index.
     }
     try {
-      await git(repoRoot, ['apply', '--3way', '--whitespace=nowarn', patchFile])
+      // `--3way` normally consults the user's real index, which may legitimately
+      // differ from their working tree. That produced the recurring "does not match
+      // index" resolver failures. Snapshot the current working tree and run the
+      // three-way apply through a throwaway index instead; the user's staged work is
+      // never read or mutated.
+      const live = await captureBase(repoRoot, captureIndex)
+      const env = { GIT_INDEX_FILE: applyIndex }
+      await git(repoRoot, ['read-tree', live], env)
+      await git(repoRoot, ['update-index', '--refresh'], env)
+      await git(repoRoot, ['apply', '--3way', '--whitespace=nowarn', patchFile], env)
       return { ok: true, conflict: false }
     } catch (e) {
       // `git apply --3way` exits non-zero on overlap but still writes the markers.
@@ -272,6 +311,8 @@ export async function applyToWorkingTree(
     }
   } finally {
     await rm(patchFile, { force: true }).catch(() => {})
+    await rm(applyIndex, { force: true }).catch(() => {})
+    await rm(captureIndex, { force: true }).catch(() => {})
   }
 }
 

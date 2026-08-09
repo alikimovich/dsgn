@@ -387,6 +387,13 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       landing/discard detaches the still-live worktree and deletes the branch, and the
       next `beforeTurn` recreates it for crash recovery. `src/main/repo-write-queue.ts`,
       `src/main/{chat-isolation,chat-worktrees,worktrees}.ts`, `test/live-commit.mjs`.
+- [x] **Resolver independence + artifact/marker safety.** ✅ 2026-08-08 — the
+      3-way path now uses a temporary index seeded from the live working tree, leaving
+      the user's staged state untouched and eliminating `does not match index` failures.
+      `.env*` secrets, `node_modules`, `*.tsbuildinfo`, and sidecars are excluded at
+      snapshot/turn/live-commit boundaries; unresolved marker triplets remain parked.
+      Isolation setup fails closed. `src/main/{worktrees,chat-worktrees,live-commit}.ts`,
+      `test/{chat-worktrees,live-commit}.mjs`.
 
 ## v10 — Styles tab + AI-surfaced control panels (2026-07-18, user-requested) — SHIPPED
 
