@@ -14,6 +14,7 @@ import type { SourceView } from '../../../shared/api'
 import { useCodeDrawer, usePanelInset } from '../store'
 import { zedSearch } from './editor-search'
 import FileTreePanel from './FileTreePanel'
+import MediaPreview from './MediaPreview'
 
 /** Default (collapsed) height of the drawer + the native-preview strip it reserves. */
 const DRAWER_H = 300
@@ -171,6 +172,9 @@ export default function CodeDrawer({
   // the dirty comparison. A ref so the save keybinding always sees the latest.
   const baselineRef = useRef<string>('')
   const [meta, setMeta] = useState<{ file: string; line: number } | null>(null)
+  // Set when the opened file isn't text (image/video/audio, or another binary):
+  // the media preview replaces CodeMirror entirely for as long as it's showing.
+  const [preview, setPreview] = useState<SourceView | null>(null)
   const [dirty, setDirty] = useState(false)
   const [status, setStatus] = useState<'idle' | 'saving' | 'conflict' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
@@ -281,6 +285,7 @@ export default function CodeDrawer({
   useEffect(() => {
     let disposed = false
     setMeta(null)
+    setPreview(null)
     setDirty(false)
     setStatus('idle')
     setErrorMsg(null)
@@ -291,12 +296,20 @@ export default function CodeDrawer({
     viewRef.current = null
 
     window.api.source.read(root, source).then((view: SourceView | null) => {
-      if (disposed || !hostRef.current) return
+      if (disposed) return
       if (!view) {
         setStatus('error')
         setErrorMsg('Could not read the source file.')
         return
       }
+      // Not text: hand it to the media preview instead of building an editor.
+      // Checked before the host ref, since that div unmounts once we do.
+      if (view.media || view.binary) {
+        setMeta({ file: view.file, line: view.line })
+        setPreview(view)
+        return
+      }
+      if (!hostRef.current) return
       baselineRef.current = view.code
       setMeta({ file: view.file, line: view.line })
 
@@ -608,7 +621,8 @@ export default function CodeDrawer({
             className="codedrawer__file min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11.5px] text-muted-foreground"
             style={isWindow ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
           >
-            {meta ? `${meta.file}:${meta.line}` : 'Loading…'}
+            {/* A line number is meaningless for a picture — show the path alone. */}
+            {meta ? (preview ? meta.file : `${meta.file}:${meta.line}`) : 'Loading…'}
             {dirty && (
               <span className="codedrawer__dirty ml-1.5 text-amber-600" title="Unsaved changes">
                 ●
@@ -638,17 +652,20 @@ export default function CodeDrawer({
           >
             IDE
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="codedrawer__save size-6"
-            onClick={() => void save()}
-            disabled={!dirty || status === 'saving'}
-            aria-label={status === 'saving' ? 'Saving…' : 'Save'}
-            title={status === 'saving' ? 'Saving…' : 'Save (⌘S)'}
-          >
-            <Save className="size-3.5" />
-          </Button>
+          {/* Nothing to save from a preview — the file isn't editable as text. */}
+          {!preview && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="codedrawer__save size-6"
+              onClick={() => void save()}
+              disabled={!dirty || status === 'saving'}
+              aria-label={status === 'saving' ? 'Saving…' : 'Save'}
+              title={status === 'saving' ? 'Saving…' : 'Save (⌘S)'}
+            >
+              <Save className="size-3.5" />
+            </Button>
+          )}
           {!isWindow && (
             <Button
               variant="ghost"
@@ -675,10 +692,14 @@ export default function CodeDrawer({
             </Button>
           )}
         </div>
-        <div
-          ref={hostRef}
-          className="codedrawer__editor min-h-0 flex-1 overflow-hidden text-[12px]"
-        />
+        {preview ? (
+          <MediaPreview view={preview} />
+        ) : (
+          <div
+            ref={hostRef}
+            className="codedrawer__editor min-h-0 flex-1 overflow-hidden text-[12px]"
+          />
+        )}
       </div>
     </div>
   )

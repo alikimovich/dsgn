@@ -39,6 +39,44 @@ other way round, with the row at rest reduced to just its folder and name.
 `src/renderer/src/components/Rail.tsx`, `src/renderer/src/components/RailChatRow.tsx`,
 `src/renderer/src/styles.css`, `test/rail-chat-status.mjs`,
 `test/rail-chat-overflow.mjs`, `test/history-ui.mjs`.
+## 2026-08-09 — The editor shows media instead of decoding it
+
+Clicking `public/images/team/arkady.PNG` in the pop-out editor's file tree used to
+`readFile(…, 'utf8')` it and pour the result into CodeMirror: thousands of lines of
+mojibake with a line-number gutter down the side. `source:read` now classifies the
+file first. Images/video/audio come back as `media` (an empty `code` plus a
+`praxis-media://` URL) and every other non-text file as `binary`; the drawer swaps
+CodeMirror for `MediaPreview` — the picture on a transparency checkerboard, a
+`<video>`/`<audio>` with controls, or a plain placeholder — with a footer reading
+`96 × 96 · 301 B · image/png` and a Fit/1:1 toggle. Save disappears (there is nothing
+to save), the header drops the meaningless `:1`, and `source:write` refuses these
+files outright so no future caller can utf8 round-trip a PNG into corruption.
+
+Why a custom protocol rather than the `data:` URL the composer's attachments use: a
+video has to be RANGE-servable or Chromium can't seek it, and base64ing one through
+IPC to sit in the renderer's heap is exactly the wrong shape. `file://` was the other
+option and it hands the renderer a read primitive for the whole disk. So main
+registers `praxis-media://` (privileged: standard + secure + stream + fetch) and
+serves an opaque per-file TOKEN — the renderer never names a path, so the scheme
+can't be widened into an arbitrary-file read even from a compromised renderer.
+Responses stream from `createReadStream`, honour `Range` (206 + `Content-Range`, 416
+when unsatisfiable) and carry `no-store`, since the token is a hash of the path and
+a stale cached copy would outlive an edit. The renderer's CSP gained
+`img-src … praxis-media:` and a `media-src` (it had none — `<video>` was falling back
+to `default-src 'self'`); `connect-src` was deliberately NOT widened, which is why the
+protocol test drives `net.fetch` from main.
+
+Detection is by extension and case-insensitive — the reported file was `.PNG`, and
+`extname().toLowerCase()` is the whole fix for a class of asset that ships uppercase.
+`.svg` is deliberately absent from the media table: it's markup the user edits, so it
+stays text. The binary fallback is a NUL/U+FFFD sniff on the decoded content, which
+also catches the fonts and archives that were garbling the same way.
+
+`src/main/media.ts`, `src/main/media-types.ts`, `src/main/props.ts`,
+`src/main/index.ts`, `src/shared/api.ts`, `src/renderer/index.html`,
+`src/renderer/src/components/MediaPreview.tsx`,
+`src/renderer/src/components/CodeDrawer.tsx`, `test/media-types.mjs`,
+`test/code-drawer.mjs` (+ a 301-byte `Logo.PNG` fixture, uppercase on purpose).
 
 ## 2026-08-09 — The rail's per-project controls sort themselves out
 

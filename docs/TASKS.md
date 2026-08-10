@@ -3,6 +3,20 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Editor media previews (2026-08-09, user-reported)
+
+- [x] **Opening an image in the editor showed its bytes as text.** ✅ 2026-08-09 —
+      `source:read` now classifies media/binary instead of always decoding utf8, and
+      the drawer renders `MediaPreview` (image on a checkerboard, video/audio with
+      controls, placeholder otherwise) served over a token-scoped, range-capable
+      `praxis-media://` protocol. See PROGRESS 2026-08-09.
+- [ ] **Give the file tree a type hint.** `source:tree` returns bare paths, so the
+      sidebar can't show an image icon or a thumbnail until it carries per-entry
+      metadata — and the editor can't warn before opening a 200 MB asset.
+- [ ] **No video fixture in the suite.** `test/code-drawer.mjs` proves the protocol's
+      206/`Content-Range` path with a PNG, but nothing exercises a real `<video>`
+      (seeking, `video/quicktime` on a .mov). Needs a checked-in seconds-long clip.
+
 ## Main chat, child agents, and project memory (2026-08-08)
 
 - [x] **Make Main a stable, visible project role.** ✅ 2026-08-08 — Main is pinned

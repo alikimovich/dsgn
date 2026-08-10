@@ -79,6 +79,13 @@ src/
                     (source:create-file/rename-file/delete-file). Pure; every
                     renderer-supplied path is re-validated (no traversal, no
                     .git/.praxis/.dsgn/node_modules), delete goes to the OS trash
+    media.ts / media-types.ts   the editor's media viewer: opening a .png/.mp4 must
+                    SHOW it, not decode its bytes as utf8. media-types is the pure
+                    half (ext→kind/MIME, binary sniff, HTTP Range parsing); media.ts
+                    owns the `praxis-media://` protocol — main hands the renderer an
+                    opaque per-file token, so the scheme can never be aimed at a path
+                    the renderer chose. Streamed + range-servable (a <video> can't
+                    seek otherwise, and a big one must not cross IPC as base64)
     agent.ts        persistent multi-turn agent session (streams over agent:* IPC)
     attachments.ts  gives a PASTED composer image a path (attachments:save writes
                     the clipboard bytes under <userData>/praxis/attachments so the
