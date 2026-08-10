@@ -29,6 +29,7 @@ import { createProjectFile, deleteProjectFile, renameProjectFile } from './file-
 import { listProjectFiles } from './file-tree'
 import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
 import { registerGithubIpc } from './github'
+import { registerMediaProtocol, registerMediaScheme } from './media'
 import { applyMoveNode } from './move-node'
 import { registerPreviewSource } from './preview-state'
 import { registerPropsIpc } from './props'
@@ -1184,7 +1185,12 @@ if (process.env['ELECTRON_RENDERER_URL']) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env['PRAXIS_DEBUG_PORT'] ?? '9222')
 }
 
+// The editor's image/video scheme. Privileges are frozen at app-ready, so this
+// has to run at module scope — registerMediaProtocol() (the handler) comes later.
+registerMediaScheme()
+
 app.whenReady().then(() => {
+  registerMediaProtocol()
   // macOS dock icon comes from the bundle's .icns (scripts/patch-electron.mjs
   // installs ours into the dev Electron.app). Do NOT app.dock.setIcon() here:
   // runtime dock images skip the system's icon treatment on macOS 26, so they

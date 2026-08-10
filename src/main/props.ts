@@ -1,7 +1,7 @@
 import { ipcMain, shell } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile, stat, writeFile } from 'fs/promises'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from 'path'
 import type {
@@ -21,6 +21,8 @@ import {
   inspectSvelteProps,
   removeSvelteProp
 } from './props-svelte'
+import { looksBinary, mediaTypeFor } from './media-types'
+import { mediaUrl } from './media'
 import { tokenReference } from '../shared/token-match'
 import { swapTailwindClass } from './tw-classes'
 import { spliceHtmlText } from './html-source'
@@ -1061,17 +1063,50 @@ async function applyTokenEdit(root: string, edit: TokenEdit): Promise<PropEditRe
  * whole file (surrounding context stays visible) plus the element's full line
  * span so the renderer can highlight it. Svelte / unparsable files fall back to
  * the stamp line alone — the peek still works, just without the span.
+ *
+ * Images/video/audio come back as `media` (registered with the praxis-media
+ * protocol so the renderer can show them) and other non-text files as `binary`;
+ * both carry an empty `code`. Before that, a `.png` opened here was decoded as
+ * utf8 and rendered as thousands of lines of mojibake.
  */
 async function readSourceView(root: string, source: string): Promise<SourceView | null> {
   const loc = resolveSource(root, source)
   if (!loc) return null
+  const rel = relative(root, loc.file)
+
+  const media = mediaTypeFor(loc.file)
+  if (media) {
+    let bytes: number
+    try {
+      bytes = (await stat(loc.file)).size
+    } catch {
+      return null
+    }
+    return {
+      file: rel,
+      code: '',
+      line: loc.line,
+      media: { ...media, url: mediaUrl(loc.file) },
+      bytes
+    }
+  }
+
   let code: string
   try {
     code = await readFile(loc.file, 'utf8')
   } catch {
     return null
   }
-  const view: SourceView = { file: relative(root, loc.file), code, line: loc.line }
+  if (looksBinary(code)) {
+    let bytes = 0
+    try {
+      bytes = (await stat(loc.file)).size
+    } catch {
+      /* size is cosmetic — the placeholder still renders without it */
+    }
+    return { file: rel, code: '', line: loc.line, binary: true, bytes }
+  }
+  const view: SourceView = { file: rel, code, line: loc.line }
   if (!loc.file.endsWith('.svelte')) {
     try {
       const found = await findElementAtLine(code, loc.line, loc.column)
@@ -1108,12 +1143,16 @@ async function writeSourceFile(
 ): Promise<SourceWriteResult> {
   const loc = resolveSource(root, source)
   if (!loc) return { ok: false, error: 'Could not resolve the source location.' }
+  // The drawer shows these as a preview/placeholder rather than text, so a save
+  // could only ever be a utf8 round-trip that corrupts them.
+  if (mediaTypeFor(loc.file)) return { ok: false, error: 'This file is not editable as text.' }
   let current: string
   try {
     current = await readFile(loc.file, 'utf8')
   } catch {
     return { ok: false, error: 'Could not read the source file.' }
   }
+  if (looksBinary(current)) return { ok: false, error: 'This file is not editable as text.' }
   if (current !== baseline) return { ok: false, conflict: true }
   const res = await commitEdit(root, loc.file, current, content, `${source}:drawer`)
   return res.applied ? { ok: true } : { ok: false, error: res.error }
