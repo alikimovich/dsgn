@@ -101,9 +101,16 @@ try {
     () =>
       document.querySelectorAll('.rail__chats > .rail__chat-item').length === 3 &&
       document.querySelectorAll('.rail__agents .rail__chat-item').length === 1 &&
-      document.querySelectorAll('.rail__history .rail__chat-item').length === 1,
+      document.querySelector('.rail__section-toggle'),
     undefined,
     { timeout: 5000 }
+  )
+  // History folds shut by default — unfold it so its rows are on screen.
+  await win.evaluate(() => document.querySelector('.rail__section-toggle').click())
+  await win.waitForFunction(
+    () => document.querySelectorAll('.rail__history .rail__chat-item').length === 1,
+    undefined,
+    { timeout: 3000 }
   )
 
   // Main is pinned first; secondary chats render newest-first. History is separate.
@@ -137,34 +144,111 @@ try {
     throw new Error(`nested agent missing or mislabeled: ${JSON.stringify(nested)}`)
   }
 
-  // Alignment: every dot centres on the active project's folder glyph, and the
-  // chat names still start where they always did (the project name's indent).
+  // Alignment: EVERY leading glyph in a project's block — the status dots, the
+  // "New chat" +, the History fold chevron — centres on the active project's
+  // folder glyph, and every label starts at the project name's indent.
   const geom = await win.evaluate(() => {
     const mid = (el) => {
       const r = el.getBoundingClientRect()
       return { x: r.left + r.width / 2, left: r.left }
     }
+    const glyph = (sel) => mid(document.querySelector(sel)).x
+    // The section headings are bare text inside their box (padding, and for the
+    // History toggle a leading chevron, sit between the border box and the first
+    // glyph), so measure the text itself rather than the element's rect.
+    const textLeft = (sel) => {
+      const el = document.querySelector(sel)
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
+      let node = walker.nextNode()
+      while (node && !node.textContent.trim()) node = walker.nextNode()
+      const range = document.createRange()
+      range.selectNode(node)
+      return range.getBoundingClientRect().left
+    }
+    // Nested background-agent rows are deliberately indented under their parent
+    // chat, so they're not part of this grid.
+    const flat = '.rail__chats > .rail__chat-item, .rail__history > .rail__chat-item'
     return {
-      folder: mid(document.querySelector('.rail__item--active .rail__glyph')).x,
-      dots: [
-        ...document.querySelectorAll('.rail__chats > .rail__chat-item .rail__chat-status')
-      ].map((d) => mid(d).x),
-      nameLefts: [
-        ...document.querySelectorAll('.rail__chats > .rail__chat-item .rail__chat-name')
-      ].map((n) => mid(n).left),
+      folder: glyph('.rail__item--active .rail__glyph'),
+      glyphs: [
+        ...[...document.querySelectorAll(flat)].map(
+          (li) => mid(li.querySelector('.rail__chat-status')).x
+        ),
+        glyph('.rail__new-chat svg'),
+        glyph('.rail__section-chevron')
+      ],
+      labelLefts: [
+        ...[...document.querySelectorAll(flat)].map(
+          (li) => mid(li.querySelector('.rail__chat-name')).left
+        ),
+        mid(document.querySelector('.rail__new-chat span')).left,
+        // Both section headings: "Chats" (plain) and "History" (the fold toggle).
+        textLeft('.rail__section-label:not(.rail__section-toggle)'),
+        textLeft('.rail__section-toggle')
+      ],
       projectNameLeft: mid(document.querySelector('.rail__item--active .rail__name')).left
     }
   })
-  for (const x of geom.dots) {
+  for (const x of geom.glyphs) {
     if (Math.abs(x - geom.folder) > 0.5)
-      throw new Error(`status dot centre ${x} ≠ folder centre ${geom.folder}`)
+      throw new Error(`rail glyph centre ${x} ≠ folder centre ${geom.folder}`)
   }
-  for (const left of geom.nameLefts) {
+  for (const left of geom.labelLefts) {
     if (Math.abs(left - geom.projectNameLeft) > 0.5)
-      throw new Error(`chat name left ${left} ≠ project name left ${geom.projectNameLeft}`)
+      throw new Error(`rail label left ${left} ≠ project name left ${geom.projectNameLeft}`)
+  }
+
+  // Every chat row's trailing meta ends on ONE line, whether or not the row has
+  // hover actions: Main has neither pencil nor ×, the others have both, and the
+  // buttons overlay the meta instead of shortening it.
+  const metaRights = await win.evaluate(() =>
+    [
+      ...document.querySelectorAll(
+        '.rail__chats > .rail__chat-item, .rail__history > .rail__chat-item'
+      )
+    ]
+      .map((li) => li.querySelector('.rail__model, .rail__chat-time, .rail__chat-badge'))
+      .filter(Boolean)
+      .map((el) => el.getBoundingClientRect().right)
+  )
+  if (metaRights.length < 3) throw new Error(`expected several meta chips, got ${metaRights.length}`)
+  for (const right of metaRights) {
+    if (Math.abs(right - metaRights[0]) > 0.5)
+      throw new Error(`chat meta right edge ${right} ≠ ${metaRights[0]}`)
   }
 
   await win.screenshot({ path: join(artifacts, '20-rail-chat-status.png') })
+
+  // Hovering a row with actions reveals them OVER its meta (which fades out) and
+  // arms them for clicks — they're pointer-events:none while hidden so an
+  // invisible × can't eat a click meant for the row itself.
+  const box = await win.evaluate(() => {
+    const r = document
+      .querySelector('.rail__chats > .rail__chat-item:nth-child(2)')
+      .getBoundingClientRect()
+    return { x: r.left + 40, y: r.top + r.height / 2 }
+  })
+  await win.mouse.move(box.x, box.y)
+  await win.waitForFunction(
+    () => {
+      const li = document.querySelector('.rail__chats > .rail__chat-item:nth-child(2)')
+      const cs = (sel) => getComputedStyle(li.querySelector(sel))
+      return (
+        cs('.rail__chat-actions').opacity === '1' &&
+        cs('.rail__chat-actions').pointerEvents === 'auto' &&
+        cs('.rail__model').opacity === '0'
+      )
+    },
+    undefined,
+    { timeout: 3000 }
+  )
+  await win.screenshot({ path: join(artifacts, '20-rail-chat-hover.png') })
+  // Main has no actions at all, so hovering it must NOT hide its model label.
+  await win.evaluate(() => {
+    const li = document.querySelector('.rail__chats > .rail__chat-item')
+    if (li.classList.contains('rail__chat-item--actions'))
+      throw new Error('Main should carry no row actions')
+  })
 
   // Opening a finished chat clears its green dot — reading it IS the review.
   await win.evaluate(() => {

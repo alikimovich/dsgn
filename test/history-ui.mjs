@@ -71,6 +71,10 @@ try {
   })
   assert(key, 'workspace should produce a project key')
 
+  // The History section starts folded — unfold it to get at the past chat rows.
+  await win.waitForSelector('.rail__section-toggle', { timeout: 5000 })
+  await win.evaluate(() => document.querySelector('.rail__section-toggle').click())
+
   // The rail shows the past chat row: an auto-generated name (from the first
   // user prompt) + a compact trailing "time ago", no status dot.
   const pastChat = '.rail__chat:has(.rail__chat-time)'
@@ -137,7 +141,11 @@ try {
 
   // Delete the row → it leaves the rail (drives useHistory.remove; the main-side
   // sessions:remove is a harmless no-op on a fake id).
-  await win.click('.rail__chat-item:has(.rail__chat-time) .rail__chat-x')
+  // JS-click: the row's actions are a hover-revealed overlay (pointer-events off
+  // until the row is hovered), so drive the handler directly.
+  await win.evaluate(() =>
+    document.querySelector('.rail__chat-item:has(.rail__chat-time) .rail__chat-x').click()
+  )
   await win.waitForFunction(
     () => !document.querySelector('.rail__chat-time'),
     { timeout: 5000 }

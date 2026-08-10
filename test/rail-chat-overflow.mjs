@@ -1,9 +1,9 @@
 /**
- * Rail chat-list overflow — a project's previous chats are capped at 3 rows
- * in their own History section, with a muted "Show N more" row
- * that expands to the full list and a "Show less" that re-tucks it. That section
- * is also an accordion — its heading folds the list away entirely. History is
- * seeded straight into the exposed useHistory store (no real sessions needed).
+ * Rail chat-list overflow — a project's previous chats live in their own History
+ * section, which starts FOLDED (only the heading + its count show) and unfolds to
+ * a list capped at 3 rows, with a muted "Show N more" row that expands to the
+ * full list and a "Show less" that re-tucks it. History is seeded straight into
+ * the exposed useHistory store (no real sessions needed).
  *
  * Run with: bun run test:rail-overflow
  */
@@ -64,7 +64,31 @@ try {
     window.__praxisHistory.setState((s) => ({ byKey: { ...s.byKey, [key]: recs } }))
   }, fixture)
 
-  // Main remains visible; History is capped to 3 records + the toggle row.
+  // JS-click: the rail re-renders on unrelated store ticks, so Playwright's
+  // stability wait sees the button perpetually "detached" (same reason
+  // code-drawer.mjs JS-clicks). The DOM handler runs fine.
+  const clickHeading = () =>
+    win.evaluate(() => {
+      const b = document.querySelector('.rail__section-toggle')
+      if (!b) throw new Error('history heading missing')
+      b.click()
+    })
+
+  // History starts FOLDED: the heading (with its count) is there, the list isn't.
+  await win.waitForFunction(
+    () => document.querySelector('.rail__section-toggle')?.getAttribute('aria-expanded') === 'false',
+    undefined,
+    { timeout: 3000 }
+  )
+  const folded = await win.evaluate(() => {
+    const b = document.querySelector('.rail__section-toggle')
+    return { list: !!document.querySelector('.rail__history'), text: b?.textContent }
+  })
+  if (folded.list) throw new Error('history list should be folded away by default')
+  if (!folded.text?.includes('9')) throw new Error(`folded heading lost its count: ${folded.text}`)
+
+  // Unfold → Main remains visible; History is capped to 3 records + the toggle row.
+  await clickHeading()
   await win.waitForFunction(
     () => document.querySelectorAll('.rail__history .rail__chat-item').length === 4,
     undefined,
@@ -74,9 +98,6 @@ try {
   if (capped.more !== 'Show 6 more') throw new Error(`toggle row reads "${capped.more}"`)
   await win.screenshot({ path: join(artifacts, '19-rail-overflow-capped.png') })
 
-  // JS-click: the rail re-renders on unrelated store ticks, so Playwright's
-  // stability wait sees the button perpetually "detached" (same reason
-  // code-drawer.mjs JS-clicks). The DOM handler runs fine.
   const clickMore = () =>
     win.evaluate(() => {
       const b = document.querySelector('.rail__chat--more')
@@ -101,29 +122,18 @@ try {
   await clickMore()
   await waitRows(4)
 
-  // The History heading is an accordion on top of that cap: folding it takes the
-  // whole list away (the heading — and its count — stays, so the chats are still
-  // findable), and re-opening restores the capped list.
-  const clickHeading = () =>
-    win.evaluate(() => {
-      const b = document.querySelector('.rail__section-toggle')
-      if (!b) throw new Error('history heading missing')
-      b.click()
-    })
+  // The heading is an accordion on top of that cap: clicking it again re-folds
+  // the whole list, and a third click restores the capped one.
   await clickHeading()
   await win.waitForFunction(() => !document.querySelector('.rail__history'), undefined, {
     timeout: 3000
   })
-  const folded = await win.evaluate(() => {
-    const b = document.querySelector('.rail__section-toggle')
-    return { expanded: b?.getAttribute('aria-expanded'), text: b?.textContent }
-  })
-  if (folded.expanded !== 'false') throw new Error(`folded heading reads ${folded.expanded}`)
-  if (!folded.text?.includes('9')) throw new Error(`folded heading lost its count: ${folded.text}`)
   await clickHeading()
   await waitRows(4)
 
-  console.log('RAIL-OVERFLOW OK — 3 capped + toggle, 9 expanded, re-tucked, accordion folds')
+  console.log(
+    'RAIL-OVERFLOW OK — folded by default, 3 capped + toggle, 9 expanded, re-tucked, re-folds'
+  )
 } catch (err) {
   console.error('RAIL-OVERFLOW FAILED:', err?.message ?? err)
   process.exitCode = 1

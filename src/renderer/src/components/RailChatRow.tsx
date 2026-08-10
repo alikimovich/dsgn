@@ -42,7 +42,10 @@ interface Props {
  * One row in the rail's per-project chat list: a status dot in the same 16px slot
  * the project's folder icon occupies (so dots and folders share a centre line),
  * then the chat name — still flush at the project name's indent — then whatever
- * trailing meta the caller passes, a hover-revealed rename pencil, and the close ×.
+ * trailing meta the caller passes. The hover-revealed rename pencil and close ×
+ * float OVER that meta rather than sitting in the row's flow, so every row —
+ * including the ones with no actions at all (Main, "Show N more") — ends its
+ * meta on the same trailing edge.
  *
  * Renaming happens in place: the pencil swaps the row for an input seeded with the
  * current name. Enter/blur commits, Escape reverts. The caller owns persistence
@@ -112,8 +115,13 @@ export default function RailChatRow({
       </li>
     );
 
+  const hasActions = Boolean(onRename || onClose)
+
   return (
-    <li className="rail__chat-item" title={spawn ? title : undefined}>
+    <li
+      className={`rail__chat-item ${hasActions ? "rail__chat-item--actions" : ""}`}
+      title={spawn ? title : undefined}
+    >
       {spawn ? (
         <span className="rail__chat rail__chat--spawn">
           {dot}
@@ -132,31 +140,35 @@ export default function RailChatRow({
           {children}
         </button>
       )}
-      {onRename && (
-        <button
-          className="rail__chat-rename"
-          onClick={(e) => {
-            e.stopPropagation();
-            setEditing(true);
-          }}
-          aria-label={`Rename chat ${name}`}
-          title="Rename chat"
-        >
-          <Pencil className="size-3" aria-hidden="true" />
-        </button>
-      )}
-      {onClose && (
-        <button
-          className="rail__chat-x"
-          onClick={(e) => {
-            e.stopPropagation();
-            onClose();
-          }}
-          aria-label={closeLabel ?? `Close chat ${name}`}
-          title={closeTitle ?? "Close chat"}
-        >
-          ×
-        </button>
+      {hasActions && (
+        <span className="rail__chat-actions">
+          {onRename && (
+            <button
+              className="rail__chat-rename"
+              onClick={(e) => {
+                e.stopPropagation();
+                setEditing(true);
+              }}
+              aria-label={`Rename chat ${name}`}
+              title="Rename chat"
+            >
+              <Pencil className="size-3" aria-hidden="true" />
+            </button>
+          )}
+          {onClose && (
+            <button
+              className="rail__chat-x"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose();
+              }}
+              aria-label={closeLabel ?? `Close chat ${name}`}
+              title={closeTitle ?? "Close chat"}
+            >
+              ×
+            </button>
+          )}
+        </span>
       )}
     </li>
   );
