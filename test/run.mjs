@@ -60,6 +60,7 @@ const UNIT = [
   'live-commit',
   'file-tree',
   'file-ops',
+  'media-types',
   'attachments',
   'rules',
   'tw-classes',

@@ -588,21 +588,44 @@ export interface PreviewComment {
   text: string
 }
 
+/** Previewable media the editor shows instead of opening as text. */
+export interface SourceMedia {
+  kind: 'image' | 'video' | 'audio'
+  /** MIME type, derived from the extension. */
+  mediaType: string
+  /**
+   * `praxis-media://` URL the renderer can point an <img>/<video>/<audio> at.
+   * Opaque and per-file: main streams it from disk (range requests included), so
+   * a big video never has to cross IPC as base64.
+   */
+  url: string
+}
+
 /**
  * A stamped element's source file, read for the inspector's inline code peek —
  * the whole file (so surrounding context is visible) plus the stamp line and,
  * when the JSX parse resolves it, the element's full line span for highlighting.
+ *
+ * A file that isn't text carries `media` (previewable) or `binary` (not) instead,
+ * with an empty `code`: decoding a PNG as utf8 and pouring it into the editor is
+ * the bug this avoids.
  */
 export interface SourceView {
   /** Repo-relative file path (from the stamp). */
   file: string
-  /** The full file content. */
+  /** The full file content — empty for `media` / `binary` files. */
   code: string
   /** 1-based line the stamp points at. */
   line: number
   /** 1-based inclusive line span of the stamped element (open → close tag). */
   elementStart?: number
   elementEnd?: number
+  /** Set when the file is an image/video/audio: show it, don't edit it. */
+  media?: SourceMedia
+  /** Set when the file is binary but not previewable media (font, archive, …). */
+  binary?: boolean
+  /** Size on disk, for the preview's footer. Present with `media` / `binary`. */
+  bytes?: number
 }
 
 /** Result of a whole-file save from the v9 code drawer. */
