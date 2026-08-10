@@ -2,6 +2,43 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-09 — One indent grid for the rail, and actions that stop reserving space
+
+Yesterday's re-sort put the rail's controls in the right places but left them on four
+different vertical lines. Everything inside a project's block now shares one grid: an
+8px pad, a 16px glyph slot, a 7px gap, labels at 31px. The folder icon and the chat
+status dots were already there; "New chat" was inset a further 6px by its own margin
+(its + landed 5px right of the dot column, its label at 35px), and the History fold
+chevron sat in a 12px slot at 15px. Both now sit in the same 16px slot — the + as a
+14px glyph with 1px side margins, the chevron as a 12px one with 2px, and the chevron's
+5px right margin absorbs the difference between the label's 4px gap and the grid's 7px
+so the heading text still lands at 31px. `test/rail-chat-status.mjs` asserts the whole
+grid now (every dot, the +, the chevron; every chat name, the New-chat label, both
+section headings) rather than just the dots and the chat names.
+
+The other misalignment was on the right. A chat row's rename pencil and close × were
+flex children, so they SHORTENED the model/time slot of exactly the rows that have
+them — which is why Main, the one row with neither, pushed its model label ~34px
+further right than every sibling, and why every other row carried a permanent empty
+gutter. They're now an absolutely-positioned overlay: every row's meta ends on the same
+trailing edge, and on hover the meta fades out underneath the buttons instead of the
+row reserving space for them. The overlay is `pointer-events: none` while hidden so an
+invisible × can't eat a click meant for the row; the parent hover arms it before it's
+reachable, and `:focus-within` keeps it usable from the keyboard. A model label (≤66px)
+is wider than the two buttons, so they land entirely inside it; a history row's "3h"
+isn't, so those rows give the name 24px of hover padding to re-ellipsise before the
+buttons rather than run under them.
+
+Two defaults flipped with it. History now starts FOLDED (`historyOpened`, the inverse
+of yesterday's `historyClosed`): the live chats are the actionable list, and past chats
+otherwise push every sibling project down the rail. And the project-memory brain became
+hover-revealed like × — yesterday's reasoning was that an always-on brain next to a
+hover-only × read as two controls of unequal weight, and the same argument works the
+other way round, with the row at rest reduced to just its folder and name.
+
+`src/renderer/src/components/Rail.tsx`, `src/renderer/src/components/RailChatRow.tsx`,
+`src/renderer/src/styles.css`, `test/rail-chat-status.mjs`,
+`test/rail-chat-overflow.mjs`, `test/history-ui.mjs`.
 ## 2026-08-09 — The editor shows media instead of decoding it
 
 Clicking `public/images/team/arkady.PNG` in the pop-out editor's file tree used to

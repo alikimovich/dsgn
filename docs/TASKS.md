@@ -31,6 +31,12 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       project memory is a brain action on the project row (× is hover-only now),
       "New chat" is a full-width button under the chat list it appends to, and
       History folds as an accordion. See PROGRESS 2026-08-09.
+- [x] **Put the whole rail block on one indent grid.** ✅ 2026-08-09 — the "New chat"
+      + and the History chevron moved into the same 16px glyph slot as the folder and
+      the status dots (labels all at 31px); row actions became a hover overlay so
+      every row's model/time ends on one trailing edge instead of Main's running 34px
+      further right; History now starts folded and the memory brain is hover-revealed
+      like ×. See PROGRESS 2026-08-09.
 - [ ] **Suggest memory updates from conversation decisions.** Keep this reviewable:
       propose additions/removals in the memory editor instead of silently rewriting
       standing project context.

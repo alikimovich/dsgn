@@ -745,11 +745,10 @@ body.is-fullscreen .sidebar-toggle {
     color: var(--text-muted);
     cursor: pointer;
     opacity: 0;
+    transition: opacity 0.12s ease;
 }
-/* Hover-only: closing a project is the row's one destructive control, and the
-   brain next to it is always on — leaving × visible at rest would put the two a
-   few pixels apart with equal weight. */
-.rail__item:hover .rail__close {
+.rail__item:hover .rail__close,
+.rail__close:focus-visible {
     opacity: 1;
 }
 .rail__close:hover {
@@ -826,11 +825,13 @@ body.is-fullscreen .sidebar-toggle {
     opacity: 0.65;
 }
 /* A section label that FOLDS its list (History): same label, plus a leading
-   chevron that eats the label's indent (15px pad + 12px chevron + 4px gap =
-   the 31px the names sit at), so the heading text doesn't shift. */
+   chevron that eats the label's indent. The chevron sits in the SAME 16px slot
+   the status dots and the folder glyph occupy — 8px pad + 2px + 12px chevron +
+   2px — so it centres on that column, and its 5px right margin (+ the label's
+   own 4px gap) still lands the heading text at the names' 31px indent. */
 .rail__section-toggle {
     width: 100%;
-    padding-left: 15px;
+    padding-left: 8px;
     border: none;
     background: none;
     cursor: pointer;
@@ -846,6 +847,7 @@ body.is-fullscreen .sidebar-toggle {
 }
 .rail__section-chevron {
     flex: 0 0 auto;
+    margin: 0 5px 0 2px;
     transition: transform 0.12s ease;
 }
 .rail__section-chevron--open {
@@ -867,9 +869,9 @@ body.is-fullscreen .sidebar-toggle {
     padding-bottom: 4px;
     font-size: 11px;
 }
-/* Project memory — an icon action on the project row, next to ×. Sized like the
-   other row buttons but always visible (opacity, not hover-gated): it's a
-   destination, and hiding it made a per-project feature undiscoverable. */
+/* Project memory — an icon action on the project row, next to ×. Hover-gated the
+   same way, so the two row actions appear together and a project at rest is just
+   its folder and name. */
 .rail__memory {
     flex: 0 0 auto;
     width: 20px;
@@ -883,6 +885,11 @@ body.is-fullscreen .sidebar-toggle {
     background: none;
     color: var(--text-muted);
     cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+.rail__item:hover .rail__memory,
+.rail__memory:focus-visible {
     opacity: 0.7;
 }
 .rail__memory:hover {
@@ -898,6 +905,7 @@ body.is-fullscreen .sidebar-toggle {
     margin: 0;
 }
 .rail__chat-item {
+    position: relative;
     display: flex;
     align-items: center;
     border-radius: 6px;
@@ -973,12 +981,14 @@ body.is-fullscreen .sidebar-toggle {
     font-size: 9px;
     font-weight: 500;
     opacity: 0.75;
+    transition: opacity 0.12s ease;
 }
 .rail__chat-time {
     flex: 0 0 auto;
     font-size: 11px;
     color: var(--text-muted);
     opacity: 0.7;
+    transition: opacity 0.12s ease;
 }
 
 /* "Show N more / Show less" overflow row — quieter than a real chat row. */
@@ -997,6 +1007,7 @@ body.is-fullscreen .sidebar-toggle {
     letter-spacing: 0.01em;
     background: #fde68a;
     color: #92400e;
+    transition: opacity 0.12s ease;
 }
 .dark .rail__chat-badge {
     background: rgb(180 83 9 / 0.35);
@@ -1010,29 +1021,45 @@ body.is-fullscreen .sidebar-toggle {
 .rail__chat--spawn {
     cursor: default;
 }
-.rail__chat-x {
-    flex: 0 0 auto;
-    width: 16px;
-    height: 16px;
-    margin-right: 4px;
-    border: none;
-    border-radius: 4px;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    font-size: 13px;
-    line-height: 1;
+/* Row actions (rename pencil + close ×) float OVER the row's trailing meta
+   instead of sitting in its flow. In flow they shortened the model/time slot of
+   exactly the rows that HAVE them, which is why Main — which has neither — used
+   to push its model label ~34px further right than every other chat row. As an
+   overlay every row ends its meta on the same trailing edge, and the meta fades
+   out underneath on hover rather than the row reserving permanent empty space.
+   pointer-events are off while hidden so the invisible buttons can't swallow a
+   click meant for the row; the parent hover turns them on before they're
+   reachable, and :focus-within keeps them usable from the keyboard. */
+.rail__chat-actions {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 8px;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.12s ease;
+}
+.rail__chat-item:hover .rail__chat-actions,
+.rail__chat-actions:focus-within {
+    opacity: 1;
+    pointer-events: auto;
+}
+.rail__chat-item--actions:hover .rail__model,
+.rail__chat-item--actions:hover .rail__chat-time,
+.rail__chat-item--actions:hover .rail__chat-badge {
     opacity: 0;
 }
-.rail__chat-item:hover .rail__chat-x {
-    opacity: 1;
+/* A model label (≤66px) is wider than the two buttons, so they land entirely
+   inside it. A history row's "3h" isn't — the buttons would reach ~20px into the
+   name. Padding, not width, so only the text re-ellipsises: the row's own boxes
+   don't move. */
+.rail__history .rail__chat-item--actions:hover .rail__chat-name {
+    padding-right: 24px;
 }
-.rail__chat-x:hover {
-    background: var(--bg);
-    color: var(--text);
-}
-/* Rename affordance — same quiet, hover-revealed treatment as the close ×, so
-   the two read as one pair of row actions. */
+.rail__chat-x,
 .rail__chat-rename {
     flex: 0 0 auto;
     width: 16px;
@@ -1045,11 +1072,12 @@ body.is-fullscreen .sidebar-toggle {
     background: none;
     color: var(--text-muted);
     cursor: pointer;
-    opacity: 0;
 }
-.rail__chat-item:hover .rail__chat-rename {
-    opacity: 1;
+.rail__chat-x {
+    font-size: 13px;
+    line-height: 1;
 }
+.rail__chat-x:hover,
 .rail__chat-rename:hover {
     background: var(--bg);
     color: var(--text);
@@ -1083,10 +1111,12 @@ body.is-fullscreen .sidebar-toggle {
 
 /* v9 multi-chat — "New chat" starts another live chat for this project. It sits
    under the chat list as a full-width quiet row (it appends to that list), and
-   is inset to the chat rows' own margin so the two read as one stack. */
+   shares the chat rows' box exactly — same full width, same 8px padding, same
+   7px gap — so its + lands on the status-dot column and its label at the names'
+   31px indent instead of a further-right line of its own. */
 .rail__new-chat {
-    width: calc(100% - 12px);
-    margin: 1px 6px 0;
+    width: 100%;
+    margin: 1px 0 0;
     display: flex;
     align-items: center;
     gap: 7px;
@@ -1100,8 +1130,10 @@ body.is-fullscreen .sidebar-toggle {
     font-size: 11px;
     text-align: left;
 }
+/* 14px glyph centred in the 16px slot the status dots occupy. */
 .rail__new-chat svg {
     flex: 0 0 auto;
+    margin: 0 1px;
 }
 .rail__new-chat:hover {
     background: rgb(from var(--rail-text) r g b / 0.075);

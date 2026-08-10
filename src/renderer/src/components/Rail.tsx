@@ -73,11 +73,16 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
  * level. Clicking a project switches; × closes; clicking a chat opens/reviews it.
  *
  * Where the per-project controls live: the project ROW carries the two things
- * that act on the project itself — the memory brain (always visible) and ×
- * (hover-only, it's the destructive one). "New chat" is not a row glyph: it's a
- * full-width button under the chat list, because it appends to that list. The
- * previous-chats section is an accordion — its "History n" heading folds the
- * list away (open by default, session-only state, same as "Show N more").
+ * that act on the project itself — the memory brain and × — both hover-only, so
+ * a project at rest is just its folder and name. "New chat" is not a row glyph:
+ * it's a full-width button under the chat list, because it appends to that list.
+ * The previous-chats section is an accordion — its "History n" heading unfolds
+ * the list (CLOSED by default, session-only state, same as "Show N more").
+ *
+ * Everything in a project's block shares one indent grid: the folder glyph, the
+ * chat status dots, the "New chat" +, and the History chevron all centre on the
+ * same 16px slot, and every label (project name, chat names, section headings)
+ * starts at 31px. See the .rail__chat comment in styles.css for the arithmetic.
  *
  * The collapse/expand toggle no longer lives here — it floats by the traffic lights
  * (see App's `.sidebar-toggle`) so it stays reachable once the rail is gone. When
@@ -113,10 +118,10 @@ export default function Rail({
   // Projects whose FULL previous-chats list is shown (session-only, resets on
   // relaunch — a long history should re-tuck itself, like Cursor's sidebar).
   const [moreShown, setMoreShown] = useState<Set<string>>(new Set())
-  // Projects whose History accordion is folded shut. Open is the default (a
-  // project's past chats are worth seeing at a glance); this only remembers the
-  // ones the user deliberately closed, and it resets on relaunch like moreShown.
-  const [historyClosed, setHistoryClosed] = useState<Set<string>>(new Set())
+  // Projects whose History accordion the user has opened. CLOSED is the default
+  // — the live chats are the actionable list, and past chats otherwise push
+  // every sibling project down the rail. Resets on relaunch like moreShown.
+  const [historyOpened, setHistoryOpened] = useState<Set<string>>(new Set())
 
   // Every EXPANDED project lists its previous chats, not just the active one, so
   // pull the history of any that hasn't been fetched yet. App only loads it for
@@ -207,7 +212,7 @@ export default function Rail({
             const orphanAgents = ownedSpawnKeys
               .filter((sk) => !sessionKeys.includes(sk))
               .flatMap((sk) => spawns[sk])
-            const historyOpen = !historyClosed.has(p.key)
+            const historyOpen = historyOpened.has(p.key)
             const showAllPast = moreShown.has(p.key)
             const pastVisible = showAllPast ? past : past.slice(0, MAX_HISTORY_ROWS)
             const hiddenPast = past.length - pastVisible.length
@@ -257,8 +262,8 @@ export default function Rail({
                   </div>
                   {/* Project memory is an ACTION on the project row (it's about the
                       project, not about a chat), sitting where the quiet icon
-                      buttons live. Unlike ×, it stays visible without a hover —
-                      it's a place to go, not a destructive control. */}
+                      buttons live — hover-revealed like ×, so the row at rest is
+                      just the folder and the name. */}
                   <button
                     type="button"
                     className="rail__memory"
@@ -386,10 +391,10 @@ export default function Rail({
                           type="button"
                           className="rail__section-label rail__section-label--history rail__section-toggle"
                           onClick={() =>
-                            setHistoryClosed((prev) => {
+                            setHistoryOpened((prev) => {
                               const next = new Set(prev)
-                              if (historyOpen) next.add(p.key)
-                              else next.delete(p.key)
+                              if (historyOpen) next.delete(p.key)
+                              else next.add(p.key)
                               return next
                             })
                           }
