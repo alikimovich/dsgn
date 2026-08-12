@@ -17,8 +17,17 @@ import {
 } from './chat-worktrees'
 import { recordEdit } from './edit-history'
 import { isRepoRoot } from './git'
+import { commitLiveTurn } from './live-commit'
+import { enqueueRepoWrite, resetRepoWriteQueues } from './repo-write-queue'
 import type { SessionStore } from './sessions-store'
-import { branchPatch, deleteBranch, removeWorktree, type Worktree } from './worktrees'
+import type { TurnTerminalOutcome } from './turn-terminal'
+import {
+  branchPatch,
+  deleteBranch,
+  removeWorktree,
+  retireWorktreeBranch,
+  type Worktree
+} from './worktrees'
 
 const execFileP = promisify(execFile)
 const gitOut = async (cwd: string, args: string[]): Promise<string> =>
@@ -34,7 +43,9 @@ const gitOut = async (cwd: string, args: string[]): Promise<string> =>
  * long-lived `praxis/chat-<id>` worktree, forked before its session starts and used
  * as the session's `cwd` for the chat's whole life. After each completed agent turn
  * the chat's work auto-merges back onto the LIVE checkout (which the preview always
- * serves) so the preview updates between turns; on mid-turn drift the turn PARKS on
+ * serves) so the preview updates between turns, and the merged files are committed
+ * there too (`live-commit.ts`) so every turn is one revertable commit in the user's
+ * own history; on mid-turn drift the turn PARKS on
  * its branch for the existing SessionReview UI instead of clobbering the user's edit.
  *
  * Dependency-injected (`initChatIsolation`) so `agent.ts` barely grows — the pure git
@@ -42,10 +53,9 @@ const gitOut = async (cwd: string, args: string[]): Promise<string> =>
  * is passed in here. Non-repo / subdir / non-git projects get no worktree and every
  * hook no-ops (the chat runs on the live root exactly as before).
  *
- * Serialization: each chat has a single promise `chain`. `beforeTurn` (turn-start
- * live→worktree sync) and `afterTurn` (turn-end commit+merge) are both queued on it,
- * so a turn's sync always waits out the previous turn's in-flight merge — no races
- * with the next `agent:send`.
+ * Serialization has two levels: each chat has a promise `chain`, and every live-tree
+ * snapshot/landing also passes through a repository-scoped queue. The first orders a
+ * chat's own turns; the second protects the one shared live index/HEAD from other chats.
  */
 
 /** In-memory state for one isolated chat, keyed by its `sessionKey` (= emitKey). */
@@ -78,6 +88,7 @@ const states = new Map<string, ChatState>()
 export function initChatIsolation(d: Deps): void {
   deps = d
   states.clear()
+  resetRepoWriteQueues()
 }
 
 /** Emit an isolation event on the same webContents path other agent:* events use,
@@ -111,8 +122,8 @@ function emitIsolation(
  * The cwd a chat's session should run in: its private worktree when `liveRoot` is a
  * git repo root, else `liveRoot` itself (all hooks then no-op). Idempotent — a known
  * `sessionKey` (e.g. `agent:restart-chat` reusing the same chat) returns its existing
- * worktree rather than forking a second. On any `createWorktree` failure, falls back
- * to `liveRoot` so a broken repo never blocks the chat.
+ * worktree rather than forking a second. A repository-root isolation failure rejects
+ * the open instead of silently running the chat in the shared live checkout.
  */
 export async function isolatedCwd(liveRoot: string, sessionKey: string): Promise<string> {
   const existing = states.get(sessionKey)
@@ -121,7 +132,12 @@ export async function isolatedCwd(liveRoot: string, sessionKey: string): Promise
   if (!(await isRepoRoot(liveRoot))) return liveRoot
   try {
     const id = randomUUID().slice(0, 8)
-    const wt = await createChatWorktree(liveRoot, id, deps.worktreesDir())
+    const dir = deps.worktreesDir()
+    const wt = await enqueueRepoWrite(liveRoot, async () => {
+      const created = await createChatWorktree(liveRoot, id, dir)
+      await retireWorktreeBranch(created)
+      return created
+    })
     states.set(sessionKey, {
       wt,
       liveRoot,
@@ -132,8 +148,9 @@ export async function isolatedCwd(liveRoot: string, sessionKey: string): Promise
     })
     emitIsolation(sessionKey, 'isolated', wt.branch)
     return wt.path
-  } catch {
-    return liveRoot // fork failed — run on the live root, hooks no-op
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    throw new Error(`Praxis couldn't create an isolated chat workspace: ${detail}`)
   }
 }
 
@@ -162,10 +179,12 @@ export function adoptSession(sessionKey: string, record: SessionRecord, liveRoot
 export async function beforeTurn(sessionKey: string, _text: string): Promise<void> {
   const st = states.get(sessionKey)
   if (!st) return
-  const task = st.chain.then(async () => {
-    if (st.parked) return
-    await syncFromLive(st.liveRoot, st.wt).catch(() => {})
-  })
+  const task = st.chain.then(() =>
+    enqueueRepoWrite(st.liveRoot, async () => {
+      if (st.parked) return
+      await syncFromLive(st.liveRoot, st.wt)
+    })
+  )
   st.chain = task.catch(() => {})
   await task
 }
@@ -181,35 +200,54 @@ function lastTurn(transcript: SessionTranscriptEntry[]): SessionTranscriptEntry[
  * Turn-end hook (fired on `done` AND `error` to salvage interrupted work): commit the
  * turn, merge it onto the live tree, and advance the fork point. Queued on the chat's
  * chain (never awaited by the caller). On `merged`, records the edits as one undo group
- * `chat:<id>:<turnNo>`, advances `baseSha`, and unparks. On `parked`, upserts the park
- * record (with the last turn's transcript) for the review UI. `noop` does nothing.
+ * `chat:<id>:<turnNo>`, commits the merged files on the live checkout (so the turn is
+ * one revertable commit in the user's own history), advances `baseSha`, and unparks. On
+ * `parked`, upserts the park record (with the last turn's transcript) for the review UI.
+ * `noop` does nothing.
  */
-export function afterTurn(sessionKey: string, message: string, transcript: SessionTranscriptEntry[] = []): void {
+export function afterTurn(
+  sessionKey: string,
+  message: string,
+  transcript: SessionTranscriptEntry[] = [],
+  terminal: TurnTerminalOutcome = 'success'
+): void {
   const st = states.get(sessionKey)
   if (!st) return
   const turn = lastTurn(transcript)
   st.chain = st.chain
-    .then(async () => {
-      const turnNo = ++st.turnNo
-      const outcome = await completeTurn(st.liveRoot, st.wt, message)
-      if (outcome.outcome === 'merged') {
-        const group = `chat:${st.wt.id}:${turnNo}`
-        for (const e of outcome.edits) {
-          recordEdit(st.liveRoot, e.file, e.before, e.after, undefined, group)
+    .then(() =>
+      enqueueRepoWrite(st.liveRoot, async () => {
+        const turnNo = ++st.turnNo
+        const outcome = await completeTurn(st.liveRoot, st.wt, message, {
+          land: terminal === 'success'
+        })
+        if (outcome.outcome === 'merged') {
+          const group = `chat:${st.wt.id}:${turnNo}`
+          for (const e of outcome.edits) {
+            recordEdit(st.liveRoot, e.file, e.before, e.after, undefined, group)
+          }
+          if (outcome.newBase) st.wt.baseSha = outcome.newBase
+          await commitLiveTurn(st.liveRoot, outcome.files, {
+            title: message,
+            body: `Praxis turn ${turnNo} (${st.wt.branch}).`
+          })
+          if (st.parked) {
+            st.parked = false
+            dropParkRecord(st)
+          }
+          await retireWorktreeBranch(st.wt)
+          // Not revertable once this chat's work has been pushed & merged via a PR.
+          emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
+        } else if (outcome.outcome === 'parked') {
+          st.parked = true
+          upsertParkRecord(st, outcome.files, turn)
+          emitIsolation(sessionKey, 'parked', st.wt.branch, outcome.files)
+        } else if (outcome.newBase) {
+          st.wt.baseSha = outcome.newBase
+          await retireWorktreeBranch(st.wt)
         }
-        if (outcome.newBase) st.wt.baseSha = outcome.newBase
-        if (st.parked) {
-          st.parked = false
-          dropParkRecord(st)
-        }
-        // Not revertable once this chat's work has been pushed & merged via a PR.
-        emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
-      } else if (outcome.outcome === 'parked') {
-        st.parked = true
-        upsertParkRecord(st, outcome.files, turn)
-        emitIsolation(sessionKey, 'parked', st.wt.branch, outcome.files)
-      }
-    })
+      })
+    )
     .catch(() => {
       /* a turn's merge failing must never wedge the chain */
     })
@@ -317,14 +355,22 @@ export async function applyParkedBranch(
   const found = findByBranch(root, branch)
   if (!found) return { handled: false }
   const [key, st] = found
-  const task = st.chain.then(() => applyParked(st.liveRoot, st.wt))
+  const task = st.chain.then(() => enqueueRepoWrite(st.liveRoot, () => applyParked(st.liveRoot, st.wt)))
   st.chain = task.catch(() => {})
   try {
     const res = await task
     if (res.ok) {
       if (res.newBase) st.wt.baseSha = res.newBase
+      // A 3-way apply onto a dirty tree can leave conflict markers, so unlike the
+      // turn path this commits whatever landed — keeping the apply revertable in one
+      // step, markers and all, instead of tangling it with the user's other WIP.
+      await commitLiveTurn(st.liveRoot, res.files, {
+        title: `Apply ${st.wt.branch} changes`,
+        body: 'Praxis parked-chat apply.'
+      })
       st.parked = false
       dropParkRecord(st)
+      await retireWorktreeBranch(st.wt)
       emitIsolation(key, 'merged', st.wt.branch, res.files)
     }
     return { handled: true, ok: res.ok, conflict: res.conflict, error: res.error }
@@ -344,7 +390,12 @@ export async function discardParkedBranch(root: string, branch: string): Promise
   const found = findByBranch(root, branch)
   if (!found) return { handled: false }
   const [key, st] = found
-  const task = st.chain.then(() => discardParked(st.wt))
+  const task = st.chain.then(() =>
+    enqueueRepoWrite(st.liveRoot, async () => {
+      await discardParked(st.wt)
+      await retireWorktreeBranch(st.wt)
+    })
+  )
   st.chain = task.catch(() => {})
   await task.catch(() => {})
   st.parked = false
@@ -370,7 +421,9 @@ export async function resolveParkedChat(
   const st = states.get(sessionKey)
   if (!st) return { ok: false, conflicted: [], error: 'no-chat' }
   if (!st.parked) return { ok: false, conflicted: [], error: 'not-parked' }
-  const task = st.chain.then(() => stageResolve(st.liveRoot, st.wt))
+  const task = st.chain.then(() =>
+    enqueueRepoWrite(st.liveRoot, () => stageResolve(st.liveRoot, st.wt))
+  )
   st.chain = task.catch(() => {})
   let prep: ResolvePrep
   try {
@@ -380,7 +433,9 @@ export async function resolveParkedChat(
   }
   if (!prep.clean) return { ok: true, conflicted: prep.conflicted }
   // No overlap — the sides merged automatically. Commit + merge onto live and unpark now.
-  const merge = st.chain.then(async () => {
+  // completeTurn's autoApplyWorktree still refuses a binary file (even one stageResolve
+  // just resolved by policy) — the applyParked fallback below is what actually lands it.
+  const merge = st.chain.then(() => enqueueRepoWrite(st.liveRoot, async () => {
     const outcome = await completeTurn(st.liveRoot, st.wt, 'Resolve chat/live merge')
     if (outcome.outcome === 'merged') {
       const group = `chat:${st.wt.id}:resolve`
@@ -388,8 +443,13 @@ export async function resolveParkedChat(
         recordEdit(st.liveRoot, e.file, e.before, e.after, undefined, group)
       }
       if (outcome.newBase) st.wt.baseSha = outcome.newBase
+      await commitLiveTurn(st.liveRoot, outcome.files, {
+        title: 'Resolve chat/live merge',
+        body: `Praxis conflict resolution (${st.wt.branch}).`
+      })
       st.parked = false
       dropParkRecord(st)
+      await retireWorktreeBranch(st.wt)
       emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
       return
     }
@@ -400,6 +460,8 @@ export async function resolveParkedChat(
       // ok:true + still-parked re-renders the same card. Unpark.
       st.parked = false
       dropParkRecord(st)
+      if (outcome.newBase) st.wt.baseSha = outcome.newBase
+      await retireWorktreeBranch(st.wt)
       emitIsolation(sessionKey, 'isolated', st.wt.branch)
       return
     }
@@ -415,13 +477,14 @@ export async function resolveParkedChat(
       if (res.newBase) st.wt.baseSha = res.newBase
       st.parked = false
       dropParkRecord(st)
+      await retireWorktreeBranch(st.wt)
       emitIsolation(sessionKey, 'merged', st.wt.branch, res.files)
       return
     }
     throw new Error(
       `the merged result couldn't be written onto the project${res.error ? ` (${res.error.slice(0, 200)})` : ''}`
     )
-  })
+  }))
   st.chain = merge.catch(() => {})
   try {
     await merge
@@ -534,32 +597,43 @@ export async function handleReclaimed(
  * checkout — keeping the branch only when parked (its work still awaits review).
  * Never throws (teardown runs in finalizers).
  */
-export async function releaseChat(sessionKey: string): Promise<void> {
+export async function releaseChat(
+  sessionKey: string,
+  pendingTerminal: TurnTerminalOutcome = 'success'
+): Promise<void> {
   const st = states.get(sessionKey)
   if (!st) return
   states.delete(sessionKey)
   try {
     await st.chain.catch(() => {})
-    if (!st.parked) {
-      const turnNo = ++st.turnNo
-      const outcome = await completeTurn(st.liveRoot, st.wt, 'praxis chat changes')
-      if (outcome.outcome === 'merged') {
-        for (const e of outcome.edits) {
-          recordEdit(
-            st.liveRoot,
-            e.file,
-            e.before,
-            e.after,
-            undefined,
-            `chat:${st.wt.id}:${turnNo}`
-          )
+    await enqueueRepoWrite(st.liveRoot, async () => {
+      if (!st.parked) {
+        const turnNo = ++st.turnNo
+        const outcome = await completeTurn(st.liveRoot, st.wt, 'praxis chat changes', {
+          land: pendingTerminal === 'success'
+        })
+        if (outcome.outcome === 'merged') {
+          for (const e of outcome.edits) {
+            recordEdit(
+              st.liveRoot,
+              e.file,
+              e.before,
+              e.after,
+              undefined,
+              `chat:${st.wt.id}:${turnNo}`
+            )
+          }
+          await commitLiveTurn(st.liveRoot, outcome.files, {
+            title: 'Praxis chat changes',
+            body: `Praxis final turn (${st.wt.branch}).`
+          })
+        } else if (outcome.outcome === 'parked') {
+          st.parked = true
+          upsertParkRecord(st, outcome.files)
         }
-      } else if (outcome.outcome === 'parked') {
-        st.parked = true
-        upsertParkRecord(st, outcome.files)
       }
-    }
-    await removeWorktree(st.liveRoot, st.wt, { keepBranch: st.parked })
+      await removeWorktree(st.liveRoot, st.wt, { keepBranch: st.parked })
+    })
   } catch {
     /* teardown never throws */
   }

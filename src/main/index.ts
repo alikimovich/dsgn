@@ -25,11 +25,14 @@ import { registerControlsIpc } from './control-panels'
 import { registerDevServerIpc } from './devserver'
 import { registerDiagnoseIpc } from './diagnose'
 import { registerFeedbackIpc } from './feedback'
+import { createProjectFile, deleteProjectFile, renameProjectFile } from './file-ops'
 import { listProjectFiles } from './file-tree'
 import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
 import { registerGithubIpc } from './github'
+import { registerMediaProtocol, registerMediaScheme } from './media'
 import { applyMoveNode } from './move-node'
 import { registerPreviewSource } from './preview-state'
+import { readProjectIcon } from './project-icon'
 import { registerPropsIpc } from './props'
 import { createProject } from './scaffold'
 import { registerSetupIpc } from './setup'
@@ -270,7 +273,9 @@ let recentProjects: RecentMenuEntry[] = []
  * commands (Reload/Select/Publish/Stop/Viewport) that used to be titlebar
  * buttons. Because we set our OWN menu, the default View → Reload (which reloaded
  * the renderer and stranded the tool) is gone; our Cmd+R reloads the PREVIEW
- * instead. Renderer-side actions go over `menu:action`; a chosen recent goes over
+ * instead. On macOS the app menu is spelled out rather than `role: 'appMenu'` so
+ * it can carry Settings… (Cmd+,); other platforms get that item under File.
+ * Renderer-side actions go over `menu:action`; a chosen recent goes over
  * `menu:open-recent`; reload is handled here directly.
  */
 function buildAppMenu(): void {
@@ -314,8 +319,40 @@ function buildAppMenu(): void {
       ]
     : [{ label: 'No Recent Projects', enabled: false }]
 
+  /**
+   * Settings (the v10 providers dialog). MUST be a real menu item: Cmd+, is a
+   * native accelerator, so a renderer keydown for it would never fire on a
+   * physical keyboard (see the Edit-menu note above). On macOS that means
+   * spelling out `role: 'appMenu'`'s own template — it has no Settings slot —
+   * so the item sits where the platform puts it; elsewhere it rides File.
+   */
+  const settingsItem: MenuItemConstructorOptions = {
+    label: 'Settings…',
+    accelerator: 'CmdOrCtrl+,',
+    click: () => send('settings')
+  }
+
   const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              settingsItem,
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
     {
       label: 'File',
       submenu: [
@@ -329,7 +366,10 @@ function buildAppMenu(): void {
           accelerator: 'CmdOrCtrl+O',
           click: () => send('open-project')
         },
-        { label: 'Open Recent', submenu: recentItems }
+        { label: 'Open Recent', submenu: recentItems },
+        ...(process.platform === 'darwin'
+          ? []
+          : [{ type: 'separator' as const }, settingsItem])
       ]
     },
     {
@@ -432,10 +472,11 @@ function ensurePanelView(): WebContentsView {
       query: { praxisPanel: '1' }
     })
   }
-  // The panel page is stateless — re-push the latest state after any (re)load.
-  panelView.webContents.on('did-finish-load', () => {
-    if (panelState) panelView?.webContents.send('panel:state', panelState)
-  })
+  // The panel page is stateless — it pulls the latest state itself once it is
+  // listening (panel:request-state below). Re-pushing here on `did-finish-load`
+  // instead would race the island's own ipcRenderer registration (React commits
+  // its effect after the page's load event as often as not) and the island would
+  // stay blank until some unrelated selection change happened to re-push.
   mainWindow?.contentView.addChildView(panelView)
   return panelView
 }
@@ -736,6 +777,18 @@ function registerEditorIpc(): void {
   })
   // The pop-out editor's file-tree sidebar: repo-relative file paths for `root`.
   ipcMain.handle('source:tree', (_e, root: string) => listProjectFiles(root))
+  // …and its file-manager ops. Every path is re-validated inside file-ops.ts —
+  // the renderer's is untrusted. Delete goes to the OS trash: these aren't
+  // content edits, so the undo history can't take them back.
+  ipcMain.handle('source:create-file', (_e, root: string, path: string) =>
+    createProjectFile(root, path)
+  )
+  ipcMain.handle('source:rename-file', (_e, root: string, from: string, to: string) =>
+    renameProjectFile(root, from, to)
+  )
+  ipcMain.handle('source:delete-file', (_e, root: string, path: string) =>
+    deleteProjectFile(root, path, (abs) => shell.trashItem(abs))
+  )
   // Close the editor window that sent this (a popped-out editor closing itself).
   ipcMain.handle('source:close-window', (e) => {
     BrowserWindow.fromWebContents(e.sender)?.close()
@@ -906,6 +959,14 @@ function registerPreviewIpc(): void {
     if (!fromMainWindow(e)) return
     panelState = state
     panelView?.webContents.send('panel:state', state)
+  })
+  // Island → "I'm listening, send me what you have". The first setState always
+  // predates the view (show creates it), so without this pull the island's very
+  // first render would have nothing to draw. Same channel as the pushes, so the
+  // reply can never overtake a newer state.
+  ipcMain.on('panel:request-state', (e) => {
+    if (e.sender !== panelView?.webContents) return
+    if (panelState) e.sender.send('panel:state', panelState)
   })
   // Panel → main renderer: user actions (close/dock/seed/…) and content height.
   ipcMain.on('panel:action', (e, action: unknown) => {
@@ -1114,6 +1175,10 @@ function registerPreviewIpc(): void {
     return res.canceled ? null : (res.filePath ?? null)
   })
   ipcMain.handle('project:create', (_e, root: string) => createProject(root))
+  // The project's own favicon for its rail row. Cheap + cached in main, and
+  // read from the source tree rather than the preview, so a project that has
+  // never been run still shows its icon.
+  ipcMain.handle('project:icon', (_e, root: string) => readProjectIcon(root))
 }
 
 // Dev-mode CDP endpoint: run `bun run dev`, then open chrome://inspect in a real
@@ -1125,7 +1190,12 @@ if (process.env['ELECTRON_RENDERER_URL']) {
   app.commandLine.appendSwitch('remote-debugging-port', process.env['PRAXIS_DEBUG_PORT'] ?? '9222')
 }
 
+// The editor's image/video scheme. Privileges are frozen at app-ready, so this
+// has to run at module scope — registerMediaProtocol() (the handler) comes later.
+registerMediaScheme()
+
 app.whenReady().then(() => {
+  registerMediaProtocol()
   // macOS dock icon comes from the bundle's .icns (scripts/patch-electron.mjs
   // installs ours into the dev Electron.app). Do NOT app.dock.setIcon() here:
   // runtime dock images skip the system's icon treatment on macOS 26, so they

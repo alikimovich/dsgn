@@ -16,7 +16,7 @@ import { _electron as electron } from 'playwright'
 import electronPath from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = join(root, 'test', 'fixtures', 'selectable-app')
@@ -198,6 +198,40 @@ try {
     throw new Error(`in-preview selection toolbar wrong: ${toolbarShown}`)
   }
   await win.screenshot({ path: join(artifacts, '07-select-handoff.png') })
+
+  // The selection badge names the element AND reports its rendered size, so the
+  // pick can be measured without opening the inspector.
+  const badgeText = await app.evaluate(async ({ webContents }) => {
+    const wc = webContents
+      .getAllWebContents()
+      .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
+    if (!wc) return 'no-preview'
+    return wc.executeJavaScript(`(() => {
+      const host = document.querySelector('[data-praxis-overlay]')
+      const badge = host?.shadowRoot?.querySelector('[data-praxis-selbadge]')
+      if (!badge) return 'no-badge'
+      if (getComputedStyle(badge).display === 'none') return 'hidden'
+      const r = document.getElementById('hero-title').getBoundingClientRect()
+      const want = Math.round(r.width) + ' × ' + Math.round(r.height)
+      const size = badge.querySelector('[data-praxis-size]')?.textContent ?? ''
+      return badge.textContent + '|' + (size === want ? 'ok' : 'want ' + want + ', got ' + size)
+    })()`)
+  })
+  if (!/^h1#hero-title\d+ × \d+\|ok$/.test(badgeText)) {
+    throw new Error(`selection badge should read the tag plus its size: ${badgeText}`)
+  }
+
+  // The overlay lives in the preview WebContentsView, so it's absent from the
+  // renderer screenshots above — capture its own pixels to eyeball the badge.
+  const overlayPng = await app.evaluate(async ({ webContents }) => {
+    const wc = webContents
+      .getAllWebContents()
+      .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
+    if (!wc) return null
+    const img = await wc.capturePage()
+    return img.toPNG().toString('base64')
+  })
+  if (overlayPng) writeFileSync(join(artifacts, '07b-selection-badge.png'), Buffer.from(overlayPng, 'base64'))
 
   // Clicking Edit-text arms the inline contentEditable on the selected leaf —
   // the discoverable form of the double-click gesture. (Our own overlay button,

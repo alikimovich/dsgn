@@ -10,10 +10,17 @@ import CodeDrawer from './components/CodeDrawer'
 import SessionReview from './components/SessionReview'
 import FeedbackDialog from './components/FeedbackDialog'
 import ConnectDialog from './components/ConnectDialog'
+import SettingsDialog from './components/SettingsDialog'
+import ProjectMemoryDialog from './components/ProjectMemoryDialog'
+import { useProviders } from './providers-store'
 import {
+  agentOptionsFor,
+  chatAgentSettingsFromSession,
   describeSelectionForPrompt,
   chatAgentSettingsFor,
+  chatModelLabel,
   isAuthError,
+  resumeChatSettings,
   messagesFromTranscript,
   oneLine,
   toAgentOptions,
@@ -207,6 +214,7 @@ export default function App(): React.JSX.Element {
   }
   // v5-D: the past session open for review (rendered as a modal over the panes).
   const [reviewing, setReviewing] = useState<SessionRecord | null>(null)
+  const [memoryTarget, setMemoryTarget] = useState<{ root: string; name: string } | null>(null)
   // The review modal is renderer DOM; the native preview WebContentsView paints
   // ABOVE it (same reason PropPanel reserves an inset strip). Freeze-frame the
   // preview while the modal is open — the snapshot <img> keeps it visually in
@@ -316,8 +324,16 @@ export default function App(): React.JSX.Element {
             // The onboarding banner is Claude-specific (setup-token / claude login);
             // Codex gets its own inline `codex login` hint. Raise whichever matches
             // the active backend — never the Claude banner for a Codex failure. (v7)
+            // v10: a connection-backed chat carries provider 'codex' because it runs
+            // on that harness, but it authenticates with its own stored API key, not
+            // a ChatGPT sign-in. Its 401 says nothing about the built-in Codex seat,
+            // so it must not raise the global (and sticky) `codexAuthNeeded` — that
+            // would outlive the chat and tell the user to `codex login` for a seat
+            // that's perfectly healthy. ChatPanel already guards the render; the
+            // flag itself needs the same guard or it just goes stale instead.
             if ((session.provider ?? 'claude') === 'claude') session.setAuthNeeded(true)
-            else if (session.provider === 'codex') session.setCodexAuthNeeded(true)
+            else if (session.provider === 'codex' && !session.connectionId)
+              session.setCodexAuthNeeded(true)
           }
         } else if (event.type === 'delta' || event.type === 'done') {
           // A finished turn may have merged instrumented source + a fresh
@@ -394,17 +410,30 @@ export default function App(): React.JSX.Element {
         // several and keep working. A non-repo project can't worktree → fall back
         // to seeding the composer (the prior behavior).
         if (root) {
+          const parentSessionKey = useChat.getState().activeKey || projectKey(root)
+          const agentSettings = useSession.getState()
           void window.api.agent
-            .spawnComment(root, prompt, toAgentOptions(useSession.getState()))
+            .spawnComment(root, prompt, parentSessionKey, toAgentOptions(agentSettings))
             .then((r) => {
               if (r.ok && r.spawnId) {
-                useSpawns.getState().add(projectKey(root), {
+                useSpawns.getState().add(parentSessionKey, {
                   id: r.spawnId,
                   branch: r.branch ?? null,
                   label: oneLine(c.text, 60),
+                  modelLabel: chatModelLabel({
+                    model: agentSettings.model,
+                    modelId: agentSettings.modelId,
+                    provider: agentSettings.provider,
+                    connectionId: agentSettings.connectionId
+                  }),
                   status: r.queued ? 'queued' : 'running'
                 })
               } else {
+                if (r.reason === 'unsupported-backend') {
+                  useLog.getState().append(
+                    'This model cannot run a detached background agent yet; the comment was sent to its chat.'
+                  )
+                }
                 useComposer.getState().setSubmit(prompt)
               }
             })
@@ -485,6 +514,9 @@ export default function App(): React.JSX.Element {
         else if (action === 'viewport:desktop') useViewport.getState().setViewport('desktop')
         else if (action === 'viewport:mobile') useViewport.getState().setViewport('mobile')
         else if (action === 'toggle-chat') useWorkspace.getState().toggleChatHidden()
+        // Cmd+, HAS to arrive this way: a native accelerator swallows the physical
+        // keystroke before any renderer keydown fires (see CLAUDE.md's gotchas).
+        else if (action === 'settings') useProviders.getState().setSettingsOpen(true)
       }),
     []
   )
@@ -725,9 +757,9 @@ export default function App(): React.JSX.Element {
       const left = document.querySelector('.pane--chat')?.getBoundingClientRect().left ?? 0
       // Also clamp against the window so the preview card keeps ~400px — its
       // header now holds the controls (Publish/tabs/icons), which must never be
-      // clipped out of reach by dragging the chat wide (rail 168 + divider 0 +
-      // card gutters ≈ 184 → 584 with the 400px floor).
-      const maxChat = Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, window.innerWidth - 584))
+      // clipped out of reach by dragging the chat wide (rail 208 + divider 0 +
+      // card gutters ≈ 224 → 624 with the 400px floor).
+      const maxChat = Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, window.innerWidth - 624))
       setChatWidth(Math.min(maxChat, Math.max(MIN_CHAT_WIDTH, e.clientX - left)))
     }
     const endDrag = (): void => {
@@ -944,10 +976,10 @@ export default function App(): React.JSX.Element {
       }
       await window.api.preview.load(url)
       log.append('Preview loaded')
-      await window.api.agent.openProject(root, {
-        ...toAgentOptions(useSession.getState()),
-        permissionMode: usePermissions.getState().mode
-      })
+      // The choices on screen when the project was opened become this chat's own
+      // (persisted below, so a later switch back restores what main actually runs).
+      const chatSettings = chatAgentSettingsFromSession(useSession.getState())
+      await window.api.agent.openProject(root, agentOptionsFor(chatSettings))
       log.append(`Agent session started (cwd ${root})`)
       useSession.getState().setProjectRoot(root)
       // v5: track the open project in the workspace + show its (per-project) chat,
@@ -996,7 +1028,16 @@ export default function App(): React.JSX.Element {
         url,
         previewKind: kind,
         branch: useSession.getState().branch,
-        launchSpec: launchSpec.current
+        launchSpec: launchSpec.current,
+        // Record the posture this session was started with, keyed by its sessionKey
+        // (the project key — openProject creates the default chat). Without it a
+        // switch away and back re-seeded the toolbar from the DEFAULTS, which is how
+        // the picker could read "Auto" for a session main was asking on.
+        chatSettings: {
+          ...useWorkspace.getState().projects.find((p) => p.key === projectKey(root))
+            ?.chatSettings,
+          [projectKey(root)]: chatSettings
+        }
       })
       // Bound warm dev servers (LRU-suspend beyond the cap).
       void evictWarm()
@@ -1061,6 +1102,10 @@ export default function App(): React.JSX.Element {
       setStatus({ kind: 'error', message })
       return
     }
+    // A git step that didn't work is reported HERE, not swallowed. Without it the
+    // project looks fine until Publish, which then complains that the folder isn't
+    // a repository root — a message that never mentions git and reads as a bug.
+    if (res.warning) log.append(res.warning, 'error')
     log.append('Project created — starting its dev server…', 'success')
     await attempt(res.root, undefined, !!useSession.getState().projectRoot)
   }
@@ -1167,9 +1212,8 @@ export default function App(): React.JSX.Element {
     // v9 multi-chat: restore whichever of THIS project's own sessionKeys (default,
     // or an additional/resumed chat) was last active, not always the plain default.
     useChat.getState().setActiveChat(target.activeSessionKey ?? target.key)
-    useSession
-      .getState()
-      .setChatAgentSettings(chatAgentSettingsFor(target, target.activeSessionKey ?? target.key))
+    const chatSettings = chatAgentSettingsFor(target, target.activeSessionKey ?? target.key)
+    useSession.getState().setChatAgentSettings(chatSettings)
     useSession.getState().setProjectRoot(target.root)
     useSession.getState().setBranch(target.branch)
     // Each project keeps its own viewport — restore it (after activate, so the
@@ -1196,9 +1240,13 @@ export default function App(): React.JSX.Element {
       void window.api.agent.setActive(target.root, target.activeSessionKey ?? target.key)
     } else {
       try {
-        await window.api.agent.openProject(target.root, {
-          ...toAgentOptions(useSession.getState()),
-          permissionMode: usePermissions.getState().mode
+        // Reopen under THIS chat's own settings (just restored into the toolbar
+        // above), not whatever the outgoing project happened to be running.
+        await window.api.agent.openProject(target.root, agentOptionsFor(chatSettings))
+        // The reopened session is the project's default chat — record its posture
+        // under that key so the toolbar and main stay in step.
+        useWorkspace.getState().patchEntry(target.key, {
+          chatSettings: { ...target.chatSettings, [target.key]: chatSettings }
         })
         useLog
           .getState()
@@ -1270,11 +1318,11 @@ export default function App(): React.JSX.Element {
   const newChatForProject = async (key: string): Promise<void> => {
     const entry = useWorkspace.getState().projects.find((p) => p.key === key)
     if (!entry) return
-    // An empty live chat already IS a "new chat" — switch to it instead of
-    // stacking another session, so mashing "+" can't mint unlimited empty
-    // chats (the rail hides message-less chats until their first prompt).
+    // An empty secondary chat already IS a "new chat" — switch to it instead of
+    // stacking another session, so mashing "+" can't mint unlimited empty chats.
+    // Main is a permanent role, not a reusable secondary slot.
     const chats = useChat.getState().byKey
-    const empty = (entry.sessionKeys ?? [key]).find(
+    const empty = (entry.sessionKeys ?? [key]).filter((sk) => sk !== key).find(
       (sk) => (chats[sk]?.messages.length ?? 0) === 0
     )
     if (empty) {
@@ -1284,10 +1332,7 @@ export default function App(): React.JSX.Element {
     // A new chat starts with the choices visible on the chat it was created
     // from. Later picker changes stay isolated to the new sessionKey.
     const chatSettings = chatAgentSettingsFor(entry, entry.activeSessionKey ?? entry.key)
-    const res = await window.api.agent.newChat(entry.root, {
-      ...toAgentOptions(chatSettings),
-      permissionMode: usePermissions.getState().mode
-    })
+    const res = await window.api.agent.newChat(entry.root, agentOptionsFor(chatSettings))
     if (!res.ok || !res.sessionKey) {
       useLog.getState().append(res.error ?? 'Could not start another chat.', 'error')
       return
@@ -1307,25 +1352,43 @@ export default function App(): React.JSX.Element {
 
   // v9 multi-chat switcher (Rail): activate one of a project's already-live
   // sessionKeys — both the renderer's chat store and main's per-project "which
-  // session is active" bookkeeping need to move together.
+  // session is active" bookkeeping need to move together. The rail lists the
+  // chats of every EXPANDED project, not just the active one, so a click on a
+  // backgrounded project's chat brings that project forward too (record the
+  // choice on the entry first — applyProject opens whichever chat it names).
   const switchSession = async (key: string, sessionKey: string): Promise<void> => {
-    const entry = useWorkspace.getState().projects.find((p) => p.key === key)
-    if (!entry || sessionKey === entry.activeSessionKey) return
-    useWorkspace.getState().patchEntry(key, { activeSessionKey: sessionKey })
-    if (useSession.getState().projectRoot === entry.root) {
-      useChat.getState().setActiveChat(sessionKey)
-      useSession.getState().setChatAgentSettings(chatAgentSettingsFor(entry, sessionKey))
-      void window.api.agent.setActive(entry.root, sessionKey)
+    const ws = useWorkspace.getState()
+    const entry = ws.projects.find((p) => p.key === key)
+    if (!entry) return
+    const onScreen = ws.activeKey === key
+    if (onScreen && sessionKey === entry.activeSessionKey) return
+    ws.patchEntry(key, { activeSessionKey: sessionKey })
+    if (!onScreen) {
+      await switchTo(key)
+      return
     }
+    useChat.getState().setActiveChat(sessionKey)
+    useSession.getState().setChatAgentSettings(chatAgentSettingsFor(entry, sessionKey))
+    void window.api.agent.setActive(entry.root, sessionKey)
   }
 
   // v9 resume — hand a past ("previous agent") session back to a live SDK query
   // (SessionReview's Resume button), then switch the active chat to it and close
-  // the review panel. Only reachable for the currently-active project (the rail's
-  // history list only shows the active project's past sessions).
+  // the review panel. The rail lists the past chats of every expanded project, so
+  // the record may belong to a backgrounded one — resuming then brings its project
+  // forward too, rather than reviving a chat nothing on screen can show.
   const resumeRecord = async (record: SessionRecord): Promise<void> => {
     const key = projectKey(record.projectRoot)
-    const res = await window.api.agent.resumeSession(record.projectRoot, record.id)
+    // A resumed chat runs with the choices on screen (forced back to Claude — see
+    // resumeChatSettings). Hand them to main so the session's real posture is the
+    // one the toolbar shows: resuming used to start on main's defaults, so every
+    // boot-restored chat asked for each edit while its picker read "Auto".
+    const settings = resumeChatSettings(chatAgentSettingsFromSession(useSession.getState()))
+    const res = await window.api.agent.resumeSession(
+      record.projectRoot,
+      record.id,
+      agentOptionsFor(settings)
+    )
     if (!res.ok || !res.sessionKey) {
       useLog.getState().append(res.error ?? 'Could not resume that session.', 'error')
       return
@@ -1335,7 +1398,8 @@ export default function App(): React.JSX.Element {
     const existing = entry?.sessionKeys ?? [key]
     useWorkspace.getState().patchEntry(key, {
       sessionKeys: existing.includes(sessionKey) ? existing : [...existing, sessionKey],
-      activeSessionKey: sessionKey
+      activeSessionKey: sessionKey,
+      chatSettings: { ...entry?.chatSettings, [sessionKey]: settings }
     })
     // Seed the (fresh) chat slice with the record's past turns so the resumed
     // thread shows its history instead of an empty tree — the agent already has
@@ -1344,6 +1408,13 @@ export default function App(): React.JSX.Element {
     useChat.getState().hydrate(sessionKey, messagesFromTranscript(record.transcript))
     if (useSession.getState().projectRoot === record.projectRoot) {
       useChat.getState().setActiveChat(sessionKey)
+      // Repoint the toolbar at what the resumed session actually got (the backend
+      // is pinned to Claude even if the picker was on another one).
+      useSession.getState().setChatAgentSettings(settings)
+    } else {
+      // Another project's chat — switchTo picks up the entry patched above, so it
+      // lands on the resumed session rather than that project's previous one.
+      await switchTo(key)
     }
     setReviewing(null)
   }
@@ -1793,6 +1864,7 @@ export default function App(): React.JSX.Element {
             onNewChat={(key) => void newChatForProject(key)}
             onSwitchSession={(key, sessionKey) => void switchSession(key, sessionKey)}
             onCloseChat={(key, sessionKey) => void closeChatForProject(key, sessionKey)}
+            onOpenMemory={(root, name) => setMemoryTarget({ root, name })}
           />
           {/* Hidden = width 0, still MOUNTED: a running turn keeps streaming into
               the live ChatPanel and nothing re-mounts on unhide. The native
@@ -2099,6 +2171,24 @@ export default function App(): React.JSX.Element {
       {/* LKM-27: in-app feedback → a GitHub issue on the Praxis repo. */}
       <FeedbackDialog />
       <ConnectDialog />
+      {/* v10: app settings (Cmd+, / the model picker's "Manage providers…"). */}
+      <SettingsDialog />
+      <ProjectMemoryDialog
+        root={memoryTarget?.root ?? null}
+        name={memoryTarget?.name ?? 'Project'}
+        open={!!memoryTarget}
+        onOpenChange={(open) => {
+          if (!open) setMemoryTarget(null)
+        }}
+        onMainCleared={(root) => {
+          const key = projectKey(root)
+          const chat = useChat.getState()
+          chat.clearChat(key)
+          if (chat.activeKey === key) chat.setActiveChat(key)
+          useWorkspace.getState().patchEntry(key, { publishedMsgCount: 0 })
+          void useHistory.getState().load(root)
+        }}
+      />
     </div>
   )
 }

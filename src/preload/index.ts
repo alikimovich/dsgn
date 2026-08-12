@@ -13,6 +13,7 @@ import type {
   Diagnosis,
   FeedbackInput,
   FeedbackResult,
+  FileOpResult,
   Framework,
   GithubConnectOptions,
   GithubConnectResult,
@@ -20,6 +21,9 @@ import type {
   ImageAttachment,
   LayerFingerprint,
   LayersSnapshot,
+  ModelCatalogInput,
+  ModelCatalogResult,
+  ModelChoice,
   MoveNodeRequest,
   MoveNodeResult,
   PanelAction,
@@ -27,9 +31,13 @@ import type {
   PermissionMode,
   PraxisApi,
   PreviewComment,
+  ProjectIcon,
+  ProjectMemory,
   PropEdit,
   PropEditResult,
   PropInspection,
+  ProviderConnection,
+  ProviderConnectionInput,
   PublishResult,
   QuestionAnswers,
   RecentMenuEntry,
@@ -162,6 +170,7 @@ const api: PraxisApi = {
       ipcRenderer.on('panel:state', listener)
       return () => ipcRenderer.removeListener('panel:state', listener)
     },
+    requestState: (): void => ipcRenderer.send('panel:request-state'),
     action: (action: PanelAction): void => ipcRenderer.send('panel:action', action),
     onAction: (cb: (action: PanelAction) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, action: PanelAction): void => cb(action)
@@ -180,6 +189,7 @@ const api: PraxisApi = {
   project: {
     pick: (): Promise<string | null> => ipcRenderer.invoke('project:pick'),
     detect: (root: string): Promise<DetectedProject> => ipcRenderer.invoke('project:detect', root),
+    icon: (root: string): Promise<ProjectIcon | null> => ipcRenderer.invoke('project:icon', root),
     pickNew: (): Promise<string | null> => ipcRenderer.invoke('project:pick-new'),
     create: (root: string): Promise<{ ok: boolean; root?: string; error?: string }> =>
       ipcRenderer.invoke('project:create', root)
@@ -312,6 +322,12 @@ const api: PraxisApi = {
       ipcRenderer.invoke('source:popout', root, source),
     closeWindow: (): Promise<void> => ipcRenderer.invoke('source:close-window'),
     tree: (root: string): Promise<string[]> => ipcRenderer.invoke('source:tree', root),
+    createFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:create-file', root, path),
+    renameFile: (root: string, from: string, to: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:rename-file', root, from, to),
+    deleteFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:delete-file', root, path),
     onNavigate: (cb: (source: string) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, source: string): void => cb(source)
       ipcRenderer.on('editor:navigate', listener)
@@ -380,18 +396,28 @@ const api: PraxisApi = {
       options?: AgentOptions
     ): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:restart-chat', root, sessionKey, options),
+    clearMainContext: (root: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:clear-main-context', root),
     resumeSession: (
       root: string,
-      recordId: string
+      recordId: string,
+      options?: AgentOptions
     ): Promise<{ ok: boolean; sessionKey?: string; error?: string }> =>
-      ipcRenderer.invoke('agent:resume-session', root, recordId),
+      ipcRenderer.invoke('agent:resume-session', root, recordId, options),
     closeChat: (
       root: string,
       sessionKey: string
     ): Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }> =>
       ipcRenderer.invoke('agent:close-chat', root, sessionKey),
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('agent:rename-chat', sessionKey, title),
     send: (text: string, images?: ImageAttachment[]): Promise<void> =>
       ipcRenderer.invoke('agent:send', text, images),
+    saveAttachment: (image: ImageAttachment, name?: string): Promise<string> =>
+      ipcRenderer.invoke('attachments:save', image, name),
     setModel: (model: string): Promise<void> => ipcRenderer.invoke('agent:set-model', model),
     setPermissionMode: (mode: PermissionMode): Promise<void> =>
       ipcRenderer.invoke('agent:set-permission-mode', mode),
@@ -405,9 +431,10 @@ const api: PraxisApi = {
     spawnComment: (
       root: string,
       text: string,
+      parentSessionKey: string,
       options?: AgentOptions
     ): Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }> =>
-      ipcRenderer.invoke('agent:spawn-comment', root, text, options),
+      ipcRenderer.invoke('agent:spawn-comment', root, text, parentSessionKey, options),
     spawnInterrupt: (spawnId: string): Promise<void> =>
       ipcRenderer.invoke('agent:spawn-interrupt', spawnId),
     spawnApply: (
@@ -435,9 +462,30 @@ const api: PraxisApi = {
     workspaceSnapshot: (): Promise<WorkspaceSnapshot> =>
       ipcRenderer.invoke('agent:workspace-snapshot')
   },
+  projectMemory: {
+    get: (root: string): Promise<ProjectMemory> => ipcRenderer.invoke('project-memory:get', root),
+    set: (root: string, content: string): Promise<ProjectMemory> =>
+      ipcRenderer.invoke('project-memory:set', root, content)
+  },
+  providers: {
+    list: (): Promise<ProviderConnection[]> => ipcRenderer.invoke('providers:list'),
+    save: (
+      input: ProviderConnectionInput
+    ): Promise<{ ok: boolean; connection?: ProviderConnection; error?: string }> =>
+      ipcRenderer.invoke('providers:save', input),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke('providers:remove', id),
+    catalog: (input: ModelCatalogInput): Promise<ModelCatalogResult> =>
+      ipcRenderer.invoke('providers:catalog', input),
+    choices: (): Promise<ModelChoice[]> => ipcRenderer.invoke('providers:choices')
+  },
   sessions: {
     list: (root: string): Promise<SessionRecord[]> => ipcRenderer.invoke('sessions:list', root),
     get: (id: string): Promise<SessionRecord | null> => ipcRenderer.invoke('sessions:get', id),
+    rename: (
+      id: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('sessions:rename', id, title),
     remove: (id: string): Promise<void> => ipcRenderer.invoke('sessions:remove', id)
   },
   feedback: {

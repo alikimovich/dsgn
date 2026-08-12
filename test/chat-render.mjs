@@ -52,15 +52,72 @@ try {
     s.startAssistant()
     s.appendStatus('Read · src/components/Hero.tsx')
     s.appendStatus('Edit · src/components/Hero.tsx')
+    // Token deltas as the backend reports them (LKM-62) — the status line sums them.
+    s.addUsage({ input: 9800, output: 120, cached: 9000 })
     // Stream the markdown in chunks to mimic real deltas.
     for (let i = 0; i < sample.length; i += 12) {
       store.getState().appendDelta(sample.slice(i, i + 12))
     }
-    store.getState().finish()
+    store.getState().addUsage({ input: 2600, output: 710, cached: 2000 })
   }, SAMPLE)
 
   await win.waitForSelector('.markdown pre code', { timeout: 5000 })
+  // Mid-turn: the running cat is captioned with tokens in/out + working time,
+  // NOT the current tool step (which lives in the turn's own step disclosure).
+  const running = (await win.textContent('.chat__stats')) ?? ''
+  if (!/↑ 12k/.test(running) || !/↓ 830/.test(running) || !/\d+:\d\d/.test(running)) {
+    throw new Error(`status line should show tokens + elapsed: ${running}`)
+  }
+  await win.screenshot({ path: join(artifacts, '04a-chat-status.png') })
+
+  await win.evaluate(() => window.__praxisStore.getState().finish())
   await win.screenshot({ path: join(artifacts, '04-chat-render.png') })
+
+  // LKM-64: a pasted link is one unbreakable token, so a user bubble sized to
+  // its content used to grow past the pane and hang off its left edge. The URL
+  // renders elided (full URL on the tooltip) and the bubble must fit.
+  const LINK =
+    'https://embed.figma.com/design/8cJr4hN6UDrSJVQ6YcX9Qf/portfolio?node-id=127-2510&embed-host=share'
+  await win.evaluate(
+    (link) =>
+      window.__praxisStore
+        .getState()
+        .appendUser(`here, how it started goes right after swiftly: ${link}`),
+    LINK
+  )
+  await win.waitForSelector('.msg__link', { timeout: 5000 })
+  const linkCheck = await win.evaluate((link) => {
+    const bubbles = [...document.querySelectorAll('.msg--user .msg__text')]
+    const bubble = bubbles[bubbles.length - 1]
+    const pane = bubble.closest('.pane--chat') ?? document.body
+    const el = bubble.querySelector('.msg__link')
+    return {
+      label: el?.textContent ?? '',
+      title: el?.getAttribute('title') ?? '',
+      isAnchor: el?.tagName === 'A',
+      // Fits the pane both ways: no horizontal spill inside the bubble, and no
+      // part of the bubble outside the pane's box.
+      overflows: bubble.scrollWidth > bubble.clientWidth + 1,
+      outside:
+        bubble.getBoundingClientRect().left <
+          pane.getBoundingClientRect().left - 1 ||
+        bubble.getBoundingClientRect().right >
+          pane.getBoundingClientRect().right + 1
+    }
+  }, LINK)
+  if (linkCheck.label !== 'embed.figma.com/…/portfolio') {
+    throw new Error(`long url should render elided: ${JSON.stringify(linkCheck.label)}`)
+  }
+  if (linkCheck.title !== LINK) {
+    throw new Error(`elided url should keep the full url on its tooltip: ${linkCheck.title}`)
+  }
+  if (linkCheck.isAnchor) {
+    throw new Error('a user ask is not a link surface — the elided url must not be an <a>')
+  }
+  if (linkCheck.overflows || linkCheck.outside) {
+    throw new Error(`user bubble with a long url must fit the pane: ${JSON.stringify(linkCheck)}`)
+  }
+  await win.screenshot({ path: join(artifacts, '04b-chat-long-link.png') })
 
   // v6: the agent's tool steps collapse into a disclosure (latest step + count);
   // expanding reveals the full list. (It starts collapsed once the turn finished —
@@ -233,35 +290,150 @@ try {
   if (defaultMode !== 'auto')
     throw new Error(`default permission mode should be auto, got ${defaultMode}`)
 
-  // v7 backend picker: native <select> spanning the implemented backends; selecting
-  // a non-Claude one surfaces its subscription-login hint.
-  const backends = await win.$$eval('select[aria-label="Backend"] option', (os) =>
-    os.map((o) => o.value)
+  // The picker is TWO <select>s, both derived from main's one `providers.choices()`
+  // list: a Provider (the built-in seats, then each saved connection, then an
+  // "Add new…" row that opens Settings) and the models of whichever provider is
+  // selected. Wait for the choices to land.
+  await win.waitForFunction(
+    () => (window.__praxisProviders?.getState().choices.length ?? 0) > 0,
+    null,
+    { timeout: 10000 }
   )
-  // Gemini stays a flag-gated main-process backend but is off the UI list.
-  if (JSON.stringify(backends) !== JSON.stringify(['claude', 'codex'])) {
-    throw new Error(`unexpected backends: ${JSON.stringify(backends)}`)
+  // Choice `value`s are main's to namespace, and the model IDS are discovered at
+  // runtime now (main/model-catalog.ts asks each harness what it actually has),
+  // so naming one here would re-pin the very hardcoded list that discovery
+  // replaced — and break the day the CLI ships its next family. Take the first
+  // real (non-"Default") entry of each built-in group instead.
+  const firstRealModel = (provider) =>
+    win.evaluate(
+      (provider) =>
+        window.__praxisProviders
+          .getState()
+          .choices.find(
+            (c) => c.provider === provider && !c.connectionId && c.modelId !== 'default'
+          )?.value ?? null,
+      provider
+    )
+  const claudeValue = await firstRealModel('claude')
+  const codexValue = await firstRealModel('codex')
+  if (!claudeValue || !codexValue)
+    throw new Error('built-in seats missing from providers.choices()')
+  const optionsOf = (label) =>
+    win.$$eval(`select[aria-label="${label}"] option`, (os) =>
+      os.map((o) => ({ value: o.value, label: o.textContent?.trim() ?? '' }))
+    )
+  const providerOptions = await optionsOf('Provider')
+  // The two built-in seats lead (labelled by harness), and the Settings row is
+  // LAST — any saved connection sits between them.
+  if (providerOptions[0]?.value !== 'claude' || providerOptions[1]?.value !== 'codex') {
+    throw new Error(
+      `provider picker should lead with the built-in seats: ${JSON.stringify(providerOptions)}`
+    )
   }
-  await win.selectOption('select[aria-label="Backend"]', 'codex')
+  if (providerOptions[0].label !== 'Claude' || providerOptions[1].label !== 'Codex') {
+    throw new Error(`provider rows carry their group label: ${JSON.stringify(providerOptions)}`)
+  }
+  if (providerOptions[providerOptions.length - 1]?.value !== '__manage-providers__') {
+    throw new Error(`"Add new…" must be the last provider row: ${JSON.stringify(providerOptions)}`)
+  }
+  // The model list is scoped to the selected provider (Claude at rest) — the other
+  // harness's models are not in it.
+  const claudeModels = (await optionsOf('Model')).map((o) => o.value)
+  if (!claudeModels.includes(claudeValue) || claudeModels.includes(codexValue)) {
+    throw new Error(
+      `model picker should offer only Claude's models: ${JSON.stringify(claudeModels)}`
+    )
+  }
+  // Switching provider re-points the harness and repopulates the models.
+  await win.selectOption('select[aria-label="Provider"]', 'codex')
+  const derived = await win.evaluate(() => window.__praxisSession.getState().provider)
+  if (derived !== 'codex') throw new Error(`picking the Codex provider should set it: ${derived}`)
+  const codexModels = (await optionsOf('Model')).map((o) => o.value)
+  if (!codexModels.includes(codexValue) || codexModels.includes(claudeValue)) {
+    throw new Error(`model picker should follow the provider: ${JSON.stringify(codexModels)}`)
+  }
+  await win.selectOption('select[aria-label="Model"]', codexValue)
+  await win.waitForFunction((v) => window.__praxisSession.getState().model === v, codexValue, {
+    timeout: 5000
+  })
   // The `codex login` hint is NOT a nag on every switch — an already-connected
   // user shouldn't see it. It only appears after a turn fails to connect.
   if ((await win.$('.provider-hint')) !== null)
     throw new Error('provider hint should stay hidden until a Codex turn fails')
-  // Selecting Codex swaps the model picker to Codex's own models (not Claude's).
-  const codexModels = await win.$$eval('select[aria-label="Model"] option', (os) =>
-    os.map((o) => o.value)
-  )
-  if (!codexModels.includes('gpt-5-codex') || codexModels.includes('opus')) {
-    throw new Error(`Codex backend should list Codex models, got: ${JSON.stringify(codexModels)}`)
-  }
   // A Codex auth/"not connected" failure surfaces the login hint.
   await win.evaluate(() => window.__praxisSession.getState().setCodexAuthNeeded(true))
   await win.waitForSelector('.provider-hint', { timeout: 5000 })
   const hint = (await win.textContent('.provider-hint'))?.toLowerCase() ?? ''
   if (!hint.includes('codex login')) throw new Error(`provider hint should mention codex login: ${hint}`)
   await win.evaluate(() => window.__praxisSession.getState().setCodexAuthNeeded(false))
-  await win.selectOption('select[aria-label="Backend"]', 'claude') // reset
+  await win.selectOption('select[aria-label="Provider"]', 'claude') // reset to Claude
   if ((await win.$('.provider-hint')) !== null) throw new Error('hint should hide for Claude')
+  // Switching provider lands on that provider's Default rather than carrying a
+  // model id across (it would mean nothing to the other harness).
+  const afterSwitch = await win.evaluate(() => {
+    const s = window.__praxisSession.getState()
+    return {
+      provider: s.provider,
+      model: s.model,
+      modelId: s.modelId,
+      connectionId: s.connectionId
+    }
+  })
+  if (afterSwitch.provider !== 'claude' || afterSwitch.modelId !== 'default') {
+    throw new Error(`switching provider should select its Default: ${JSON.stringify(afterSwitch)}`)
+  }
+  // "Add new…" isn't a provider — it opens Settings and leaves the pick be.
+  await win.selectOption('select[aria-label="Provider"]', '__manage-providers__')
+  const afterManage = await win.evaluate(() => ({
+    open: window.__praxisProviders.getState().settingsOpen,
+    provider: window.__praxisSession.getState().provider,
+    model: window.__praxisSession.getState().model
+  }))
+  if (
+    !afterManage.open ||
+    afterManage.provider !== 'claude' ||
+    afterManage.model !== afterSwitch.model
+  ) {
+    throw new Error(`"Add new…" should open settings only: ${JSON.stringify(afterManage)}`)
+  }
+  // The Settings dialog itself renders its one tab + the empty connections state.
+  await win.waitForSelector('[data-slot="dialog-title"]:has-text("Settings")', { timeout: 8000 })
+  await win.screenshot({ path: join(artifacts, '09b-settings-dialog.png') })
+  await win.evaluate(() => window.__praxisProviders.getState().setSettingsOpen(false))
+
+  // Model ids are DISCOVERED now, so a chat persisted against one the harness has
+  // since retired matches no choice at all. It must degrade to that provider's
+  // Default rather than render a dead row — while leaving the stored settings
+  // exactly as they are (they're only rewritten when the user actually picks).
+  await win.evaluate(() =>
+    window.__praxisSession.getState().setChatAgentSettings({
+      provider: 'claude',
+      model: 'claude:retired-in-2026',
+      modelId: 'retired-in-2026',
+      effort: 'high',
+      permissionMode: 'auto'
+    })
+  )
+  const staleId = await win.evaluate(() => {
+    const modelSel = document.querySelector('select[aria-label="Model"]')
+    return {
+      provider: document.querySelector('select[aria-label="Provider"]').value,
+      label: modelSel.selectedOptions[0]?.textContent?.trim() ?? '',
+      values: [...modelSel.options].map((o) => o.value),
+      stored: window.__praxisSession.getState().model
+    }
+  })
+  if (staleId.provider !== 'claude' || staleId.label !== 'Default') {
+    throw new Error(
+      `a retired model id should fall back to its provider's Default: ${JSON.stringify(staleId)}`
+    )
+  }
+  if (staleId.values.includes('claude:retired-in-2026')) {
+    throw new Error('the retired id must not be offered as an option of its own')
+  }
+  if (staleId.stored !== 'claude:retired-in-2026') {
+    throw new Error(`the picker must not rewrite the chat's stored model: ${staleId.stored}`)
+  }
 
   // Model/backend choices are per live chat. Changing the new chat's Codex model
   // must not overwrite the older chat, and switching between their rail rows must
@@ -286,21 +458,13 @@ try {
     session.setChatAgentSettings({ provider: 'codex', model: 'default', effort: 'high' })
     return { key, newer }
   })
-  // LKM-55: a chat with no messages yet has no rail row — it appears only once
-  // its first message is sent, so "+" can't fill the rail with "New chat" rows.
-  await win.waitForFunction(() => document.querySelectorAll('.rail__chat').length === 0, null, {
+  // Main is a permanent first row, and secondary chats remain visible even before
+  // their first message because they already own provider context + a worktree.
+  await win.waitForFunction(() => document.querySelectorAll('.rail__chat').length === 2, null, {
     timeout: 5000
   })
-  // The older chat gains its first message → its row appears; the still-empty
-  // newer chat stays hidden.
-  await win.evaluate(({ key }) => {
-    window.__praxisStore.getState().appendUser('older chat prompt', key)
-  }, perChat)
-  await win.waitForFunction(() => document.querySelectorAll('.rail__chat').length === 1, null, {
-    timeout: 5000
-  })
-  // LKM-55: "+" while an empty live chat exists reuses it (here: the already-
-  // active `newer`) instead of stacking another session.
+  // "+" while an empty live chat exists reuses it (here: the already-active
+  // `newer`) instead of stacking another session.
   await win.click('.rail__new-chat')
   const afterPlus = await win.evaluate(({ key }) => {
     const p = window.__praxisWorkspace.getState().projects.find((x) => x.key === key)
@@ -309,20 +473,20 @@ try {
   if (afterPlus.count !== 2 || afterPlus.active !== perChat.newer) {
     throw new Error(`"+" with an empty chat live should reuse it: ${JSON.stringify(afterPlus)}`)
   }
-  // The newer chat's first message lands → both rows show (newest first).
-  await win.evaluate(({ newer }) => {
+  await win.evaluate(({ key, newer }) => {
+    window.__praxisStore.getState().appendUser('older chat prompt', key)
     window.__praxisStore.getState().appendUser('newer chat prompt', newer)
   }, perChat)
   await win.waitForFunction(() => document.querySelectorAll('.rail__chat').length === 2, null, {
     timeout: 5000
   })
-  await win.selectOption('select[aria-label="Model"]', 'gpt-5-codex')
+  await win.selectOption('select[aria-label="Model"]', codexValue)
   const changedNew = await win.evaluate(({ key, newer }) =>
     window.__praxisWorkspace.getState().projects.find((p) => p.key === key)?.chatSettings?.[newer]?.model,
   perChat)
-  if (changedNew !== 'gpt-5-codex') throw new Error(`new chat model was not stored: ${changedNew}`)
-  // The rail orders chats newest first, so the second button is the original one.
-  await win.locator('.rail__chat').nth(1).click()
+  if (changedNew !== codexValue) throw new Error(`new chat model was not stored: ${changedNew}`)
+  // Main stays first; the secondary chat follows it.
+  await win.locator('.rail__chat').nth(0).click()
   await win.waitForFunction(
     () => window.__praxisSession.getState().model === 'sonnet',
     null,
@@ -335,10 +499,10 @@ try {
   if (oldPicker.provider !== 'claude' || oldPicker.model !== 'sonnet') {
     throw new Error(`old chat picker leaked the new chat model: ${JSON.stringify(oldPicker)}`)
   }
-  await win.locator('.rail__chat').nth(0).click()
+  await win.locator('.rail__chat').nth(1).click()
   await win.waitForFunction(
-    () => window.__praxisSession.getState().model === 'gpt-5-codex',
-    null,
+    (expected) => window.__praxisSession.getState().model === expected,
+    codexValue,
     { timeout: 5000 },
   )
 
@@ -421,6 +585,33 @@ try {
   await win.waitForSelector('.composer__input ~ * img, .composer img', { timeout: 5000 }).catch(() => {})
   const thumb = await win.$('img[alt="attachment"]')
   if (!thumb) throw new Error('pasted image should add a thumbnail attachment')
+  // LKM-66: the chip row is left-aligned with the prompt text, not centered
+  // (the InputGroup is a flex column with items-center, so a shrink-to-fit row
+  // would float to the middle).
+  const attachAlign = await win.evaluate(() => {
+    const row = document.querySelector('.composer__attachments')
+    const chip = row?.firstElementChild
+    const ta = document.querySelector('.composer__input')
+    if (!row || !chip || !ta) return null
+    const style = getComputedStyle(ta)
+    return {
+      chipLeft: chip.getBoundingClientRect().left,
+      textLeft: ta.getBoundingClientRect().left + parseFloat(style.paddingLeft),
+      rowWidth: row.getBoundingClientRect().width,
+      inputWidth: ta.getBoundingClientRect().width,
+    }
+  })
+  if (!attachAlign) throw new Error('attachment chip row should be in the composer')
+  if (Math.abs(attachAlign.chipLeft - attachAlign.textLeft) > 1) {
+    throw new Error(
+      `attachment chip should start at the prompt text (${attachAlign.textLeft}), got ${attachAlign.chipLeft}`
+    )
+  }
+  if (Math.abs(attachAlign.rowWidth - attachAlign.inputWidth) > 1) {
+    throw new Error(
+      `attachment row should span the composer like the textarea (${attachAlign.inputWidth}), got ${attachAlign.rowWidth}`
+    )
+  }
   // Removing it clears the chip.
   await win.click('button[aria-label="Remove image"]')
   await win.waitForFunction(() => !document.querySelector('img[alt="attachment"]'), { timeout: 5000 })
@@ -457,6 +648,43 @@ try {
   // Removing it clears the card.
   await win.click('button[aria-label="Remove dropped-notes.txt"]')
   await win.waitForFunction((p) => !document.querySelector(`[title="${p}"]`), droppedPath, {
+    timeout: 5000
+  })
+
+  // Drop an IMAGE file → it becomes a vision thumbnail as before, but it ALSO
+  // keeps the file's real on-disk path (LKM-67), which the turn hands to the
+  // agent so it can copy/point at the actual file instead of asking where it
+  // lives. Same real-preload seam as the file card above.
+  const droppedImage = join(artifacts, 'dropped-shot.png')
+  writeFileSync(
+    droppedImage,
+    Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==',
+      'base64'
+    )
+  )
+  await win.evaluate(() => {
+    const fi = document.createElement('input')
+    fi.type = 'file'
+    fi.id = '__test_image_input'
+    fi.style.display = 'none'
+    document.body.appendChild(fi)
+  })
+  await win.setInputFiles('#__test_image_input', droppedImage)
+  await win.evaluate(() => {
+    const fi = document.getElementById('__test_image_input')
+    const dt = new DataTransfer()
+    dt.items.add(fi.files[0])
+    const ta = document.querySelector('.composer__input')
+    ta.dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true }))
+    fi.remove()
+  })
+  const imageChip = await win.waitForSelector(`[title="${droppedImage}"]`, { timeout: 5000 })
+  if (!(await imageChip.$('img[alt="attachment"]'))) {
+    throw new Error('a dropped image should still render as a thumbnail, not a file card')
+  }
+  await win.click('button[aria-label="Remove image"]')
+  await win.waitForFunction((p) => !document.querySelector(`[title="${p}"]`), droppedImage, {
     timeout: 5000
   })
 

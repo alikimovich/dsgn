@@ -16,10 +16,16 @@ import type {
  * + `AgentEvent`. A `ModelProvider` plugs a specific backend (Claude Agent SDK,
  * OpenAI Codex SDK, Gemini CLI, …) behind that seam.
  *
- * Auth is **per-user subscription login** for every provider (Claude
+ * Auth is per-user at runtime, by one of two paths — never a key committed in-repo.
+ * A **built-in seat** signs in with the user's own subscription (Claude
  * `setup-token`, Codex "sign in with ChatGPT", Gemini "login with Google", Grok
- * `grok login`) — never API keys committed in-repo. A provider whose CLI/SDK
- * isn't logged in surfaces an `error` event the renderer maps to its login banner.
+ * `grok login`) and needs no configuration; a provider whose CLI/SDK isn't logged in
+ * surfaces an `error` event the renderer maps to its login banner. A **connection**
+ * (v10 — `AgentOptions.connectionId`, see `ProviderConnection` in shared/api.ts) uses
+ * the user's OWN API key for an OpenAI-compatible endpoint they added, so open models
+ * can drive a chat: that key is encrypted at rest with Electron `safeStorage`, lives
+ * only in main (the renderer only ever learns `hasKey`), and is handed to the backend
+ * per-session rather than written into any CLI's global config.
  */
 
 /** An in-flight approve/deny prompt awaiting the user's decision. */
@@ -70,6 +76,9 @@ export interface SpawnContext {
    *  this root, not the worktree — a worktree write would be stranded when the
    *  worktree is merged/dropped. Absent ⇒ cwd IS the live root. */
   liveRoot?: string
+  /** Durable Praxis-managed project decisions captured when this provider
+   * session starts. Backends inject them into their initial instructions. */
+  projectMemory?: string
 }
 
 /**
@@ -108,7 +117,18 @@ export interface ProviderSession {
   // bookkeeping (options update, pending release) around them.
   setModel?: (model: string) => Promise<void>
   setPermissionMode?: (mode: PermissionMode) => Promise<void>
-  interrupt?: () => Promise<void>
+  /**
+   * Stop the in-flight turn. MUST settle promptly — Stop is the user's escape
+   * hatch, so a backend whose graceful cancel can block has to bound it itself
+   * and escalate (agent.ts also caps the wait, but only it can clean up after).
+   *
+   * `hardStopped: true` means the graceful path failed and the backend killed the
+   * underlying query/process, so this SESSION is now dead — agent.ts rebuilds the
+   * chat rather than leaving one that looks alive but swallows every later turn.
+   * A backend whose cancel is purely local (an AbortController it owns) never
+   * needs it: resolving undefined reads as a clean stop.
+   */
+  interrupt?: () => Promise<{ hardStopped: boolean } | undefined>
 }
 
 export interface ModelProvider {
@@ -137,5 +157,8 @@ export interface ModelProvider {
    * (and agent.ts falls back to the first-message heuristic) on any failure.
    * Optional — a backend without a cheap completion primitive omits it.
    */
-  generateTitle?: (transcript: SessionTranscriptEntry[], options: AgentOptions) => Promise<string | null>
+  generateTitle?: (
+    transcript: SessionTranscriptEntry[],
+    options: AgentOptions
+  ) => Promise<string | null>
 }

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32">
+  <!-- Deliberately loud and un-folder-like: the rail-favicon test proves the
+       project glyph by LOOKING different from the grey folder it replaces, in a
+       screenshot a human reads. -->
+  <rect width="32" height="32" rx="7" fill="#e5007d" />
+  <circle cx="16" cy="16" r="6" fill="#ffffff" />
+</svg>

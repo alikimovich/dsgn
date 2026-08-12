@@ -17,10 +17,12 @@ import type {
   SlashCommandItem
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { addUsage, emptyUsage, isEmptyUsage, readUsage, usageDelta } from '../../shared/run-stats'
 import { checkContrast, suggestAccessible } from '../apca'
 import { lexLiteral, locateAnchor, validateManifest } from '../control-manifest'
 import { saveManifest } from '../control-panels'
 import { fluidClamp, fluidScale } from '../fluid'
+import { recordClaudeModels } from '../model-catalog'
 import { oklchScale } from '../oklch'
 import { capturePreview, getPreviewUrl } from '../preview-state'
 import { praxisRules } from '../rules'
@@ -40,6 +42,7 @@ import {
   toTransition
 } from '../spring'
 import { letterSpacing, lineHeight } from '../type-metrics'
+import { interruptWithEscalation } from './interrupt'
 import { createRecordCapture } from './record'
 import { sanitizeTitle, transcriptDigest } from './title'
 import { AUTO_ALLOW_TOOLS, describeTool, sendToRenderer, toolDetail, touchesSidecar } from './tools'
@@ -56,6 +59,14 @@ import type {
 // ../../agent-plugin), the same walk as index.ts's appIcon. Only wired in when
 // present so a stripped build degrades gracefully instead of erroring.
 const PLUGIN_PATH = join(__dirname, '../../agent-plugin')
+
+/**
+ * How long Stop waits for the SDK's graceful `interrupt()` before killing the
+ * query outright. Generous enough that a merely BUSY subprocess (mid tool call,
+ * flushing a long response) still gets to stop cleanly and keep its session, but
+ * short enough that a wedged one doesn't leave the user staring at a dead button.
+ */
+const INTERRUPT_GRACE_MS = 3_000
 
 // The two in-process `praxis` MCP tools, fully-qualified (mcp__<server>__<tool>).
 // Read-only observers of the user's preview — auto-allowed so they never prompt.
@@ -573,6 +584,11 @@ async function startSession(
   const pendingQuestions = new Map<string, PendingQuestion>()
   // Per-session: disposed when replaced/closed; namespaces fallback permission ids.
   let disposed = false
+  // Set when `interrupt` had to force-stop a wedged query. The abort makes the
+  // reader loop throw rather than reach a `result`, but a graceful interrupt that
+  // lands just AFTER the grace window could still deliver one — and the seam
+  // promises exactly one `done` per turn, which the escalation has already sent.
+  let hardStopped = false
   let permCounter = 0
 
   const emit = (event: AgentEvent): void => {
@@ -1130,7 +1146,7 @@ async function startSession(
       systemPrompt: {
         type: 'preset',
         preset: 'claude_code',
-        append: praxisRules({ previewTools: true })
+        append: praxisRules({ previewTools: true, projectMemory: ctx?.projectMemory })
       },
       // The praxis MCP server (preview_location / preview_screenshot / define_controls /
       // spring_to_css / check_contrast / fluid_clamp / color_scale / layered_shadow /
@@ -1288,9 +1304,41 @@ async function startSession(
       /* older SDK / not ready — the init message will still populate on first turn */
     })
 
+  // Feed the model picker (see main/model-catalog.ts). A LIVE query is the only
+  // thing that can say which models this account actually has — `choices()` runs
+  // on a picker render with no session to ask — so every session opportunistically
+  // hands its answer to the catalog, which persists it for the next launch. Purely
+  // fire-and-forget: never awaited, never emitted, never able to fail a turn. The
+  // try/catch is for an SDK old enough to lack the method outright, which would
+  // throw SYNCHRONOUSLY here and take session startup with it.
+  try {
+    void q
+      .supportedModels()
+      .then((models) => recordClaudeModels(models))
+      .catch(() => {
+        /* not ready / no auth — the picker keeps its cached or last-resort list */
+      })
+  } catch {
+    /* no supportedModels() on this SDK — same outcome, one turn earlier */
+  }
+
   // Drive the output stream for the life of the session.
   void (async () => {
     let streamedText = false
+    // Token accounting for the API request in flight. The SDK reports the SAME
+    // request's usage repeatedly and cumulatively — `message_start` (the input
+    // side), then each `message_delta` (the running output total), then the
+    // complete `assistant` message — so remember the running maximum already
+    // emitted and send only what's new. Reset per request, at `message_start`.
+    let sentUsage = emptyUsage()
+    const reportUsage = (raw: unknown): void => {
+      const total = readUsage(raw)
+      if (!total) return
+      const delta = usageDelta(sentUsage, total)
+      if (isEmptyUsage(delta)) return
+      sentUsage = addUsage(sentUsage, delta)
+      emit({ type: 'usage', ...delta })
+    }
     try {
       for await (const msg of q) {
         switch (msg.type) {
@@ -1311,6 +1359,15 @@ async function startSession(
             break
           }
           case 'stream_event': {
+            const ev = (msg as { event?: { type?: string; message?: unknown; usage?: unknown } })
+              .event
+            if (ev?.type === 'message_start') {
+              // A new request — its counters start from zero again.
+              sentUsage = emptyUsage()
+              reportUsage((ev.message as { usage?: unknown } | undefined)?.usage)
+            } else if (ev?.type === 'message_delta') {
+              reportUsage(ev.usage)
+            }
             const text = textDelta(msg)
             if (text) {
               streamedText = true
@@ -1320,6 +1377,9 @@ async function startSession(
             break
           }
           case 'assistant': {
+            // The final, authoritative usage for this request — a no-op delta
+            // when the stream events above already reported all of it.
+            reportUsage((msg.message as { usage?: unknown }).usage)
             for (const block of msg.message.content) {
               if (block.type === 'text' && !streamedText) {
                 cap.appendAssistant(block.text)
@@ -1334,6 +1394,7 @@ async function startSession(
             break
           }
           case 'result': {
+            if (hardStopped) break // the force-stop already finalized and sent `done`
             cap.finalize()
             emit({ type: 'done' })
             streamedText = false
@@ -1372,7 +1433,33 @@ async function startSession(
       await q.setPermissionMode?.(mode)
     },
     interrupt: async () => {
-      await q.interrupt?.()
+      // `q.interrupt()` is a CONTROL REQUEST to the CLI subprocess, and the SDK's
+      // control-request promise settles only when a matching `control_response`
+      // comes back — there is no timeout in the SDK. So when that subprocess is
+      // wedged (the request went out and nothing ever came back: 0 tokens in, 0
+      // out, the turn running for minutes) the graceful path never returns, this
+      // promise never settles, and Stop does nothing at all — precisely the state
+      // Stop exists to escape. Race it, then escalate to the abort signal the
+      // query was constructed with, which is the kill switch shutdown() already
+      // relies on and which nothing else was reaching for here.
+      return await interruptWithEscalation({
+        graceful: () => q.interrupt?.(),
+        graceMs: INTERRUPT_GRACE_MS,
+        escalate: () => {
+          hardStopped = true // stop the reader loop double-emitting on a late result
+          abort.abort()
+          input.close()
+          emit({
+            type: 'error',
+            message:
+              'That turn stopped responding, so Praxis force-stopped it. The chat has been ' +
+              'restarted — earlier messages are still shown, but the assistant no longer has ' +
+              'them in context.'
+          })
+          cap.finalize()
+          emit({ type: 'done' })
+        }
+      })
     }
   }
 }

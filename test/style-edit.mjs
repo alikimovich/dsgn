@@ -96,13 +96,22 @@ try {
   // setOpen + the tab click each poll: a straggler click from pickElement's
   // retry loop (input delivery lags when the window is unfocused) can arrive
   // AFTER the first setOpen and close the island again (a fresh pick resets it).
-  const openStylesTab = async () => {
+  //
+  // The `source` argument is what makes that poll honest. Closing the island
+  // only unmounts PanelHost in the main renderer — the island's own
+  // webContents lives on with the PREVIOUS selection's card still in its DOM.
+  // So "the Styles groups are rendered" is satisfied by a stale, closed island,
+  // and every later panelEval would then drive the element we selected BEFORE
+  // this one (writing its edits into that source file). Requiring the island's
+  // own header to name the current selection is the only proof it is live.
+  const openStylesTab = async (source) => {
     const end = Date.now() + 20000
     for (;;) {
       await win.evaluate(() => window.__praxisPropsIsland.getState().setOpen(true))
       await expandPanel()
       // Radix TabsTrigger activates on mousedown (a bare .click() only fires click).
       const ok = await panelEval(`(() => {
+        if (document.querySelector('.proppanel__source')?.textContent?.trim() !== ${JSON.stringify(source)}) return false
         const t = [...document.querySelectorAll('.proppanel__tab')].find((b) => b.textContent.trim() === 'Styles')
         if (t) {
           for (const type of ['mousedown', 'mouseup', 'click']) {
@@ -112,7 +121,7 @@ try {
         return document.querySelectorAll('.stylepanel__grouptitle').length >= 4
       })()`)
       if (ok === true) return
-      if (Date.now() > end) throw new Error('the Styles tab never rendered its groups')
+      if (Date.now() > end) throw new Error(`the Styles tab never rendered its groups for ${source}`)
       await new Promise((r) => setTimeout(r, 300))
     }
   }
@@ -201,7 +210,7 @@ try {
   await pickElement('tw-box', TW_SRC)
 
   // --- Open the island and switch to the Styles tab; all four v1 groups render. ---
-  await openStylesTab()
+  await openStylesTab(TW_SRC)
   const groups = await panelEval(
     "[...document.querySelectorAll('.stylepanel__grouptitle')].map((e) => e.textContent.trim())"
   )
@@ -311,7 +320,7 @@ try {
   // --- Select the inline-styled element; S2 must merge into its style object. ---
   await pickElement('inline-box', INLINE_SRC)
   // A fresh pick closes the island — reopen on the new selection.
-  await openStylesTab()
+  await openStylesTab(INLINE_SRC)
   await shotIsland('style-edit-island-inline.png')
 
   const beforeInline = readFileSync(styled, 'utf8')
@@ -377,7 +386,7 @@ try {
   // specified-declaration read (`declaredVars`, via style-provenance.ts) can,
   // and it correctly reports null here (no var() in play). ---
   await pickElement('token-box', TOKEN_SRC)
-  await openStylesTab()
+  await openStylesTab(TOKEN_SRC)
 
   // The header line proves the TokenSet reached the island at all (it travels
   // main renderer → panel:state → island, a seam nothing else covers) —
@@ -410,7 +419,7 @@ try {
   // literally. `el.style.getPropertyValue('color')` preserves that unresolved
   // (unlike getComputedStyle), so THIS is what should show the chip. ---
   await pickElement('proven-token-box', PROVEN_TOKEN_SRC)
-  await openStylesTab()
+  await openStylesTab(PROVEN_TOKEN_SRC)
 
   const chip = await waitPanel(
     `${COLOR_ROW}?.querySelector('.stylepanel__token')?.textContent?.trim() ?? ''`
@@ -470,7 +479,7 @@ try {
 
   // --- Transitions (phase 4): back to the Tailwind element. ---
   await pickElement('tw-box', TW_SRC)
-  await openStylesTab()
+  await openStylesTab(TW_SRC)
 
   // S1 duration: 150ms sits on Tailwind's named time scale → `duration-150`
   // (not `duration-[150ms]`) appends to the class list.

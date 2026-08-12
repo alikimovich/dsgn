@@ -75,9 +75,55 @@ src/
                     (framework 'static': no package.json/dev command; live-reload)
     file-tree.ts    list a project's files (git ls-files / fs-walk) for the
                     pop-out editor's @pierre/trees sidecar (source:tree IPC)
+    project-icon.ts the project's own favicon for its rail row (project:icon) —
+                    a declared <link rel="icon"> first, else the conventional
+                    paths; inlined as a data: URL, mtime-revalidated. Reads the
+                    FILES, not the running page, so an un-run project has one too
+    file-ops.ts     the same sidebar's file MANAGER — create/rename/delete
+                    (source:create-file/rename-file/delete-file). Pure; every
+                    renderer-supplied path is re-validated (no traversal, no
+                    .git/.praxis/.dsgn/node_modules), delete goes to the OS trash
+    media.ts / media-types.ts   the editor's media viewer: opening a .png/.mp4 must
+                    SHOW it, not decode its bytes as utf8. media-types is the pure
+                    half (ext→kind/MIME, binary sniff, HTTP Range parsing); media.ts
+                    owns the `praxis-media://` protocol — main hands the renderer an
+                    opaque per-file token, so the scheme can never be aimed at a path
+                    the renderer chose. Streamed + range-servable (a <video> can't
+                    seek otherwise, and a big one must not cross IPC as base64)
     agent.ts        persistent multi-turn agent session (streams over agent:* IPC)
+    attachments.ts  gives a PASTED composer image a path (attachments:save writes
+                    the clipboard bytes under <userData>/praxis/attachments so the
+                    turn can tell the agent where the image it can see lives; a
+                    DROPPED image needs no call — the renderer already has its
+                    path). Pure fs+path; sanitizes the renderer-supplied name
     backends/       provider seam: claude.ts, codex.ts, gemini.ts behind pickProvider
-                    (gemini currently has NO SDK dep — treat as experimental)
+                    (gemini currently has NO SDK dep — treat as experimental). A set
+                    AgentOptions.connectionId routes to codex.ts whatever `provider` says.
+                    codex-retry.ts is codex.ts's pure half (the CLI emits all five of its
+                    retry attempts as separate `error` events; this collapses them into
+                    one line that keeps the actual cause). interrupt.ts is the shared
+                    "Stop must always work" helper — ask the backend nicely, then kill
+                    (see the Gotcha on the SDK's untimed interrupt)
+    codex-usage.ts  live token counts for a Codex turn: the SDK's event stream
+                    reports usage only at `turn.completed`, so this tails the
+                    CLI's own session rollout (`$CODEX_HOME/sessions/…jsonl`) for
+                    its `token_count` records. Every reading is a running THREAD
+                    total, so codex.ts DIFFS them (`usageDelta`), never sums
+    providers-store.ts / providers.ts   v10 "connections" — user-added OpenAI-compatible
+                    endpoints (AI Gateway, Groq, custom) so open models like Kimi/DeepSeek
+                    can drive a chat. Same pure/main split as control-manifest vs
+                    control-panels: the store takes an injected baseDir + SecretCipher (so
+                    it unit-tests without electron), while providers.ts owns the
+                    safeStorage cipher, the providers:* IPC, the /models catalog probe,
+                    the picker's ModelChoice list, and resolveConnection() — the seam
+                    backends/codex.ts aims the Codex SDK at
+    model-catalog.ts / codex-models.ts   what the two BUILT-IN seats offer, discovered
+                    instead of curated. model-catalog is the pure half (parsers + a TTL
+                    cache with injected clock/baseDir, persisted under userData);
+                    codex-models runs `codex debug models` on the SDK's OWN vendored
+                    binary, not PATH. Claude needs a live session (Query.supportedModels()),
+                    so backends/claude.ts hands its answer back via recordClaudeModels;
+                    providers.ts only schedules the refresh, never on the render path
     simulator.ts    iOS Simulator preview (Metro/Expo detect, MJPEG sim bridge)
     props.ts / props-svelte.ts   prop editing engines (React via react-docgen /
                     Svelte 5); they mirror each other's splice/apply contract
@@ -117,6 +163,12 @@ src/
     git.ts, worktrees.ts, chat-worktrees.ts, chat-isolation.ts
                     git/worktree primitives; worktrees: per-chat isolation + sync/merge/recovery;
                     chat-worktrees: turn-scoped ops (sync, commit, apply); chat-isolation: lifecycle
+    live-commit.ts  one commit per turn on the LIVE checkout (pure): stages only the
+                    files that turn changed, partial-commits so the user's own staged
+                    work is untouched, skips non-repo-root projects, never throws
+    publish-scope.ts  what a session changed / is there anything to publish (pure) —
+                    measured against the default branch, since committed turns leave
+                    nothing to see in a HEAD-relative diff. Used by annotations.ts
     setup.ts, scaffold.ts, xcode.ts
     diagnose.ts, diag-cache.ts, diag-rules.ts         sessions-store.ts, edit-history.ts
     update.ts       self-update detection (pure: fetch + rev-list behind-count)
@@ -140,11 +192,22 @@ src/
   shared/token-match.ts  which design tokens may be offered for a css property
                     and which one a computed value IS. Pure + used by BOTH main
                     (re-validating a pick) and the island (chips + picker)
+  shared/run-stats.ts  the chat status line's numbers: main normalizes each
+                    provider's usage payload + dedupes its repeated cumulative
+                    readings into `usage` event deltas, the renderer sums and
+                    formats them (RunStats.tsx, next to the cat)
   renderer/src/     React 18 UI: App.tsx, components/ (ChatPanel, PreviewPane,
                     PropPanel, CodeDrawer, Rail, LayersPanel + LayersTree, …),
                     zustand store.ts, shadcn ui/
                     components/styles/  the Styles tab's rows + controls
                     (ScrubInput, ColorControl, BezierEditor, TokenPicker)
+                    SettingsDialog.tsx + ProviderForm.tsx  the v10 Settings dialog
+                    (Models & Providers): add a connection, probe its catalog, tick
+                    models. providers-store.ts is its zustand slice (kept OUT of the
+                    already-oversized store.ts)
+                    composer-drafts.ts  the composer's unsent text + attachments,
+                    keyed by chat (ChatPanel is mounted once for the whole app, so
+                    component state would follow the user into the next chat)
   ../bin/praxis.mjs the `praxis` CLI (launch + `--update`); owns the update
                     sequence (git pull + bun install + build). ../install.sh boots it.
 test/             hand-rolled .mjs tests + fixtures/ + artifacts/ (PNGs, gitignored)
@@ -201,6 +264,11 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
 - Keep files under ~500 lines; extract instead of appending to `App.tsx`,
   `store.ts`, or `styles.css` (already oversized — see `docs/TASKS.md`).
 - Auth is per-user at runtime; never commit secrets. Nothing sensitive in-repo.
+  The two built-in seats use subscription login (Claude `setup-token` / Codex
+  sign-in-with-ChatGPT). A v10 *connection* is the one path that uses an API key —
+  the user's own, encrypted with `safeStorage` under userData and confined to main.
+  It must never reach the renderer, argv, a log line, or an error string; the
+  renderer only ever observes `hasKey`.
 - Commit in small, focused commits with the Co-Authored-By trailer.
 
 ## Gotchas (hard-won — read before debugging these areas)
@@ -216,6 +284,30 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   handled via the menu item's `click` → `menu:action`, not a renderer keydown;
   and Edit→Undo/Redo route by focus (`buildAppMenu`'s `editCommand` +
   App.tsx's menu-action handler + `menu:native-edit` for focused text fields).
+- **The Agent SDK's `interrupt()` can never return, so Stop must not just await it.**
+  It's a CONTROL REQUEST: the SDK resolves it only when the CLI subprocess sends a
+  matching `control_response`, and there is no timeout anywhere in that path. A
+  wedged subprocess (symptom: turn running for minutes, `↑0 ↓0`) therefore made
+  Stop a dead button — the IPC never resolved, and since `done` is only emitted
+  from a `result` message, the spinner ran forever. The kill switch was present
+  the whole time (`shutdown()`'s `abort.abort()`) but only teardown reached it.
+  Any future backend cancel must bound itself the same way — go through
+  `backends/interrupt.ts`, and report `hardStopped` so agent.ts rebuilds the dead
+  session. Codex was always safe here (its cancel is a local AbortController);
+  Gemini had no `interrupt` at all, so Stop silently did nothing.
+- **Never run an Electron test directly — it uses your REAL app state.**
+  `node test/chat-render.mjs` launches against the live `userData`, so if any
+  project is currently open there the empty state (`openCount === 0`) never
+  renders and the test dies on `waitForSelector('.empty__open')` after 15s.
+  `test/run.mjs` gives every test a fresh `PRAXIS_USER_DATA` temp dir, which is
+  why the same test passes through `bun run test:<name>` / `bun run test`. This
+  trap cost real time twice: it produced three separate TASKS notes claiming
+  "the Electron tier can't launch a window on this machine, confirmed at HEAD"
+  (all wrong, all corrected 2026-08-07) and it makes stash-and-compare baselines
+  meaningless, since both sides fail for the same bogus reason. If you must run
+  one by hand: `PRAXIS_USER_DATA=$(mktemp -d) node test/<name>.mjs`. Note the
+  runner also spawns bare `electron-vite`, so it needs `node_modules/.bin` on
+  PATH — invoke it via `bun run test`, not `node test/run.mjs`.
 - **ESM/CJS**: the Agent SDK is ESM-only, `main` is CJS → dynamic `import()`
   only, never static/`require`.
 - **The preview `WebContentsView` is a separate CDP target** — not in renderer
@@ -272,3 +364,35 @@ docs/             TASKS (next) / PROGRESS (log + rationale) / DESIGN (stamp spec
   Drift from concurrent live edits syncs at turn start; conflicts park on the
   branch for review. One worktree per open chat costs disk (~node_modules are
   symlinked); worktree directories live under `<userData>/praxis/worktrees`.
+- **A worktree's symlinked node_modules/.env must be excluded by NAME, never via
+  the target's `.gitignore`.** They're symlinked into every worktree so it can
+  build, but a `.gitignore` pattern with a trailing slash (`node_modules/`, the
+  Next.js/CRA/Vite default) is *directory-only* and git never treats a symlink as
+  a directory — so it fails to match the symlink. Left to `.gitignore`, the
+  symlink is staged by `git add -A`, the turn-end auto-merge chokes reading it
+  (`EISDIR` → the whole batch is refused), and EVERY turn parks with `node_modules`
+  in the conflict card (this shipped, user-reported 2026-08-08). `worktrees.ts`
+  exports `RUNTIME_DEPS` and unstages it in `captureBase`/`commitWorktree`;
+  `chat-worktrees.ts` spares it from `git clean` with `-e` (`cleanArgs`). Never
+  re-route these through `.gitignore`, and keep any scaffolded `.gitignore`
+  slash-free. `.env` (rule has no slash) hides the bug — it DOES match the symlink,
+  so only `node_modules` leaks; don't let that asymmetry mislead the diagnosis.
+- **The merge onto the live tree is also COMMITTED there — one commit per turn**
+  (`live-commit.ts`, called from `chat-isolation.ts` + the comment-spawn
+  finalizer). Only the files that turn changed are staged, and it's a pathspec
+  (partial) commit, so a user's unrelated dirty/staged work is never swept in.
+  Consequence for anything that asks "what did this session change?": a diff vs
+  `HEAD` now returns nothing — compare against the merge base with the default
+  branch instead (`src/main/publish-scope.ts` does, for the publish paths).
+- **Never hardcode a built-in seat's model list.** It rots invisibly: the picker
+  offered "GPT-5 Codex"/"GPT-5" for months after the Codex CLI moved to the
+  GPT-5.6 family, so a user's first act was to pick a model that no longer
+  existed. Both harnesses can be ASKED (`src/main/model-catalog.ts`), and the
+  arrays left in `providers.ts` are a last resort for "we could not ask", not
+  curation. Two traps if you touch this: the Codex binary to ask is the SDK's
+  VENDORED one (`@openai/codex-<plat>/vendor/…/bin/codex`), never the `codex` on
+  PATH — a global CLI of a different version would answer for a binary that
+  never runs the turns; and `Query.supportedModels()` leads with its own
+  `{value:'default'}`, which collides with praxis's "Default" sentinel, so a
+  discovered `default` is dropped in favour of ours (`agentModelId` maps that
+  exact string to "send no model").

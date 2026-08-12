@@ -2,6 +2,758 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-12 — A project's own favicon leads its rail row
+
+User request: a project with a favicon should show it in the sidebar instead of
+the generic folder icon. New `src/main/project-icon.ts` resolves one from the
+project's SOURCE TREE and inlines it as a `data:` URL; `project:icon` IPC + a
+`useProjectIcons` store (its own file — `store.ts` is long past the ~500-line
+convention) feed `Rail.tsx`, where the `<img>` rides the existing
+`.rail__folder` class so it inherits the same 16px slot and the same
+hover-to-chevron cross-fade. Projects without one are unchanged.
+
+Resolution order: a declared `<link rel="icon">` in an HTML entry wins (it's
+what the project itself says its icon is), then the conventional paths —
+dir-major, `src/app`/`app` ahead of `public` because Next's app router serves
+`app/favicon.ico` in preference, and svg ahead of png ahead of ico within a
+dir. A dangling declaration falls THROUGH to the conventions rather than
+leaving the project iconless.
+
+Why files and not the preview: `page-favicon-updated` would only ever cover the
+project whose dev server is up, and the rail lists every open project — most of
+them cold. Scanning the checkout is the only source that covers the whole list.
+
+Three things worth keeping in mind here. (1) The HTML is project content, so a
+declared href is untrusted input: `../../secret.png` is refused by a
+`withinRoot` check rather than joined blindly. (2) Icons are capped at 512 KB
+and an oversized candidate is SKIPPED (the next one wins) rather than
+disqualifying the project — a 3 MB `icon.png` shouldn't cost a folder glyph.
+(3) Main caches per root and revalidates by the source file's mtime+size, so
+editing a favicon in place updates the rail; the renderer caches misses for the
+session, so ADDING a first favicon to an open project shows on next launch.
+Noted in `project-icons.ts` — a `refresh()` is the fix if it ever bites.
+
+**The Electron tier runs with no display at all.** The 2026-08-07 correction
+established that the tier works when driven through `test/run.mjs` (which
+isolates `PRAXIS_USER_DATA`); this adds the other half — it doesn't need a real
+desktop either. Under `xvfb-run -a`, `test/rail.mjs` passes and the new
+`test/rail-favicon.mjs` drove two real projects and screenshotted the result
+(`test/artifacts/19-rail-favicon.png` — magenta favicon on one row, grey folder
+on the next). Recipe: `electron-vite build`, then
+`PRAXIS_USER_DATA=$(mktemp -d) xvfb-run -a node test/<name>.mjs`. Both halves
+matter — dropping `PRAXIS_USER_DATA` reintroduces the `.empty__open` timeout
+(2026-08-04 hazard note), and dropping `xvfb-run` gives no window. "Needs a
+display" is no longer a reason to leave an electron-tier assertion unrun.
+
+`test/project-icon.mjs` (unit) covers the pure rules plus an end-to-end pick
+over real temp trees; `test/rail-favicon.mjs` (electron) proves the glyph swap,
+including `naturalWidth > 0` so a broken data URL can't pass as a rendered
+icon. `selectable-app` gained a deliberately loud `public/favicon.svg` so the
+screenshot is readable by a human.
+
+## 2026-08-09 — One indent grid for the rail, and actions that stop reserving space
+
+Yesterday's re-sort put the rail's controls in the right places but left them on four
+different vertical lines. Everything inside a project's block now shares one grid: an
+8px pad, a 16px glyph slot, a 7px gap, labels at 31px. The folder icon and the chat
+status dots were already there; "New chat" was inset a further 6px by its own margin
+(its + landed 5px right of the dot column, its label at 35px), and the History fold
+chevron sat in a 12px slot at 15px. Both now sit in the same 16px slot — the + as a
+14px glyph with 1px side margins, the chevron as a 12px one with 2px, and the chevron's
+5px right margin absorbs the difference between the label's 4px gap and the grid's 7px
+so the heading text still lands at 31px. `test/rail-chat-status.mjs` asserts the whole
+grid now (every dot, the +, the chevron; every chat name, the New-chat label, both
+section headings) rather than just the dots and the chat names.
+
+The other misalignment was on the right. A chat row's rename pencil and close × were
+flex children, so they SHORTENED the model/time slot of exactly the rows that have
+them — which is why Main, the one row with neither, pushed its model label ~34px
+further right than every sibling, and why every other row carried a permanent empty
+gutter. They're now an absolutely-positioned overlay: every row's meta ends on the same
+trailing edge, and on hover the meta fades out underneath the buttons instead of the
+row reserving space for them. The overlay is `pointer-events: none` while hidden so an
+invisible × can't eat a click meant for the row; the parent hover arms it before it's
+reachable, and `:focus-within` keeps it usable from the keyboard. A model label (≤66px)
+is wider than the two buttons, so they land entirely inside it; a history row's "3h"
+isn't, so those rows give the name 24px of hover padding to re-ellipsise before the
+buttons rather than run under them.
+
+Two defaults flipped with it. History now starts FOLDED (`historyOpened`, the inverse
+of yesterday's `historyClosed`): the live chats are the actionable list, and past chats
+otherwise push every sibling project down the rail. And the project-memory brain became
+hover-revealed like × — yesterday's reasoning was that an always-on brain next to a
+hover-only × read as two controls of unequal weight, and the same argument works the
+other way round, with the row at rest reduced to just its folder and name.
+
+`src/renderer/src/components/Rail.tsx`, `src/renderer/src/components/RailChatRow.tsx`,
+`src/renderer/src/styles.css`, `test/rail-chat-status.mjs`,
+`test/rail-chat-overflow.mjs`, `test/history-ui.mjs`.
+## 2026-08-09 — The editor shows media instead of decoding it
+
+Clicking `public/images/team/arkady.PNG` in the pop-out editor's file tree used to
+`readFile(…, 'utf8')` it and pour the result into CodeMirror: thousands of lines of
+mojibake with a line-number gutter down the side. `source:read` now classifies the
+file first. Images/video/audio come back as `media` (an empty `code` plus a
+`praxis-media://` URL) and every other non-text file as `binary`; the drawer swaps
+CodeMirror for `MediaPreview` — the picture on a transparency checkerboard, a
+`<video>`/`<audio>` with controls, or a plain placeholder — with a footer reading
+`96 × 96 · 301 B · image/png` and a Fit/1:1 toggle. Save disappears (there is nothing
+to save), the header drops the meaningless `:1`, and `source:write` refuses these
+files outright so no future caller can utf8 round-trip a PNG into corruption.
+
+Why a custom protocol rather than the `data:` URL the composer's attachments use: a
+video has to be RANGE-servable or Chromium can't seek it, and base64ing one through
+IPC to sit in the renderer's heap is exactly the wrong shape. `file://` was the other
+option and it hands the renderer a read primitive for the whole disk. So main
+registers `praxis-media://` (privileged: standard + secure + stream + fetch) and
+serves an opaque per-file TOKEN — the renderer never names a path, so the scheme
+can't be widened into an arbitrary-file read even from a compromised renderer.
+Responses stream from `createReadStream`, honour `Range` (206 + `Content-Range`, 416
+when unsatisfiable) and carry `no-store`, since the token is a hash of the path and
+a stale cached copy would outlive an edit. The renderer's CSP gained
+`img-src … praxis-media:` and a `media-src` (it had none — `<video>` was falling back
+to `default-src 'self'`); `connect-src` was deliberately NOT widened, which is why the
+protocol test drives `net.fetch` from main.
+
+Detection is by extension and case-insensitive — the reported file was `.PNG`, and
+`extname().toLowerCase()` is the whole fix for a class of asset that ships uppercase.
+`.svg` is deliberately absent from the media table: it's markup the user edits, so it
+stays text. The binary fallback is a NUL/U+FFFD sniff on the decoded content, which
+also catches the fonts and archives that were garbling the same way.
+
+`src/main/media.ts`, `src/main/media-types.ts`, `src/main/props.ts`,
+`src/main/index.ts`, `src/shared/api.ts`, `src/renderer/index.html`,
+`src/renderer/src/components/MediaPreview.tsx`,
+`src/renderer/src/components/CodeDrawer.tsx`, `test/media-types.mjs`,
+`test/code-drawer.mjs` (+ a 301-byte `Logo.PNG` fixture, uppercase on purpose).
+
+## 2026-08-09 — The rail's per-project controls sort themselves out
+
+Each rail section now sits where its meaning is. Project memory was a full-width row
+buried under the chat list even though it is a property of the PROJECT, so it moved up
+onto the project row as an always-visible brain action next to ×; × in turn became
+hover-only, since two equally loud controls a few pixels apart made the destructive one
+too easy to hit. "New chat" made the opposite trip: it was a header glyph that only
+appeared for the active project, and it is now a full-width button directly under the
+chat list it appends to — visible for every expanded project (`newChatForProject`
+already handled a backgrounded one by adding the session without stealing the screen).
+
+History became an accordion. Its heading folds the whole section away — open by
+default, session-only state per project, the same shape as "Show N more", which still
+caps the open list at three rows. A project with a long history can now be quiet
+without being collapsed entirely.
+
+The brain's `aria-label` deliberately reads "Open project memory for X", not
+"X's project memory": the memory dialog's textarea is found by
+`[aria-label$="project memory"]`, and a suffix collision would have made the rail
+button answer to the dialog's selector.
+
+`src/renderer/src/components/Rail.tsx`, `src/renderer/src/styles.css`,
+`test/rail-chat-overflow.mjs`.
+
+## 2026-08-08 — Main is stable; child agents have parents; decisions outlive context
+
+The project rail now describes the actual ownership tree instead of flattening live
+chats, comment spawns, and history together. Main is pinned first and non-closeable;
+secondary chats keep their generated names; background comment agents nest beneath the
+exact session that launched them and show the inherited model; Project memory and
+History are explicit separate sections. Main/child working state aggregates up to the
+project row. The rail grew from 168px to 208px so these identities remain readable.
+
+Spawn routing now carries the parent `sessionKey` end-to-end rather than filing every
+worker under the bare project key. The selected chat's provider/model/connection still
+flows into the spawn; Claude remains the only backend declaring detached-spawn support,
+so unsupported backends now explain the fallback into the active chat instead of doing
+it invisibly.
+
+Durable project memory lives under Praxis userData, never inside the repo or `.praxis/`,
+and is capped at 16k characters. Every provider receives it in initial instructions;
+an edited revision reaches an already-live chat once on its next turn. Clearing Main
+saves the visible memory, archives the old transcript, restarts the same stable Main key
+with the same model/posture, and leaves files, secondary chats, and memory untouched.
+
+`src/main/project-memory.ts`, `src/main/agent.ts`, `src/main/rules.ts`,
+`src/renderer/src/components/Rail.tsx`, `src/renderer/src/components/ProjectMemoryDialog.tsx`,
+`test/project-memory.mjs`, `test/project-memory-ui.mjs`, `test/rail-chat-status.mjs`.
+
+## 2026-08-08 — Failed turns park once; only successful turns publish
+
+The old turn hook treated `done` and `error` identically: both auto-landed whatever was
+in the worktree. That made a provider crash or forced interruption publish partial code.
+It also assumed one terminal event, but Codex deliberately reports a failure as `error`
+and then closes the stream with `done`; Praxis finalized that one turn twice.
+
+`TurnTerminalTracker` now claims exactly one outcome after each `agent:send`. A clean
+`done` is `success`; the first `error` is `failed`, and any later terminal event for that
+turn is ignored. Successful work follows the normal repository landing queue. Failed or
+interrupted work is squashed durably onto its attached chat branch and parked without a
+single live write. A failure with no edits simply detaches and removes its empty branch.
+
+The real isolation regression drives a failed terminal through `afterTurn`, confirms the
+partial file exists on `praxis/chat-*` while live HEAD and the working tree stay clean,
+then discards it and confirms the branch is deleted. The pure tracker test pins Codex's
+`error→done`, duplicate `done`, and Claude's error-only shape.
+
+This pass also adds `docs/WORKTREES.md` (state machine, invariants, recovery/limits) and
+`docs/PROVIDERS.md` (the actual Claude/Codex/gateway/Gemini capability matrix), correcting
+README's backend-agnostic instruction/tool claims.
+
+`src/main/turn-terminal.ts`, `src/main/agent.ts`, `src/main/chat-isolation.ts`,
+`src/main/chat-worktrees.ts`, `test/turn-terminal.mjs`, `test/live-commit.mjs`.
+
+## 2026-08-08 — Conflict resolution no longer borrows the user's Git index
+
+Issues #203, #210 and #211 all showed the same family of failure: `.env` or generated
+typecheck/dependency artifacts entered a chat patch, then `git apply --3way` consulted
+the live checkout's real index and refused with `does not match index`. That index is
+allowed to differ — it may contain the user's own staged work — so it was never a sound
+resolver dependency.
+
+The 3-way fallback now snapshots the current working tree, seeds a temporary index from
+that synthetic commit, refreshes its stat data, and applies through it. The user's real
+index is neither read nor mutated. A regression stages one version of a file, leaves a
+different version in the working tree, and proves the chat's non-overlapping edit merges
+while the staged blob stays byte-for-byte unchanged.
+
+Snapshots, chat commits and live commits now share an explicit exclusion policy:
+`.env`/non-template `.env.*`, any `node_modules`, `*.tsbuildinfo`, and Praxis's current
+or legacy sidecars cannot enter a synthetic base or landing. `.env.example`/sample/
+template/defaults remain normal product files. Runtime dependency/env symlinks are only
+created when Git confirms the path is ignored, closing #203's committed `.env` symlink
+path. Snapshot failure now fails the isolated chat open instead of quietly forking from
+stale HEAD and later manufacturing conflicts.
+
+Finally, a committed resolution that still contains complete Git marker triplets remains
+parked; it can no longer be auto-written into the live project. `test/chat-worktrees.mjs`
+now covers all three regressions with real temporary repositories.
+
+`src/main/worktrees.ts`, `src/main/chat-worktrees.ts`, `src/main/live-commit.ts`,
+`src/main/chat-isolation.ts`, `test/chat-worktrees.mjs`, `test/live-commit.mjs`.
+
+## 2026-08-08 — Concurrent chats share one landing queue, not one racing Git index
+
+Git worktrees isolated where models EDITED, but each chat had its own finalization
+promise and all of those promises converged on the same live checkout/index. Two chats
+finishing together could both run `git add`/`git commit` there; `commitLiveTurn` treats
+Git failures as best-effort, so one commit could disappear while its file write remained
+uncommitted. A real two-chat regression now lands both edits as two commits and leaves a
+clean live index.
+
+`src/main/repo-write-queue.ts` is the missing repository-level coordinator. Worktree
+creation/snapshots, turn landing, parked apply/discard/resolve, and final teardown all
+pass through it. Per-chat chains still order one conversation's turns; the repo queue
+orders every writer that ultimately targets the one shared checkout.
+
+Chat branches are now recovery refs, not permanent session furniture. An idle chat keeps
+its linked worktree detached with no `praxis/chat-*` branch. `beforeTurn` recreates and
+attaches the branch before the model can edit, so a crash or conflict still has a durable
+ref. A successful landing (including clean resolution and discard) detaches the worktree
+and deletes the branch immediately. Parked work alone retains its branch. The next turn
+recreates the same name, so long-lived projects no longer accumulate one stale branch per
+chat.
+
+`src/main/repo-write-queue.ts`, `src/main/worktrees.ts`,
+`src/main/chat-worktrees.ts`, `src/main/chat-isolation.ts`,
+`test/live-commit.mjs`, `test/chat-isolation.mjs`.
+## 2026-08-08 — A conflict on almost every turn: the node_modules symlink
+
+**Symptom (user-reported):** the "These changes couldn't be merged automatically"
+card appeared on nearly every chat turn, listing `node_modules` next to the file
+the chat actually edited (`components/arkane-experience.tsx`).
+
+**Cause.** Per-chat isolation symlinks `node_modules`/`.env` into every worktree
+(`worktrees.ts` `doCreateWorktree`) and trusted the target repo's `.gitignore` to
+keep them out of commits. But a `.gitignore` pattern with a *trailing slash*
+(`node_modules/`, the Next.js/CRA/Vite default) is **directory-only** and git
+never classifies a symlink as a directory — so the pattern doesn't match the
+symlink. `commitWorktree`'s `git add -A` then staged it, and the turn-end
+auto-merge (`autoApplyWorktree`) did `readFile(worktree/node_modules)` on a
+symlink-to-a-directory → `EISDIR` → the code treats any read failure as "refuse
+the whole batch" → the turn **parked** every time. The real edit rode along in
+the parked file list but was never the problem. `.env` didn't leak only because
+its rule (`.env`, no slash) *does* match the symlink — that asymmetry was the
+fingerprint.
+
+**Fix (all Praxis-side, so it holds for any repo regardless of its `.gitignore`).**
+A new `RUNTIME_DEPS = ['node_modules', '.env']` export in `worktrees.ts` is now
+excluded explicitly at every stage: `captureBase` and `commitWorktree` unstage it
+after `git add -A` (mirroring the existing `.praxis` unstage), and
+`chat-worktrees.ts`'s three `git clean -fd` sites gained `-e node_modules -e .env`
+(via a `cleanArgs()` helper) so the now-untracked symlinks survive resets and the
+worktree keeps building. `scaffold.ts` also ships new projects with a fuller,
+deliberately **slash-free** `.gitignore`.
+
+**Tests.** `test/chat-worktrees.mjs` gains a repo9 regression: a `node_modules/`
+(trailing-slash) `.gitignore` must still merge a turn cleanly with `node_modules`
+absent from the file list (it fails pre-fix: parks with `node_modules`).
+`test/worktrees.mjs`'s first fixture now gitignores node_modules/.env — it had
+been silently relying on the very leak this fixes (the symlink got committed and
+applied into the live tree, so later worktrees saw it as tracked → "clean").
+
+## 2026-08-08 — The selection badge reports the element's size
+
+The overlay chip named the element (`svg`, `h1#hero-title`) but never said how
+big it was, so the most basic measurement question in a design tool — "how wide
+is this?" — cost a trip to the inspector. The chip now carries a dimmed
+`724 × 38` alongside the name, DevTools-style.
+
+Both chips are one thing now (`makeChip` in `src/preview/preload.ts`): the hover
+label and the persistent selection badge shared their entire style string
+already, and both anchor to the same top-left of the element's rect. Each holds
+two spans — the name and the size — so the size can be restyled and refreshed
+independently of the name. The hover label writes both in `drawOverlay`; the
+selection badge writes its name once at pick time and lets `positionSelection`
+write the size, because that's the function already re-running on every scroll,
+resize and mutation with the anchor's live rect in hand. The numbers therefore
+track a resize instead of freezing at whatever the layout was when the click
+landed. Sizes round to whole px (border-box, `getBoundingClientRect`) — the
+sub-pixel tail is layout noise at 11px type.
+
+The multi-instance badge keeps reading `h3 × 4`; the size sits after it at 0.72
+opacity, which is what separates the count's `×` from the size's.
+
+`test/select-element.mjs` now asserts the badge's size text equals the picked
+element's rounded rect (not just that *some* digits are there), and captures the
+preview WebContentsView's own pixels to `07b-selection-badge.png` — that test had
+no visual record of the in-preview overlay before, since the overlay never
+appears in a renderer screenshot.
+## 2026-08-08 — DeepSeek really runs; and replies were losing their opening
+
+**The feature works.** The user ran `deepseek/deepseek-v4-flash` through a gateway
+connection and got real multi-turn replies. An open model genuinely drives a chat
+on the Codex harness — the thing that had been reasoned about but never seen.
+
+**But the replies were beheaded, mid-word.** "ve reliable visibility…", "ing
+else?". Codex streams whole `ThreadItem`s rather than deltas, so praxis remembers
+how much of each item it has emitted and sends the suffix. The trap: the CLI
+numbers items PER TURN (`item_0`, `item_1`, … restarting each turn) while
+`emittedLen`/`statused` were session-scoped and never cleared. Turn 2's `item_0`
+therefore inherited turn 1's length and had exactly that many leading characters
+sliced off. It hid well because a longer reply still renders — just missing its
+start — and because the first turn of any session is always correct.
+
+The same map ran the "surface this step once" guard, so later turns also DROPPED
+tool steps whose ids had been seen before. That is very likely why the chat showed
+"Steps · 1 step" for turns that did more.
+
+Fix: a per-turn `ItemTracker` (new pure `backends/codex-stream.ts`), reset at the
+top of every turn, with the suffix logic and the once-per-turn guard as its two
+methods. `test/codex-stream.mjs` pins both, including the exact shape of the bug
+(an unreset tracker mangling turn 2) so it can't come back quietly.
+
+**Process note, worth keeping.** Partway through this the working tree was moved
+off `candidate` onto `main` by something outside this session (the agent-runner
+daemon holds worktrees in this repo), and an edit landed on the wrong branch. It
+was caught because a `grep` for a symbol that certainly existed came back empty.
+Nothing was lost — the merge was already committed and pushed — but if you script
+against this repo, re-check `git branch --show-current` after any long-running
+step rather than trusting it across one.
+
+
+## 2026-08-07 — The props island could open blank, and the preview could show a stranger's app
+
+Five Electron tests were failing (`select-element`, `prop-edit`, `ready-gating`,
+`style-edit`, `custom-controls`) — all in the click-to-edit path, which made a
+stale-tests explanation implausible. They had two distinct product causes.
+
+**1. The island's first state push was thrown away.** The island is a separate
+`?praxisPanel=1` WebContentsView, and it is CREATED by `panel:show` — which
+`PanelHost` sends *after* its first `panel:setState`. So the first push had
+nowhere to land. `ensurePanelView`'s `did-finish-load` re-push was supposed to
+cover that, and it can't: it fires on the page's `load` event, which beats
+`PanelApp`'s mount effect registering the `panel:state` listener often enough
+that a re-send delayed by a single `setTimeout(0)` lands while the synchronous
+one is dropped (measured, both ways). The island then sat on `state === null` —
+rendering *nothing* — until some unrelated change happened to re-push. That is
+why the Svelte prop tests passed: their content-match redirect re-selects, which
+pushes again. The React ones settled before the view finished loading and stayed
+blank forever. The fix inverts the direction: the island PULLS
+(`panel:request-state`) right after it subscribes, which is the only ordering
+that cannot race its own listener. The load-event re-push is gone — one
+mechanism, and it's the correct one.
+
+**2. A reopened island could stay 160px tall.** `PanelHost` is remounted (with
+its size state back at the default 316×160) every time the island is closed and
+reopened, but the island PAGE lives on, so its `ResizeObserver` only speaks up
+when the rendered box actually moves. Reopen on a selection whose card renders
+at the same height and nothing fires — the view stays at the default with the
+card clipped inside it. `PanelApp` now re-measures on every state push, which a
+reopen always carries.
+
+**3. `isPortFree` couldn't see a dual-stack occupant, so the preview attached to
+someone else's server.** Node sets `SO_REUSEADDR`, so on macOS binding
+`127.0.0.1:7783` SUCCEEDS while another process holds the wildcard `:::7783` —
+the shape any `server.listen(port)` takes. `allocatePort` therefore handed out
+an occupied port, the spawned dev server died on `EADDRINUSE`, and
+`spawnDevServer`'s primary path (settle on whatever answers
+`http://127.0.0.1:<port>`) settled on the squatter. Concretely: opening the
+propedit fixture previewed the *selectable* fixture's page, so `style-edit` and
+`custom-controls` were clicking for `#tw-box` in a document that had never heard
+of it. Left-over dev servers from earlier test runs are what exposed it, but the
+user-facing version is worse — any `node server.mjs` a user has running on 7777
+would be previewed under their project's name. `isPortFree` now also probes the
+wildcard, and votes "occupied" only on an explicit `EADDRINUSE` (a wildcard bind
+refused by a sandbox or a no-IPv6 host says nothing about the port and must not
+starve the whole range).
+
+Two of the five also had genuinely wrong test code, exposed only once the port
+bug stopped them failing earlier:
+
+- **`style-edit` was driving the PREVIOUS selection's card.** Its
+  `openStylesTab` polled "are the four Styles groups rendered?" — evidence that
+  survives the island being closed, because closing only unmounts `PanelHost`
+  while the island's own DOM stays. A straggler click from `pickElement`'s retry
+  loop reset `propsIslandOpen` after `setOpen(true)`, the poll passed on the
+  stale card anyway, and the BezierEditor nudge then wrote
+  `transitionTimingFunction: "ease"` into `ProvenTokenCard` (`Styled.tsx:54`)
+  while asserting against `TwCard` (`:5`). It now requires the island's own
+  header to name the current selection — a strictly stronger check.
+- **`custom-controls` was measuring timer drift, not coalescing.** Its
+  scrub-cadence burst slept 250ms between `applyLiteral` calls, but a renderer's
+  `setTimeout` runs ~450ms for a 250ms delay while the Electron window isn't the
+  frontmost app (measured in both renderers; `visibilityState` is `visible` and
+  rAF is prompt, so this is timer throttling, not a blocked thread). That alone
+  pushed the burst past edit-history's 500ms window. It now paces against a
+  fixed deadline and spins rather than sleeps — also the faithful model, since
+  `CustomPanel`'s throttle fires every `WRITE_THROTTLE_MS` regardless of when the
+  previous write resolved. Main-side apply latency is 15–135ms typically but was
+  seen at 496ms once under load, so a rare flake here remains possible.
+
+`src/main/index.ts` (panel:request-state), `src/preload/index.ts`,
+`src/shared/api.ts` (`panel.requestState`),
+`src/renderer/src/components/PanelApp.tsx`, `src/main/devserver-net.ts`
+(`isPortFree`), `test/devserver-net.mjs` (both occupant shapes — the regression
+test), `test/style-edit.mjs`, `test/custom-controls.mjs`.
+
+## 2026-08-07 — An unsent message stays in the chat it was typed in
+
+User-reported: type into the composer, switch chats, and the text is still
+sitting there — now in front of a different conversation. ChatPanel is mounted
+exactly once for the whole app (App keeps it alive so nothing re-mounts on
+project switch / unhide), so `useState("")` for the composer was, by
+construction, app-global: nothing about a chat switch touched it.
+
+The composer's content now lives in `src/renderer/src/composer-drafts.ts`, keyed
+by the same chat key as `useChat.byKey` (a `sessionKey`). ChatPanel derives
+`input`/`attachments` from `useChat`'s `activeKey`, so a switch needs no
+save/restore step at all — the draft simply *is* per-chat, and switching away
+parks it while switching back brings it right where it was. Attachments ride
+along with the text for the same reason: text that returns while a pasted
+screenshot stayed behind in the other chat would be worse than either.
+
+Two details worth keeping:
+
+- **`setInput`/`setAttachments` kept their `useState` shape** (value *or*
+  updater), so all nine call sites — the seed effect, the slash-menu splice,
+  `send`'s clear, the FileReader callback — read exactly as before. An async
+  callback that resolves after a switch writes to the chat it was started in,
+  which is the right home for it.
+- **`clearChat` drops the draft.** Closing a chat and reopening one that reuses
+  the key (a project's default `key` after closing all of its chats) would
+  otherwise open showing the dead chat's text. Writes are per-keystroke rather
+  than at switch time precisely so this ordering holds — `closeChatForProject`
+  clears the slice *before* it moves the visible chat.
+
+`src/renderer/src/composer-drafts.ts` (new — also now owns the `Attachment`
+type), `components/ChatPanel.tsx`, `store.ts` (`clearChat`),
+`test/composer-draft.mjs` (new, electron tier).
+## 2026-08-07 — The model picker asks the harnesses instead of quoting a list
+
+User-reported: the picker still offered "GPT-5 Codex" and "GPT-5" when the Codex
+CLI had long since moved to the GPT-5.6 family — so a user's first act was to
+pick a model that no longer exists. The lists were two hardcoded arrays in
+`providers.ts`, whose own comment defended the curation. Both harnesses can be
+asked, and now are.
+
+`src/main/model-catalog.ts` is the pure half (the `codex-retry.ts` /
+`providers-store.ts` pattern — no electron, so it unit-tests under bun): the two
+parsers plus a TTL cache with an injected clock and an injected baseDir. Nothing
+in it throws; a model list is never worth breaking a picker or a turn for.
+
+- **Codex** — `codex debug models` prints the CLI's whole model table as JSON
+  (~300KB: every entry embeds its instruction preamble, so it's parsed and
+  dropped, never logged). `visibility` is a hard filter: `gpt-5.6-sol-wm` and
+  `codex-auto-review` are `"hide"`, i.e. seats the CLI itself won't offer.
+  Entries sort by the CLI's own `priority`, not array position. The six that
+  surface today: gpt-5.6-sol, -terra, -luna, gpt-5.5, gpt-5.4, gpt-5.4-mini.
+- **Claude** — `Query.supportedModels()`, which needs a LIVE query, and
+  `choices()` runs on a picker render with no session. So `backends/claude.ts`
+  hands its answer to the catalog fire-and-forget next to the existing
+  `supportedCommands()` call, and the catalog persists it. Real values are
+  `opus[1m]`, `claude-fable-5[1m]`, `sonnet`, `sonnet[1m]`, `haiku` — none of
+  which the old array had right.
+
+`src/main/codex-models.ts` is the side-effecting half (its own file only because
+`providers.ts` went past the 500-line rule with it inline; named like its
+siblings `codex-usage.ts` / `codex-retry.ts`). The binary it spawns is the SDK's
+**vendored** one, resolved the way `@openai/codex-sdk` resolves it (platform
+package → `vendor/<triple>/bin/codex`, legacy layout too, `PRAXIS_CODEX_BIN`
+first, `codex` on PATH last) — asking a global CLI of another version would
+describe a binary that never runs the turns. `providers.ts` keeps only the
+scheduling, and warms it once at `registerProviderIpc`, ~840ms, long before a
+window exists.
+
+`choices()` itself stays synchronous, total (every read is wrapped) and cache-only
+— the refresh runs behind it, at most one probe in flight, with a 5-minute floor
+between attempts so a machine with no Codex doesn't re-spawn on every render. The
+one concession: a genuinely COLD catalog (first launch, nothing on disk) makes the
+`providers:choices` handler wait up to 2.5s on the warm-up already running, because
+the renderer's providers-store fetches once and keeps the result — returning
+instantly there would pin the last-resort list for the whole session.
+
+Two things that had to stay exactly as they were: `ModelChoice`'s shape and the
+`provider[:connectionId]:modelId` namespacing (the renderer resolves picks by
+`value`), and the "Default" sentinel at the top of each built-in group. The
+latter needs care now — the Agent SDK's list LEADS with its own
+`{value: 'default'}`, colliding exactly with ours, so a discovered `default` is
+dropped in favour of praxis's (`agentModelId` maps that string to "send no
+model"; two choices sharing a `value` would also be a duplicate React key).
+
+The old arrays survive as a LAST RESORT — reached only when a seat has never been
+discovered at all — with their comment rewritten to say so, and refreshed to the
+2026-08-07 answers. `test/chat-render.mjs` no longer names a model id either (it
+takes the first non-Default entry per group); pinning one there would have
+re-introduced the same rot in the test tier.
+
+`src/main/model-catalog.ts` (new), `src/main/codex-models.ts` (new),
+`src/main/providers.ts`, `src/main/backends/claude.ts`,
+`test/model-catalog.mjs` (new), `test/chat-render.mjs`, `test/run.mjs`,
+`package.json`.
+
+## 2026-08-07 — A project's fold in the rail is its own state, not "am I active"
+
+User-reported: switching projects collapsed the one you left. The rail computed
+`expanded = active && !p.chatsCollapsed`, so `chatsCollapsed` — a real per-project
+field, persisted with the entry — only ever mattered for the one project that
+happened to be on screen. Every other project rendered as a bare row whatever the
+user had done to its chevron, and the fold "reset" on every switch.
+
+`expanded` is now just `!p.chatsCollapsed`. The chevron is the only thing that
+folds a project; switching leaves every other project exactly as it was. Three
+follow-ons the change forces:
+
+- **The glyph button always toggles.** It used to switch projects when the row
+  wasn't active (there was nothing to expand). Now it folds this project's list
+  and nothing else — switching stays with the name button, so a fold never drags
+  the preview with it.
+- **Only the active project paints an active chat row.** `isActiveChat` gained an
+  `active &&`; without it every expanded background project would highlight its
+  own `activeSessionKey` and the rail would show several "current" chats at once.
+- **Chat rows under a background project have to go somewhere.** Clicking one
+  now brings its project forward (`switchSession` records the choice on the entry
+  first, then hands off to `switchTo`, which opens whatever the entry names);
+  resuming a past chat from another project does the same. Both used to be
+  no-ops for a non-active project because neither was reachable.
+
+Their previous-chats lists also have to be loaded now: App only fetches history
+for the project it opens/switches to, so a boot-restored sibling had none. Rail
+pulls it for any expanded project that hasn't got one yet (guarded on the store's
+`byKey`/`loading`, so a project with no history doesn't re-fetch). An expanded
+project with nothing to list still renders the (empty) `<ul>` — `rail-chat-status`
+waits on it as its "the project is open" signal — but `.rail__chats:empty` now
+drops its margin, so the 5px phantom gap doesn't repeat down the rail.
+
+`src/renderer/src/components/Rail.tsx`, `App.tsx` (`switchSession`,
+`resumeRecord`), `store.ts` (doc only), `test/rail.mjs` — which now asserts B's
+chats survive a switch to A, and that folding B keeps it folded when B becomes
+active again.
+## 2026-08-07 — Stop actually stops (and it was broken differently on each backend)
+
+**User-reported:** a chat sat spinning for minutes at `↑0 ↓0` and pressing Stop did
+nothing. Not a UI glitch — a real deadlock, and the diagnosis is worth keeping.
+
+`q.interrupt()` is a CONTROL REQUEST. Reading the bundled SDK: its control-request
+promise is settled only by a matching `control_response` from the CLI subprocess,
+and nothing in that path has a timeout. So when the subprocess is wedged — request
+sent, nothing ever came back, hence zero tokens in either direction — the graceful
+cancel never settles, `agent:interrupt`'s `await` never returns, and the button is
+inert. Meanwhile `done` is emitted from exactly ONE place (the `result` message), so
+with no result the spinner spins forever. The infuriating part: the kill switch
+existed all along — `shutdown()` aborts the query's AbortController — but only
+session teardown ever reached it, so the user's only escape was closing the project.
+
+Fix, in three parts. New pure `backends/interrupt.ts` races the backend's graceful
+cancel against a 3s deadline and escalates to a caller-supplied kill switch; a
+rejection counts as ANSWERED (killing on top of a clean stop would destroy a healthy
+session), and a re-check after the race stops a late timer killing a cancel that
+landed in the same tick. claude.ts escalates by aborting the query, then emits the
+`error` + `done` the wedged turn never would — guarded by `hardStopped` so a
+late-arriving `result` can't double-emit. `agent.ts` caps its own wait at 5s
+regardless (a future backend that forgets to bound itself still can't make the
+button feel broken) and, on `hardStopped`, rebuilds the chat via a
+`restartChatSession` helper extracted from `agent:restart-chat` — a hard abort kills
+the whole query, so without that the chat would look alive while swallowing every
+later message.
+
+**The other two backends were each wrong in a different way.** Codex was never
+affected: its cancel is `turnAbort.abort()`, local and synchronous, and its turn loop
+emits `done` after the break regardless — so connection-backed models (Kimi/DeepSeek)
+already had the safe path. Gemini had NO `interrupt` at all, so Stop was a silent
+no-op there and the turn just ran to completion; it now kills the turn's child
+process, with a per-turn `turnInterrupted` flag so the resulting non-zero exit isn't
+reported to the user as a crash.
+
+`test/interrupt-escalation.mjs` pins the decisive cases (clean stop preserved,
+rejection treated as answered, wedged backend killed exactly once, always resolves).
+
+**Not reproduced.** The wedge is intermittent; this was diagnosed by reading the SDK
+and the event paths, not by triggering it. The escalation logic is directly tested,
+but "does this fix the wedge in the wild" is unproven — see TASKS.
+
+## 2026-08-07 — Codex's token counters: live during the turn, and no longer double-counted
+
+User-reported: "doesn't show tokens when I use Codex" — a screenshot of `↑ 0
+↓ 0 2:31`, i.e. two and a half minutes into a turn with nothing to show for it.
+
+Two separate problems, both found by running the real CLI
+(`codex exec --experimental-json`) and reading what it actually emits.
+
+**1. The counters were dead for the whole turn.** The SDK's `ThreadEvent` union
+has no incremental usage member (verified against the event names compiled into
+the CLI binary: `thread.started`, `turn.started`, `turn.completed`,
+`turn.failed`, `item.*`, `error` — that's all of them), so the one reading
+arrives at `turn.completed`. The status line is on screen for exactly the
+period in which there is nothing to report.
+
+The CLI *does* record the counts as it goes, just not on that stream: every
+model response appends a `token_count` record to the thread's rollout at
+`$CODEX_HOME/sessions/<YYYY>/<MM>/<DD>/rollout-<timestamp>-<threadId>.jsonl`.
+New `src/main/codex-usage.ts` tails it — resolve the path once (a bounded
+newest-first walk of the date dirs; a heavy user's session tree is large), then
+one stat + a tail read per second while a turn is in flight. It's read-only, it
+only runs during a turn, and if the file can't be found the behavior is exactly
+what it was: `turn.completed` still delivers the full amount. A half-written
+record at the tail is left for the next poll rather than parsed or skipped.
+
+**2. Every turn after the first over-counted.** `turn.completed.usage` is a
+CUMULATIVE tally for the whole thread, not that turn's own tokens — turn 1
+reported 17,232 in / 5 out, turn 2 reported 34,572 / 10, which is 1 + 2, not 2.
+`codex.ts` was summing those readings, so a 3-turn chat billed itself roughly
+double. It now keeps a session-scoped `sentUsage` and emits `usageDelta`, the
+same treatment `claude.ts` gives Anthropic's repeated readings — which is also
+what lets the rollout tail and `turn.completed` share one accumulator: whatever
+the tail already reported, `turn.completed` simply tops up (usually by zero).
+An interrupted turn never reaches `turn.completed` at all, so the turn ends with
+one final poll before the tail stops — otherwise stopping mid-turn would lose
+everything it spent.
+
+Supersedes the 2026-08-05 entry's "Codex only reports usage once, at
+`turn.completed`, so its counters step at the end of a turn" — true of the SDK's
+stream, but the CLI knows more than the SDK surfaces.
+
+`test/codex-usage.mjs` (unit tier) covers the file pick, the newest-cumulative
+read out of a mixed JSONL stream (`total_token_usage`, never the per-call
+`last_token_usage` sitting next to it), the append-while-reading tail, and the
+diff-don't-sum property, using fixture records copied verbatim from a real run.
+## 2026-08-07 — v10: bring-your-own-model connections (Kimi/DeepSeek et al)
+
+**The idea: harness and endpoint are orthogonal.** Until now "provider" meant two
+things at once — which agent harness runs the loop, and which account answers. v10
+splits them. The two built-in seats (Claude via the Agent SDK, Codex via
+`@openai/codex-sdk`) still log in with the user's own subscription and need no
+setup. A *connection* is the third path: a user-added OpenAI-compatible endpoint
+(Vercel AI Gateway, Groq, anything custom) supplying a URL + key + models, so open
+models like Kimi K3 or DeepSeek can drive a chat. `AgentOptions` gained
+`connectionId` alongside `provider`; a set `connectionId` routes to the Codex
+harness regardless of `provider` (`backends/index.ts`).
+
+**Why the Codex harness and not Claude's.** `CodexOptions` accepts `baseUrl` +
+`apiKey` + `config` per `Codex` instance, so a connection never touches the user's
+`~/.codex/config.toml`. Pointing the Claude Agent SDK at non-Anthropic models would
+instead mean routing its `claude_code` preset through a third-party
+Anthropic-compat shim — greyer, and it loses fidelity. Codex is Apache-2.0 and
+explicitly designed for custom providers. The trade-off accepted knowingly: the
+Codex seat has no per-tool approval interception (its `ThreadEvent` union has no
+approval-request event), so connection-backed models get the policy-level posture
+Codex already used, not praxis's approve/deny cards.
+
+**Two things the plan got wrong, both caught by probing the real vendored CLI.**
+(1) `wire_api = "chat"` is DEAD — the bundled binary rejects it at config load
+("no longer supported"). So a host that serves only `/chat/completions` cannot back
+a connection at all. `ProviderConnection.wireApi` is therefore pinned to
+`'responses'`, coerced on read AND write, and the dialog states the constraint
+instead of offering a broken choice. (2) The SDK's plain `baseUrl` shortcut only
+emits `openai_base_url`, leaving the built-in provider's `supports_websockets` on —
+every turn then tried `ws://<host>/responses`, burned five reconnects (~10s) and
+surfaced each as an `error` event, i.e. five red lines before every turn. Fixed by
+registering a dedicated `model_providers."praxis-connection"` block
+(`supports_websockets = false`) and selecting it, with the key passed via `apiKey`
+only — never argv, never `env` (passing `env` would strip `process.env` from the
+CLI). Verified: requests hit `POST <baseUrl>/responses` with our key, zero
+WebSocket attempts, and with a real `codex login` active NO ChatGPT token leaks
+into a connection run.
+
+**Keys.** `providers-store.ts` is pure (injected `baseDir` + a `SecretCipher`, so it
+unit-tests with no electron); `providers.ts` owns the `safeStorage` cipher, the
+`providers:*` IPC and the `/models` probe. The key never crosses to the renderer —
+the UI only ever sees `hasKey`, so a compromised renderer dep can't exfiltrate it.
+`safeStorage` unavailable + an apiKey supplied THROWS rather than writing plaintext.
+Omitting `apiKey` on save preserves the stored key, so editing a label can't wipe it.
+
+**The picker is now model-first and built in main.** `ChatPanel.tsx`'s hardcoded
+`CLAUDE_MODELS`/`CODEX_MODELS` arrays and the separate Backend dropdown are gone:
+one grouped list from `providers.choices()`, where picking a model derives harness +
+connection + model id atomically. The login banner still works (it keys off the now
+*derived* provider) and is suppressed for connections — a connection authenticates
+with its own key, so "run `codex login`" would be the wrong advice. Live `setModel`
+is now gated on a `liveSwap` predicate (Claude→Claude, no connection either side);
+everything else restarts just that chat, which correctly covers
+connection→connection, a case the old `provider === 'codex'` check would have missed.
+
+New: `src/main/providers-store.ts`, `src/main/providers.ts`,
+`src/renderer/src/providers-store.ts`,
+`src/renderer/src/components/SettingsDialog.tsx`,
+`src/renderer/src/components/ProviderForm.tsx`, `test/providers-store.mjs`.
+
+**Review caught a real hole in the key story, twice over.** The stated invariant ("a
+compromised renderer dependency cannot exfiltrate keys") held for *reading* a key but
+not for *aiming* one — the renderer chose the destination while main supplied the
+credential. `catalog({ id, baseUrl: 'https://attacker/…' })` (ids are free from
+`providers:list`) would have had main decrypt every saved key and post it as a bearer
+token; and `save({ id, baseUrl: attacker })` re-pointed a connection while the
+key-preserving rule silently carried its credential across to the next turn. Fixed
+with one rule in one place — `sameOrigin` in providers-store.ts: a stored key may only
+be sent to the origin it was entered against. `save` drops the secret when the origin
+changes (path-only edits keep it — same server), `catalog` refuses a stored key aimed
+elsewhere, and `ProviderForm` requires a key when the host is edited. Test-pinned.
+
+Four smaller review findings, all fixed: a connection's 401 raised the global "sign in
+with ChatGPT" banner for the perfectly healthy built-in Codex seat; `setModel` /
+`setProvider` left `modelId`/`connectionId` stale, so a persisted profile could run a
+different model than the picker showed; the CLI's stderr (from a process whose env
+holds the key) reached the chat and the session record unscrubbed; and `isStored`
+didn't validate the fields `choices()` iterates, so `"models": "gpt-5"` in a
+hand-edited file would have filled the picker one character per entry. Also hardened:
+Linux's `basic_text` safeStorage backend now reads as unavailable (its "encryption"
+uses a hardcoded key — not what the UI promises), and providers.json is written 0600.
+
+**Proven against a live AI Gateway, same day.** A real key, a real turn, a real edit:
+`anthropic/claude-sonnet-4.6` through `https://ai-gateway.vercel.sh/v1` on the Codex
+harness read the target file, made the requested change, left the untargeted function
+alone, and finished in 15.5s with ZERO error events. That settles both big unknowns —
+the gateway's `/responses` accepts Codex's request shape, and the
+`model_providers."praxis-connection"` block is right (no reconnect attempts, so the
+websockets-off entry does its job). `/models` returned 322 models.
+
+**But the open models are still unproven, and the live run found a UX bug.** The test
+key was free-tier, where every open model 403s ("Free tier users do not have access to
+this model") and then 429s once the allowance is spent — only `anthropic/*` was
+reachable, so Kimi's `apply_patch` reliability remains the open question and needs paid
+credits. The bug: the CLI retries a failed request five times and emits EVERY attempt
+as its own `error` event, so that free-tier 403 produced SIX red lines in a row — and
+the six were ordered worst-last, since the attempts carry the real cause while the
+terminal message says only "exceeded retry limit, last status: 429". That is the first
+thing a new user would see after pasting their first key. New pure
+`backends/codex-retry.ts` collapses it: attempts become `status` lines, and their
+reason is grafted onto the single terminal error, so the user reads "…429 Too Many
+Requests — unexpected status 403 Forbidden: Free tier users do not have access to this
+model. Upgrade to paid credits…". `test/codex-retry-cause.mjs` pins it against the
+messages captured verbatim from that live run.
+
+Also observed live (logged in TASKS, not fixed): a connection run inherits the user's
+global `~/.codex/config.toml` MCP servers — an unauthenticated `mcp.vercel.com` entry
+on this machine dumped an OAuth blob into the turn's error text.
+
 ## 2026-08-06 — "Resolve it" no longer loops; questions run as a wizard
 
 **Conflict resolve loop (user-reported, radial-portfolio).** Pressing the
@@ -31,6 +783,312 @@ progress chip, single-select picks auto-advance, multi-select advances via
 Next, Back revisits (picks kept), the last step Sends, Skip still dismisses
 the whole request. Single-question requests are pixel-identical to before
 (existing tests untouched). Wizard scenario added to `test/questions.mjs`.
+
+## 2026-08-05 — "Resolve it" couldn't actually resolve a binary conflict
+
+Reported live: a chat replaced an image the user had also replaced (a genuine
+binary conflict), parked as expected, but clicking **Resolve it** did nothing —
+the banner just came back. Root cause was two compounding bugs in the park/
+resolve pipeline (`chat-worktrees.ts`):
+
+- `stageResolve`'s conflict detection only looks for `<<<<<<<` text markers,
+  which a binary file can never carry. For a genuine binary conflict, the 3-way
+  `git apply` either fast-forwards or silently leaves the live bytes untouched —
+  either way `stageResolve` reported `clean: true` while quietly **dropping the
+  chat's own change**.
+- Even when that "clean" merge-back was attempted, it went through
+  `completeTurn` → `autoApplyWorktree`, which unconditionally refuses the
+  *whole* batch the instant any file's content contains a NUL byte (its binary
+  heuristic) — so it just re-parked, silently, every time.
+
+Fixed both: `stageResolve` now compares the post-apply file against the chat's
+own target blob (read via `git show <chatHeadBeforeReset>:<path>`, captured
+before the live-snapshot reset erases the ref) and, when they differ and the
+blob is binary, resolves by policy — keep the chat's version, which is what the
+review UI already told the user Resolve does; there's no way to byte-merge two
+PNGs. Landed alongside the 2026-08-06 fix below (independent discovery of an
+overlapping bug — merged together): its `resolveParkedChat` → `applyParked`
+fallback is what actually lands the resolved binary content, since
+`autoApplyWorktree` refuses any batch containing binary regardless of who
+resolved it. Covered by a new `repo8` case in `test/chat-worktrees.mjs`
+(alongside that entry's `repo7` deletion case). Known follow-up, not fixed
+here: a turn that mixes a
+binary conflict with an overlapping *text* conflict still routes its post-agent
+merge through the ordinary `completeTurn` and would re-park on the binary file
+(the 2026-08-06 entry above fixes the *looping* half of that, generally, via
+an `applyParked` fallback in `resolveParkedChat` — this entry's `stageResolve`
+policy fix is what makes the specific binary case resolve to the right bytes
+instead of the wrong ones once that fallback runs).
+
+## 2026-08-05 — A shared image now comes with its path, not just its pixels (LKM-67)
+
+A non-image file dropped into the composer already rode along as an absolute
+path the agent could read. An image didn't: it became a base64 vision block and
+nothing else. So the model could *see* the screenshot perfectly and still had no
+file to copy into the repo — it would answer "I need the file path on your
+computer, could you tell me where this is saved?", which is an absurd question
+to ask about an image the user just handed it.
+
+Both kinds of image now carry a path, and `send` names it in the same hidden
+context block the file attachments use:
+
+- **Dropped from Finder** — it already has one. `addImageFiles` calls the same
+  `pathForFile` preload seam `addFiles` does, so the real location rides along.
+- **Pasted from the clipboard** — there is no file anywhere; it's bytes in
+  memory. `attachments:save` writes them into
+  `<userData>/praxis/attachments/<stamp>-<name>.<ext>` and hands back that path.
+
+The save happens at **send**, not at paste: an attachment the user thinks better
+of and removes should never touch the disk. It's also best-effort — a refused or
+failed save just yields no path, which is exactly today's behavior (vision block
+alone), never a broken turn. `src/main/attachments.ts` holds the naming/writing/
+pruning (pure, fs-only, so `test/attachments.mjs` covers it); the media type
+picks the extension from a fixed table and the browser-supplied filename is
+reduced to a bare stem, so a name like `../../etc/passwd` can only ever produce
+`<stamp>-passwd.png` inside the attachments dir. Saved copies older than a week
+are swept on the next save — these are scratch copies of clipboard bytes, not
+app state.
+
+The composer chip's tooltip now shows that path for images too (it already did
+for file cards), so "what exactly am I sending?" is answerable before sending.
+## 2026-08-05 — Composer attachments line up with the prompt text (LKM-66)
+
+A pasted image (or dropped file) chip floated in the middle of the composer
+instead of sitting above the caret. The row wasn't styled centred — shadcn's
+`InputGroup` is `flex items-center`, and the block-end addon (the model/permission
+bar) flips it to `flex-col` via `has-[>[data-align=block-end]]:flex-col`, so every
+direct child without `w-full` shrinks to fit and centres on the cross axis. The
+chip row now takes `w-full` and the textarea's own 14px left padding, which is the
+same fix `Inspector` (the selection pill row) already carried. `test/chat-render.mjs`
+asserts the numbers — chip's left edge == where the placeholder starts, row width
+== the textarea's — since the alignment IS the requirement.
+
+## 2026-08-05 — Rail chats got a status dot and an inline rename (LKM-65)
+
+The rail listed a project's chats as bare names, so nothing distinguished a chat
+still thinking from one that had finished and was waiting to be read — the whole
+point of running several at once. Each chat row now leads with a dot:
+
+- **hollow ring** — stale: nothing in flight, nothing new. Every past chat, and
+  every live one you've already read.
+- **filled grey, blinking** — a turn is in flight.
+- **filled green** — a turn finished while you were looking at a *different*
+  chat. `finish` sets `needsReview` only when the key it's given isn't the
+  active one and that chat was actually running (the bare `finish()` calls that
+  clear a reopened session's stale flag must not light it), and `setActiveChat`
+  clears it: opening a chat IS reading it. A turn that lands on screen never
+  goes green — you watched it happen.
+
+The dot sits in a 16px slot with the project row's own padding (8) and gap (7),
+which is the project glyph's geometry exactly — so dots centre on the folder
+icon above them while the names still start at 31px, the project name's indent.
+`test/rail-chat-status.mjs` asserts both numerically rather than by screenshot,
+since the alignment is the requirement. The spawn rows' old inline 5px
+`.rail__sdot` folded into the same slot (queued → idle, running → working),
+which also stops a background agent's name sitting 11px right of every other.
+
+Renaming is a hover pencil that swaps the row for an input (Enter/blur commits,
+Escape reverts, an empty or unchanged name is a cancel). Main stays the only
+writer of a name: `agent:rename-chat` writes it onto the LIVE session's record —
+which is what makes it persist on teardown, survive a reload through the
+workspace snapshot, and permanently block `maybeGenerateTitle` (it skips any
+chat whose record already has a name) — then re-broadcasts it as the usual
+`title` event. `sessions:rename` does the same for a past record. Both normalise
+the input (one line, collapsed whitespace, 120 cap) and the renderer adopts what
+main echoes back rather than the raw keystrokes.
+
+`Rail.tsx` was already near the size limit, so the row itself moved to
+`RailChatRow.tsx` and now renders all three kinds (live, spawn, past).
+
+## 2026-08-05 — A pasted link no longer drags the chat bubble off the pane (LKM-64)
+
+Paste a Figma embed URL into an ask and the bubble hung off the LEFT edge of
+the chat pane, its first half unreadable. Two causes, both fixed:
+
+- **The bubble is sized to its content** (`w-fit`) and a URL is a single
+  unbreakable token, so `fit-content` resolved to the width of the whole link.
+  `.msg__text` now sets `overflow-wrap: anywhere` — deliberately not
+  `break-word`: both wrap an over-long token, but only `anywhere` also shrinks
+  the element's *min-content* width, which is the number `w-fit` is measured
+  against. `break-word` alone would still have measured the unbroken link and
+  spilled. `max-w-full` caps it as a backstop, and `.markdown` got the same
+  wrap so an assistant turn printing a long URL can't widen the pane either.
+- **The clamp is vertical only.** `ClampedUserText`'s 5-line cap does nothing
+  about width, and even a wrapped link is three lines of query-string noise.
+  `src/renderer/src/lib/elide-url.ts` (new, pure — `test/elide-url.mjs`) splits
+  an ask into text/link runs and shortens each link to the two parts a human
+  reads: `embed.figma.com/…/portfolio`. The ellipsis is placed where content
+  was actually dropped (mid-path when segments were skipped, trailing when only
+  the query went — never both), a last segment too long for the remaining
+  budget is truncated rather than dropped (`linear.app/…/long-links-make-bu…`,
+  since the slug is usually the only part that identifies the link), and the
+  full URL lives on the `title` tooltip.
+
+The elided run is a `<span>`, not an `<a>`: an ask is displayed text, not a
+click surface, and turning user-typed strings into live links would be a new
+navigation surface in the renderer window. Detection needs a scheme or `www.`
+— guessing TLDs would elide ordinary prose. Trailing `.`/`,`/`)` are given back
+to the sentence unless the URL opened the paren itself.
+
+## 2026-08-05 — The editor's file tree became a file MANAGER (new / rename / delete)
+
+The pop-out editor's sidebar could only ever open what already existed. It now
+creates, renames and deletes files: a `＋` / pencil / trash toolbar above the
+tree, and Finder's click-the-selected-file-again to rename.
+
+`src/main/file-ops.ts` (new, pure — fs + path only, `test/file-ops.mjs`) holds
+the three ops behind `source:create-file` / `source:rename-file` /
+`source:delete-file`. Every path arrives from the renderer, so each op
+re-validates it from scratch through one gate (`normalizeRelPath`): repo-relative
+POSIX only, no `..`, no absolute/drive paths, no NUL, and nothing at any depth
+inside `.git`, `.praxis`, `.dsgn` (the pre-rename sidecar the agent's write-deny
+also covers) or `node_modules`. Create never clobbers (`flag: 'wx'`), rename
+never overwrites, and both are file-only — directories are made implicitly by a
+nested path and are never renamed or deleted.
+
+Two details worth keeping:
+
+- **Delete goes to the OS trash.** The undo history (`edit-history.ts`) is
+  content-diff based: it reads a file, compares it to the text it last wrote, and
+  writes the other side. There is no representation of "this file used to exist",
+  so a delete can never be a Cmd+Z. `shell.trashItem` is the only undo there is —
+  injected from `index.ts` rather than imported, so `file-ops.ts` stays pure and
+  testable. If trashing throws (no desktop session, unsupported fs) it falls back
+  to removing the file: the user asked for it gone.
+- **A case-only rename is allowed.** On a case-insensitive filesystem
+  `Foo.tsx` → `foo.tsx` reports the target as already existing, and the
+  no-clobber guard would make case fixes impossible. It compares the two paths
+  case-folded and lets that one through.
+
+`FileTreePanel.tsx` keeps all the new chrome OUTSIDE the tree widget, which owns
+its own shadow DOM: the toolbar and the name field are our own React above it,
+and each successful op rebuilds the tree from a fresh `source:tree` listing
+(there's no incremental add/remove we can lean on) then re-selects the path the
+op landed on. The name field takes a whole relative path, so a rename doubles as
+a move and "new file" seeded with the selected file's directory is one word of
+typing. A rename follows the file if it was the one on screen; a delete closes
+the drawer if it was.
+
+**Rename-on-second-click, and why there are two triggers.** Clicking the
+already-selected file is the natural gesture, but from outside the widget it's
+indistinguishable from the programmatic mirror-select that Cmd+click navigation
+and back/forward do — both surface as "selection changed to the file that's
+already open". So the selection callback only treats it as a rename when a real
+`pointerdown` landed on the tree in the last 600ms. A `dblclick` fallback covers
+the case where the widget doesn't re-fire a selection change for a row that was
+already selected; it ignores double-clicks while focus is in the tree's own
+search box (found by descending `activeElement` through shadow roots — the
+document only ever reports the host). Both paths just open the same field, so
+firing both is harmless.
+
+Verified: `test:file-ops` (44/44 unit tier green), typecheck + build green. The
+Electron tier still can't launch a window on this machine — `test:codedrawer`
+dies at `.empty__open` at HEAD too — so the sidebar's new chrome hasn't been
+seen rendered; it wants a manual `bun run dev` pass.
+
+## 2026-08-05 — The status line shows tokens + working time, not the tool caption
+
+The line beside the running cat used to echo the current tool step ("Edit ·
+src/components/Hero.tsx", or "Working…" before the first one). That caption is
+already on screen: every step is listed in the turn's own `StepDisclosure` a few
+lines above, latest step first. So the one strip that's visible for the WHOLE
+turn was spending itself on a duplicate, and told the user nothing about what
+the turn was costing. It now reads `↑ 12k  ↓ 830  1:23` — tokens in, tokens out,
+and how long this chat has been working.
+
+New `src/shared/run-stats.ts` (pure, `test/run-stats.mjs`) holds all of it:
+`readUsage` normalizes a provider's loosely-typed usage payload, `usageDelta`
+turns the repeated cumulative readings into an increment, `formatTokens` /
+`formatDuration` render them. New `usage` `AgentEvent` carries the DELTA (never a
+total), the store sums it per chat slice, `RunStats.tsx` renders the active
+chat's.
+
+**Two things were easy to get wrong here.** (1) *Double counting.* The Claude SDK
+reports one request's usage three times — `message_start` (input side),
+`message_delta` (running output total), then the complete `assistant` message —
+so `claude.ts` keeps the running maximum it has already emitted per request and
+sends only the difference (reset at `message_start`; a field the payload omits
+reads as 0 and can't claw tokens back). (2) *The providers disagree about cached
+tokens*: Anthropic reports cache reads/writes ALONGSIDE `input_tokens`, Codex
+reports `cached_input_tokens` as a subset OF its `input_tokens`. `readUsage`
+normalizes both to "all input tokens, of which this many were cached", so `↑`
+means the same thing on either backend. Both cases are pinned by the unit test.
+
+Codex only reports usage once, at `turn.completed`, so its counters step at the
+end of a turn instead of during it; Gemini (experimental, unwired) reports none
+and its counters stay at zero.
+
+Time is WORKING time — the sum of finished turns plus the one in flight — not
+wall clock since the chat opened, which would mostly measure how long the user
+was at lunch. It lives on the chat slice (`workedMs` + `turnStartedAt`), so each
+chat has its own. Neither the transcript nor the live snapshot records tokens or
+timing, so a resumed/reloaded chat's counters start from zero and describe this
+app run's work on it; a reattached in-flight turn times from the reattach.
+
+Small knock-ons: the status row lost its `aria-live` (a clock ticking into a live
+region is announced every second — the cat's own `role="img"` label already says
+whether a turn is running, and the readout carries the full sentence as sr-only
+text + a `title` breakdown with exact counts). The row is `pointer-events: none`,
+so the readout opts back in — a native tooltip needs hover — which is safe
+because the scroll-to-bottom button paints above it. `.chat__status-text` and its
+pulse keyframes are gone.
+
+## 2026-08-05 — Every turn is a commit on the user's own checkout
+
+User request: "if things were changed, commits should be made on every turn, so
+that I can easily revert or follow the progress." Until now only the chat's
+`praxis/chat-*` worktree branch got commits — the merge back onto the LIVE
+checkout was a plain file write (`autoApplyWorktree`), so the user's repo
+accumulated one giant uncommitted diff until Publish. `git log` showed nothing;
+reverting a single turn meant hand-picking hunks.
+
+New `src/main/live-commit.ts` (pure, unit-tested): `commitLiveTurn(root, files,
+{title, body})` lands the turn's files as ONE commit on whatever branch the live
+checkout is on. Called from `chat-isolation.ts` on every merged turn
+(`afterTurn`), on the parked-chat Apply and the AI conflict-resolve, on
+`releaseChat`'s final salvage merge, and from `agent.ts`'s comment-spawn
+finalizer. Commit subject = the turn's prompt (first line, whitespace-collapsed,
+capped at 72); body = `Praxis turn N (praxis/chat-<id>).`
+
+**Deliberately narrow, because this writes into the user's repo.** Only the
+files that turn touched are staged — never `add -A`, so concurrent hand edits
+elsewhere stay uncommitted and a `git revert` of a turn can't take them along.
+It's a PATHSPEC (partial) commit, so anything the user had staged for their own
+commit stays staged and out of ours (asserted in the test). `.praxis/` is
+filtered like `commitWorktree` does. Non-repo-ROOT projects are skipped — for a
+subdirectory project a commit would sweep the enclosing repo, the exact surprise
+`isRepoRoot` exists to prevent. Identity is forced (`Praxis <praxis@local>`) and
+`--no-verify` set, same reasoning as `commitWorktree`: a target repo's husky
+hook must not be able to abort a turn. Any git failure returns
+`committed: false` and never throws — the change is already in the working tree,
+so a failed commit is exactly the old behavior, not lost work.
+
+**Knock-on fixed in the same pass:** `publishToPr`'s `changedSince` diffed vs
+`HEAD`, which now reports NOTHING for a session whose turns all committed — the
+notes handoff would have said "Nothing to publish" and shipped an empty file
+list in the PR body. It now diffs vs the merge base with the default branch
+(two-dot, so uncommitted edits still count) and falls back to HEAD; the
+"nothing staged" abort inside is now "nothing staged AND nothing ahead of base",
+and the handoff commit is skipped when there's nothing to stage. `shipToMain`
+needed no change (it already counted `base..branch`) and now shares the same
+`defaultBase`. Those three git questions moved to a new pure
+`src/main/publish-scope.ts` purely so they're testable: `annotations.ts` imports
+`electron`, and a bun test can't load it (`SyntaxError: Export named 'ipcMain'
+not found`) — the same reason `chat-worktrees.ts` was split from
+`chat-isolation.ts`.
+
+`test/live-commit.mjs` (unit tier) covers the helper against real temp repos —
+plus a section that drives `chat-isolation.ts` itself with its window/store seam
+injected (no Electron), running two real turns through a worktree and asserting
+two live commits and a CLEAN live checkout between them. Fixture gotcha it cost
+an hour: `createWorktree` symlinks `node_modules`/`.env` unconditionally, so a
+temp repo WITHOUT a `.gitignore` gets those symlinks committed onto the branch —
+`autoApplyWorktree` then can't read them, refuses the whole batch, and every
+turn parks. Temp-repo fixtures must gitignore both (as `chat-worktrees.mjs`
+already did).
+
+Also told the agent about it in `rules.ts` ("commits it there as ONE commit per
+turn") so a chat doesn't mistake its own turn commits for someone else's work.
 
 ## 2026-08-04 — Rail chat list capped at 5 + hide-UI button gets expand arrows
 
@@ -120,6 +1178,44 @@ uncommitted work along. `shipToMain` now self-heals — on-base → run
 the titlebar from `res.branch`. Non-root checkouts (a subdir of a larger
 repo, where `ensureBranch` refuses by design) stay a hard error, now with a
 message that says to open the repo's top-level folder.
+## 2026-08-03 — The composer's mode picker told the truth only by luck
+
+Field report: an "Allow Edit?" card while the composer read **Auto**. It wasn't
+the classifier flagging a risky edit — the session genuinely wasn't in Auto.
+The posture lives in two places (the renderer's `usePermissions` + main's
+per-session `options.permissionMode`), and several paths moved only one:
+
+- `agent:resume-session` started with a hardcoded `{}` — no mode, no model. So
+  the resumed chat ran `'default'` (ask for every gated tool) while the toolbar
+  showed the UI default, Auto. Boot restore resumes the newest chat on *every*
+  relaunch (`restore.ts` → `resumeMostRecent`), so this was the common path,
+  not an edge case.
+- `attempt` (fresh open) and the LRU-reopen in `applyProject` sent the mode but
+  never recorded it on the project entry, so the next switch back re-seeded the
+  toolbar from `defaultChatAgentSettings()` (Auto) regardless of what main got.
+- Reattach after a renderer reload trusted the renderer's persisted copy even
+  though main — the process that survived — held the real one.
+
+Fixes: `resume-session` now takes `AgentOptions` (backend pinned to Claude, since
+`sdkSessionId` is the resume marker); `LiveChatSnapshot` carries each session's
+live `options` and `restore.ts` rebuilds `chatSettings` from them (main wins);
+and every session-creating call site goes through one new `agentOptionsFor()`
+that can't omit the mode. The per-chat settings + their mappings moved out of
+`store.ts` into a pure `renderer/src/chat-settings.ts` (unit-tested in
+`test/chat-settings.mjs`; `restore-reload.mjs` now asserts a reload repoints the
+picker at main's real mode). The inverse mapping deliberately reads an absent
+`permissionMode` as `'default'` — main's fallback, not the UI's — so a session
+started without one is never *reported* as Auto.
+
+## 2026-08-03 — Fable in the model picker
+
+The Claude model picker still listed only Opus / Sonnet / Haiku, so there was
+no way to run a chat on Fable short of leaving it on "Default" and hoping the
+account default was right. Added `{ value: 'fable', label: 'Fable' }` at the
+top of `CLAUDE_MODELS` in `ChatPanel.tsx` (above Opus). The value is passed
+through untouched to the SDK's `model` option, and `claude --help` documents
+`fable` as a first-class latest-model alias alongside `opus`/`sonnet`, so no
+main-side change was needed.
 
 ## 2026-08-03 — Three field reports: agent fights the worktree machinery, stale Codex CLI, interrupt noise
 

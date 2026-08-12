@@ -77,6 +77,19 @@ export interface DetectedProject {
   previewKind: PreviewKind
 }
 
+/**
+ * A project's own favicon, resolved from its source tree (see
+ * `src/main/project-icon.ts`). The rail leads each project with this instead of
+ * the generic folder glyph, so a wall of open projects is scannable by icon.
+ */
+export interface ProjectIcon {
+  /** Project-relative path the icon came from — shown in the rail row's title
+   *  so it's obvious WHICH file the rail is showing. */
+  path: string
+  /** `data:` URL, ready for an `<img src>`. Capped at 512 KB by main. */
+  dataUrl: string
+}
+
 export interface RunningDevServer {
   url: string
   pid: number
@@ -214,6 +227,11 @@ export type AgentEvent = (
   | { type: 'question-request'; request: QuestionRequest }
   /** A pending question was resolved (answered elsewhere / abort / session change) — dismiss its card. */
   | { type: 'question-resolved'; id: string }
+  /** Tokens the backend just reported, as a DELTA to add to the chat's running
+   *  totals (main dedupes the providers' repeated cumulative readings — see
+   *  `shared/run-stats.ts`). Drives the status line's ↑/↓ counters. `cached` is
+   *  the share of `input` served from the prompt cache, not an extra amount. */
+  | { type: 'usage'; input: number; output: number; cached: number }
   | { type: 'done' }
   | { type: 'error'; message: string }
   /** An auto-generated name for this chat, summarising what the conversation is
@@ -266,18 +284,132 @@ export interface ImageAttachment {
 }
 
 export interface AgentOptions {
-  /** Model alias ('opus' | 'sonnet' | 'haiku') or undefined for the account default. */
+  /** Model alias ('fable' | 'opus' | 'sonnet' | 'haiku') or undefined for the account default. */
   model?: string
   /** Reasoning effort ('low' | 'medium' | 'high') or undefined for the model default. */
   effort?: string
   /** Permission posture; defaults to 'default' (ask). */
   permissionMode?: PermissionMode
   /**
-   * Which subscription-login backend to run (v7): 'claude' (default) | 'codex' | …
-   * Undefined → Claude. Each backend authenticates with the user's own subscription
-   * (Claude setup-token / Codex sign-in-with-ChatGPT / …) — never an in-repo API key.
+   * Which HARNESS runs the agent loop (v7): 'claude' (default) | 'codex'.
+   * Undefined → Claude. The two built-in harnesses authenticate with the user's own
+   * subscription (Claude setup-token / Codex sign-in-with-ChatGPT). A key is never
+   * committed in-repo — but see `connectionId`: a user MAY store their own API key
+   * for a third-party endpoint, encrypted at rest and only in main.
    */
   provider?: string
+  /**
+   * Run this turn against a user-added endpoint (v10) instead of the harness's own
+   * account — see `ProviderConnection`. Harness and endpoint are orthogonal: the
+   * Codex harness supplies the agent loop while the connection supplies the URL,
+   * key and model. Undefined ⇒ the harness's own subscription, exactly as pre-v10.
+   */
+  connectionId?: string
+}
+
+/** Praxis-managed durable context for one project, stored outside the repo. */
+export interface ProjectMemory {
+  content: string
+  updatedAt: number
+}
+
+/**
+ * A user-added model endpoint (v10). Praxis's two built-in seats — Claude (Agent
+ * SDK) and Codex (`@openai/codex-sdk`) — log in with the user's own subscription and
+ * need no configuration. A *connection* is the third path: an OpenAI-compatible
+ * endpoint the user points Praxis at (Vercel AI Gateway, Groq, or any custom host)
+ * so open models like Kimi or DeepSeek can drive a chat.
+ *
+ * Harness and endpoint are ORTHOGONAL. The Codex harness runs the loop; the
+ * connection only says where requests go. `@openai/codex-sdk` accepts `baseUrl` +
+ * `apiKey` per `Codex` instance, so a connection never writes to (or reads from)
+ * the user's own `~/.codex/config.toml`.
+ *
+ * Connections are GLOBAL, not per-project — a key belongs to the user, not a repo.
+ * The API key is deliberately NOT a field here: it is encrypted at rest with
+ * Electron `safeStorage` and never crosses to the renderer, which only learns
+ * `hasKey`. That way a compromised renderer dependency cannot exfiltrate keys.
+ */
+export interface ProviderConnection {
+  /** Stable generated id — what `AgentOptions.connectionId` references. */
+  id: string
+  /** User-facing name shown as the picker's group heading ("AI Gateway"). */
+  label: string
+  /** Which preset created it; drives defaults and the dialog's badge. */
+  preset: 'gateway' | 'custom'
+  /** Endpoint root, e.g. `https://ai-gateway.vercel.sh/v1`. */
+  baseUrl: string
+  /**
+   * Which OpenAI wire format Praxis speaks to this host. Only `'responses'` (the
+   * newer `/responses` endpoint) is possible: the `codex` CLI bundled with
+   * `@openai/codex-sdk` REJECTS `wire_api = "chat"` at config load ("no longer
+   * supported"), so a host that offers only the older `/chat/completions` route
+   * cannot back a connection at all — verified against the vendored binary, not
+   * inferred. Kept as a field rather than hardcoded so the disk format survives
+   * the CLI ever restoring chat support; widen the union if it does.
+   */
+  wireApi: 'responses'
+  /** The models the user ticked from the catalog — these populate the chat picker. */
+  models: string[]
+  /** Whether a key is stored. The key itself never leaves main. */
+  hasKey: boolean
+}
+
+/** A connection draft from the settings dialog. `id` absent ⇒ create a new one. */
+export interface ProviderConnectionInput {
+  id?: string
+  label: string
+  preset: 'gateway' | 'custom'
+  baseUrl: string
+  wireApi: 'responses'
+  models: string[]
+  /** Plaintext key on its way to `safeStorage`. Omit to keep the stored one. */
+  apiKey?: string
+}
+
+/** Params for a catalog probe — an unsaved draft, or a saved connection by id. */
+export interface ModelCatalogInput {
+  baseUrl: string
+  /** Plaintext key to probe with. Omit to reuse the key stored for `id`. */
+  apiKey?: string
+  /** Saved connection whose stored key to use when `apiKey` is omitted. */
+  id?: string
+}
+
+/**
+ * Result of probing `{baseUrl}/models`. This one call both validates the credential
+ * and returns the catalog, so the dialog's "Connect" button does the whole job.
+ */
+export interface ModelCatalogResult {
+  ok: boolean
+  /** Model ids the endpoint advertises, sorted. Empty when `ok` is false. */
+  models: string[]
+  /** Human-readable failure ("401 Unauthorized"), for display in the dialog. */
+  error?: string
+  /** The host has no `/models` route — the dialog falls back to free-text entry
+   *  rather than leaving the user stuck. */
+  unsupported?: boolean
+}
+
+/**
+ * One selectable entry in the chat's model picker (v10). The picker is MODEL-first:
+ * the user picks a model and Praxis derives which harness runs it and which endpoint
+ * it points at, because people think in models rather than harnesses. Built in main
+ * so the renderer never hardcodes a model list again.
+ */
+export interface ModelChoice {
+  /** Stable value for the picker + `AgentOptions` round-trip. */
+  value: string
+  /** Display name ("Opus", "Kimi K3"). */
+  label: string
+  /** Which harness runs it. */
+  provider: 'claude' | 'codex'
+  /** Set when this model comes from a user connection (absent for built-in seats). */
+  connectionId?: string
+  /** The model id handed to the backend, when it differs from `value`. */
+  modelId?: string
+  /** Group heading in the picker ("Claude", "Codex", or a connection's label). */
+  group: string
 }
 
 /** One line of a recorded agent session's transcript (v5-D history). */
@@ -341,6 +473,11 @@ export interface LiveChatSnapshot {
   /** Per-chat worktree isolation status (v9), for the renderer to rehydrate the chat's
    *  isolation chip after a reload. Absent for a non-isolated chat (treated as 'live'). */
   isolation?: { state: 'live' | 'isolated' | 'parked'; branch?: string }
+  /** The options this session is ACTUALLY running with (main's live copy — the
+   *  authority). The renderer reconciles its per-chat pickers against these on
+   *  reattach so a reload can't leave the toolbar showing a posture the session
+   *  never had. */
+  options: AgentOptions
 }
 
 /** One live project (an open workspace-rail entry) and its live chat(s). */
@@ -464,21 +601,44 @@ export interface PreviewComment {
   text: string
 }
 
+/** Previewable media the editor shows instead of opening as text. */
+export interface SourceMedia {
+  kind: 'image' | 'video' | 'audio'
+  /** MIME type, derived from the extension. */
+  mediaType: string
+  /**
+   * `praxis-media://` URL the renderer can point an <img>/<video>/<audio> at.
+   * Opaque and per-file: main streams it from disk (range requests included), so
+   * a big video never has to cross IPC as base64.
+   */
+  url: string
+}
+
 /**
  * A stamped element's source file, read for the inspector's inline code peek —
  * the whole file (so surrounding context is visible) plus the stamp line and,
  * when the JSX parse resolves it, the element's full line span for highlighting.
+ *
+ * A file that isn't text carries `media` (previewable) or `binary` (not) instead,
+ * with an empty `code`: decoding a PNG as utf8 and pouring it into the editor is
+ * the bug this avoids.
  */
 export interface SourceView {
   /** Repo-relative file path (from the stamp). */
   file: string
-  /** The full file content. */
+  /** The full file content — empty for `media` / `binary` files. */
   code: string
   /** 1-based line the stamp points at. */
   line: number
   /** 1-based inclusive line span of the stamped element (open → close tag). */
   elementStart?: number
   elementEnd?: number
+  /** Set when the file is an image/video/audio: show it, don't edit it. */
+  media?: SourceMedia
+  /** Set when the file is binary but not previewable media (font, archive, …). */
+  binary?: boolean
+  /** Size on disk, for the preview's footer. Present with `media` / `binary`. */
+  bytes?: number
 }
 
 /** Result of a whole-file save from the v9 code drawer. */
@@ -487,6 +647,18 @@ export interface SourceWriteResult {
   /** The file drifted on disk since the drawer loaded it — refused to clobber. */
   conflict?: boolean
   /** Human-readable failure (unresolved path, write error). */
+  error?: string
+}
+
+/**
+ * Result of a create / rename / delete from the editor's file-tree sidebar.
+ * `path` is the repo-relative POSIX path the op landed on (the new path for a
+ * rename), so the renderer can re-select it once the tree reloads.
+ */
+export interface FileOpResult {
+  ok: boolean
+  path?: string
+  /** Human-readable failure (bad path, name taken, fs error). */
   error?: string
 }
 
@@ -1004,6 +1176,12 @@ export interface PraxisApi {
     setState: (state: PanelState) => void
     /** Island → receive state pushes. */
     onState: (cb: (state: PanelState) => void) => () => void
+    /** Island → ask main to (re)send the latest state on `onState`. The island
+     *  view is created by the first `show`, which the main renderer sends AFTER
+     *  its first `setState`, so that push has nowhere to land — and a re-push on
+     *  the view's load event races the island's own listener registration. The
+     *  island pulling once it is listening is the only order that can't lose. */
+    requestState: () => void
     /** Island → relay a user action to the main renderer. */
     action: (action: PanelAction) => void
     /** Main renderer → handle island actions. */
@@ -1016,10 +1194,18 @@ export interface PraxisApi {
   project: {
     pick: () => Promise<string | null>
     detect: (root: string) => Promise<DetectedProject>
+    /** The project's own favicon, read from its source tree, so the rail can
+     *  lead the project with its real icon instead of a folder glyph. Null when
+     *  the project ships none. */
+    icon: (root: string) => Promise<ProjectIcon | null>
     /** Save-dialog for a folder to create (New Project…). Null when cancelled. */
     pickNew: () => Promise<string | null>
     /** Scaffold a minimal Vite+React app there, git init, install deps. */
-    create: (root: string) => Promise<{ ok: boolean; root?: string; error?: string }>
+    /** `warning` = created, but a non-fatal step failed and the user must be told
+     *  now (today: `git init` / the first commit — see scaffold.ts). */
+    create: (
+      root: string
+    ) => Promise<{ ok: boolean; root?: string; error?: string; warning?: string }>
   }
   devServer: {
     start: (opts: {
@@ -1174,6 +1360,12 @@ export interface PraxisApi {
     closeWindow: () => Promise<void>
     /** Repo-relative file paths for the pop-out editor's file-tree sidebar. */
     tree: (root: string) => Promise<string[]>
+    /** File-tree sidebar: create an empty file (parent dirs created as needed). */
+    createFile: (root: string, path: string) => Promise<FileOpResult>
+    /** File-tree sidebar: rename/move a file. Never overwrites an existing path. */
+    renameFile: (root: string, from: string, to: string) => Promise<FileOpResult>
+    /** File-tree sidebar: delete a file (to the OS trash where that's available). */
+    deleteFile: (root: string, path: string) => Promise<FileOpResult>
     /** Standalone editor window: retarget event when a second pop-out reuses it. */
     onNavigate: (cb: (source: string) => void) => () => void
   }
@@ -1249,6 +1441,16 @@ export interface PraxisApi {
       root: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; sessionKey?: string; error?: string }>
+    /**
+     * Rename one LIVE chat (rail inline rename). Replaces the record's name — the
+     * one main auto-generates — so the chosen name survives into the chat's
+     * persisted history record and blocks any later auto-naming. `ok:false` when
+     * that sessionKey has no live session or the name is empty.
+     */
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     /** Restart one live chat with startup-only options (such as a Codex model)
      * without touching any of its sibling chats. */
     restartChat: (
@@ -1256,15 +1458,23 @@ export interface PraxisApi {
       sessionKey: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; error?: string }>
+    /** Archive Main's current transcript and restart its provider context under
+     * the same stable project session key. Project memory is not modified. */
+    clearMainContext: (root: string) => Promise<{ ok: boolean; error?: string }>
     /**
      * Resume a past ("previous agent") session by its history record id — requires
      * the record to carry a Claude `sdkSessionId` (else `ok:false`). Starts a live
      * session with the SDK's `resume` option, registers it under a new sessionKey,
-     * and makes it the project's active session.
+     * and makes it the project's active session. `options` is the posture the
+     * resumed chat should run with (model/effort/permission mode) — omit it and the
+     * session falls back to main's defaults, which is how a resumed chat used to
+     * end up asking for every edit while the toolbar still read "Auto". The backend
+     * is always Claude here, whatever `options.provider` says.
      */
     resumeSession: (
       root: string,
-      recordId: string
+      recordId: string,
+      options?: AgentOptions
     ) => Promise<{ ok: boolean; sessionKey?: string; error?: string }>
     /**
      * Close ONE of a project's live chats (v9 multi-chat) — tears down just that
@@ -1278,6 +1488,11 @@ export interface PraxisApi {
       sessionKey: string
     ) => Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }>
     send: (text: string, images?: ImageAttachment[]) => Promise<void>
+    /** Write a pasted image (clipboard bytes, no on-disk origin) into the app's
+     *  attachments dir and return its absolute path — so the turn can tell the
+     *  agent WHERE the image it can see actually lives. '' if it couldn't be
+     *  written; a dropped image needs no call (it already has a path). */
+    saveAttachment: (image: ImageAttachment, name?: string) => Promise<string>
     setModel: (model: string) => Promise<void>
     /** Change the permission posture live (drives the SDK's setPermissionMode). */
     setPermissionMode: (mode: PermissionMode) => Promise<void>
@@ -1295,6 +1510,7 @@ export interface PraxisApi {
     spawnComment: (
       root: string,
       text: string,
+      parentSessionKey: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }>
     /** F1 Phase 3 — cancel a running or queued comment spawn (the rail row's ×). */
@@ -1324,11 +1540,45 @@ export interface PraxisApi {
      *  down any session. Read-only: never suspends/starts/closes anything. */
     workspaceSnapshot: () => Promise<WorkspaceSnapshot>
   }
+  projectMemory: {
+    get: (root: string) => Promise<ProjectMemory>
+    set: (root: string, content: string) => Promise<ProjectMemory>
+  }
+  /**
+   * User-added model endpoints (v10) — see `ProviderConnection`. Global, not
+   * per-project. Every call here is key-safe: keys go IN via `save`/`catalog` and
+   * never come back out, so the renderer can only ever observe `hasKey`.
+   */
+  providers: {
+    /** Every saved connection, keys excluded. */
+    list: () => Promise<ProviderConnection[]>
+    /**
+     * Create (no `id`) or update (with `id`) a connection. `apiKey` set ⇒ replace the
+     * stored key; omitted ⇒ leave it untouched, so editing a label can't wipe a key.
+     */
+    save: (
+      input: ProviderConnectionInput
+    ) => Promise<{ ok: boolean; connection?: ProviderConnection; error?: string }>
+    /** Delete a connection and its stored key. */
+    remove: (id: string) => Promise<void>
+    /** Probe `{baseUrl}/models` — validates the key AND returns the catalog (the
+     *  dialog's "Connect"). Accepts an unsaved draft so users can test before saving. */
+    catalog: (input: ModelCatalogInput) => Promise<ModelCatalogResult>
+    /** Every model the chat picker should offer, grouped: built-in seats first, then
+     *  one group per connection. Recomputed on demand, so it always reflects the store. */
+    choices: () => Promise<ModelChoice[]>
+  }
   /** Persisted agent-session history ("previous agents") — v5-D. */
   sessions: {
     /** Past sessions for a project, newest first (excludes the live one). */
     list: (root: string) => Promise<SessionRecord[]>
     get: (id: string) => Promise<SessionRecord | null>
+    /** Rename a past session (rail inline rename). `ok:false` for an unknown
+     *  record or an empty name. */
+    rename: (
+      id: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     remove: (id: string) => Promise<void>
   }
   /** In-app feedback → a GitHub issue on Praxis's own repo (LKM-27). */

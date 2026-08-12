@@ -6,7 +6,8 @@ import { promisify } from 'util'
 import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
 import { buildPublishMessage } from '../shared/publish-message'
-import { ensureBranch } from './git'
+import { enclosingRepoRoot, ensureBranch } from './git'
+import { aheadOfBase, changedSince, defaultBase } from './publish-scope'
 
 /**
  * Annotation sidecar + engineer handoff (v3). Reviewer notes are pinned to
@@ -82,15 +83,6 @@ async function git(root: string, args: string[]): Promise<string> {
   return stdout.trim()
 }
 
-/** Tracked files changed vs HEAD — clean paths (no porcelain quoting/rename arrows). */
-async function changedSince(root: string): Promise<string[]> {
-  const out = await git(root, ['-c', 'core.quotePath=false', 'diff', '--name-only', 'HEAD'])
-  return out
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-}
-
 async function publishToPr(root: string, opts: { title: string }): Promise<PublishResult> {
   const title = opts.title || 'praxis: design handoff'
   // --- Pre-flight: fail before any mutation. ---
@@ -130,13 +122,19 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
     await git(root, ['add', '-u'])
     await git(root, ['add', '--', '.praxis'])
     const staged = await git(root, ['diff', '--cached', '--name-only'])
-    if (!staged) {
+    // Per-turn live commits mean the work is usually already IN the branch's history,
+    // so "nothing staged" no longer means "nothing to publish" — only nothing staged
+    // AND nothing ahead of the base does. When nothing is staged the handoff branch
+    // simply points at the same commits, which is a perfectly publishable PR.
+    if (!staged && (await aheadOfBase(root, await defaultBase(root))) === 0) {
       await git(root, ['checkout', original])
       await git(root, ['branch', '-D', branch])
       return { ok: false, error: 'Nothing to publish — no changes or notes yet.' }
     }
-    await git(root, ['commit', '-m', title])
-    committed = true
+    if (staged) {
+      await git(root, ['commit', '-m', title])
+      committed = true
+    }
     await git(root, ['push', '-u', 'origin', branch])
 
     const body = buildPrBody(annotations, changedFiles)
@@ -189,16 +187,7 @@ async function shipToMain(
   }
   if (branch === 'HEAD') return { ok: false, error: 'Detached HEAD — check out a branch first.' }
   // Default branch (main/master), from origin/HEAD; fall back to main.
-  let base = 'main'
-  try {
-    base =
-      (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(
-        /^origin\//,
-        ''
-      ) || 'main'
-  } catch {
-    /* origin/HEAD not set — assume main */
-  }
+  const base = await defaultBase(root)
   if (branch === base) {
     // The open-time `git:ensure` should have moved the checkout onto a praxis/*
     // work branch, but a project can still land here on its base branch (ensure
@@ -210,9 +199,19 @@ async function shipToMain(
     // checkouts (a subdir of a larger repo), which stays a hard error.
     const healed = await ensureBranch(root)
     if (!healed.isRepo) {
+      // The old message just said "open the repo's top-level folder", which is a
+      // dead end: it never said WHICH repo, and for a freshly created project the
+      // answer usually isn't "open something else" at all — it's that this folder
+      // never became a repo (a scaffold whose `git init` failed used to be
+      // swallowed silently), so git resolved to whatever repo happens to sit
+      // above it. Name the actual situation and the actual next step.
+      const enclosing = await enclosingRepoRoot(root)
       return {
         ok: false,
-        error: `You're on ${base}, and this folder isn't the repository root — open the repo's top-level folder to publish.`
+        error:
+          enclosing === null
+            ? `This folder isn't a git repository, so there's nothing to publish from. Run \`git init\` in ${root} (and make a first commit), then try again.`
+            : `Can't publish: this folder is inside the repository at ${enclosing}, but isn't its top level, so Praxis won't switch that whole repo onto a work branch. Either open ${enclosing} as the project and publish from there, or make this folder its own repository with \`git init\` in ${root}.`
       }
     }
     if (!healed.branch || healed.branch === base || healed.error) {

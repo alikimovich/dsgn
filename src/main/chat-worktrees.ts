@@ -1,5 +1,5 @@
 import { execFile } from 'child_process'
-import { readFile } from 'fs/promises'
+import { readFile, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { promisify } from 'util'
 import {
@@ -8,7 +8,9 @@ import {
   autoApplyWorktree,
   diffWorktree,
   applyToWorkingTree,
+  attachWorktreeBranch,
   captureBase,
+  RUNTIME_DEPS,
   type Worktree
 } from './worktrees'
 
@@ -37,6 +39,27 @@ const git = (cwd: string, args: string[], timeout = 15000): Promise<{ stdout: st
     stderr: string
   }>
 
+// `git clean -fd` that spares the symlinked runtime deps. They're untracked (kept out
+// of every commit — see RUNTIME_DEPS) AND may not be gitignored in a way that matches
+// the symlink, so a bare `clean -fd` would delete them and break the next build. `-e`
+// re-excludes each so the checkout keeps its node_modules/.env across resets.
+const cleanArgs = (): string[] => ['clean', '-fd', ...RUNTIME_DEPS.flatMap((d) => ['-e', d])]
+
+/** Binary-safe `git show <ref>:<path>` — `null` when the path didn't exist at that ref. */
+const readBlobAt = async (cwd: string, ref: string, rel: string): Promise<Buffer | null> => {
+  try {
+    const res = (await execFileP('git', ['show', `${ref}:${rel}`], {
+      cwd,
+      timeout: 15000,
+      maxBuffer: 64 * 1024 * 1024,
+      encoding: 'buffer'
+    })) as unknown as { stdout: Buffer }
+    return res.stdout
+  } catch {
+    return null
+  }
+}
+
 const revParse = async (cwd: string, rev: string): Promise<string> =>
   (await git(cwd, ['rev-parse', rev])).stdout.trim()
 
@@ -46,6 +69,22 @@ async function changedFiles(wt: Worktree): Promise<string[]> {
     .split('\n')
     .map((s) => s.trim())
     .filter(Boolean)
+}
+
+/** Git-style unresolved markers must never cross from a resolution worktree to live. */
+async function hasConflictMarkers(wt: Worktree, files: string[]): Promise<boolean> {
+  for (const rel of files) {
+    let text: string
+    try {
+      text = await readFile(join(wt.path, rel), 'utf8')
+    } catch {
+      continue
+    }
+    if (/^<<<<<<< .+$/m.test(text) && /^=======$/m.test(text) && /^>>>>>>> .+$/m.test(text)) {
+      return true
+    }
+  }
+  return false
 }
 
 /**
@@ -60,8 +99,8 @@ export function createChatWorktree(liveRoot: string, id: string, worktreesDir: s
 /**
  * Turn-start drift sync (live → worktree). Snapshot the live tree; if the worktree's
  * HEAD tree already matches it there's no drift — no-op. Otherwise reset the worktree
- * hard onto the fresh live snapshot (`clean -fd` first drops any stray files but spares
- * gitignored node_modules/.env symlinks — no `-x`). The caller guarantees the worktree
+ * hard onto the fresh live snapshot (`clean` first drops any stray files but spares the
+ * symlinked runtime deps via `-e` — see `cleanArgs`). The caller guarantees the worktree
  * is CLEAN at turn start (everything was committed at the previous turn's `done`), so
  * the reset can never conflict. Advances `wt.baseSha` in place to the new fork point.
  */
@@ -70,10 +109,14 @@ export async function syncFromLive(liveRoot: string, wt: Worktree): Promise<{ sy
   const live = await captureBase(liveRoot, indexFile)
   const liveTree = await revParse(liveRoot, `${live}^{tree}`)
   const wtTree = await revParse(wt.path, 'HEAD^{tree}')
-  if (liveTree === wtTree) return { synced: false }
-  await git(wt.path, ['clean', '-fd'])
+  if (liveTree === wtTree) {
+    await attachWorktreeBranch(wt)
+    return { synced: false }
+  }
+  await git(wt.path, cleanArgs())
   await git(wt.path, ['reset', '--hard', live])
   wt.baseSha = live
+  await attachWorktreeBranch(wt)
   return { synced: true }
 }
 
@@ -94,9 +137,21 @@ export interface TurnOutcome {
  *  - refused (live drifted)       → `parked` (work stays on the branch for review)
  *  - already at target (no write) → `noop`
  */
-export async function completeTurn(liveRoot: string, wt: Worktree, message: string): Promise<TurnOutcome> {
+export async function completeTurn(
+  liveRoot: string,
+  wt: Worktree,
+  message: string,
+  opts: { land?: boolean } = {}
+): Promise<TurnOutcome> {
   const { committed, files } = await commitWorktree(wt, message)
-  if (!committed) return { outcome: 'noop', files: [], edits: [] }
+  if (!committed) {
+    const newBase = await revParse(wt.path, 'HEAD')
+    return { outcome: 'noop', files: [], edits: [], newBase }
+  }
+  // Failed/interrupted turns are durable on their recovery branch but never land
+  // automatically. The user can inspect, resolve or discard the partial result.
+  if (opts.land === false) return { outcome: 'parked', files, edits: [] }
+  if (await hasConflictMarkers(wt, files)) return { outcome: 'parked', files, edits: [] }
   const { applied, edits } = await autoApplyWorktree(liveRoot, wt, files)
   if (applied) {
     const newBase = await revParse(wt.path, 'HEAD')
@@ -106,7 +161,8 @@ export async function completeTurn(liveRoot: string, wt: Worktree, message: stri
   // refused the batch (drift/binary/delete); a non-empty edits list with no write means
   // the live tree already matched the target — a no-op, not a park.
   if (edits.length === 0) return { outcome: 'parked', files, edits: [] }
-  return { outcome: 'noop', files, edits: [] }
+  const newBase = await revParse(wt.path, 'HEAD')
+  return { outcome: 'noop', files, edits: [], newBase }
 }
 
 export interface ApplyOutcome {
@@ -154,15 +210,26 @@ export interface ResolvePrep {
  * where they did. Advances `wt.baseSha` to the live snapshot so the eventual merge-back
  * (after the agent resolves) is a clean, driftless apply. The chat's diff is captured
  * BEFORE the reset (the reset would erase it). Returns the marker-bearing files.
+ *
+ * Binary files (images etc.) can never carry `<<<<<<<` markers, so a genuine binary
+ * conflict — live and chat both changed the same file to DIFFERENT bytes — produces no
+ * marker for the scan below to find. Left alone, `applyToWorkingTree`'s 3-way apply
+ * either fast-forwards cleanly or silently leaves the live bytes in place, which reads
+ * as "clean" while quietly dropping the chat's own change. Detect that case by comparing
+ * the post-apply file against the chat's own target blob (captured via `chatHead`, its
+ * HEAD before the reset below) and, when they differ, resolve by policy: keep the chat's
+ * version — there's no way to "merge" two PNGs, and that's what the review UI already
+ * tells the user Resolve does.
  */
 export async function stageResolve(liveRoot: string, wt: Worktree): Promise<ResolvePrep> {
+  const chatHead = await revParse(wt.path, 'HEAD') // the chat's own cumulative work, before we move the ref
   const patch = await diffWorktree(wt) // chat's cumulative changes — capture before reset
   const files = await changedFiles(wt)
   const tip = await revParse(wt.path, 'HEAD') // the parked squash — sole restore point
   const oldBase = wt.baseSha
   const indexFile = join(dirname(wt.path), `.index-resolve-${wt.id}`)
   const live = await captureBase(liveRoot, indexFile) // snapshot the user's live tree
-  await git(wt.path, ['clean', '-fd'])
+  await git(wt.path, cleanArgs())
   await git(wt.path, ['reset', '--hard', live]) // worktree := live
   wt.baseSha = live
   const tmpDir = join(dirname(wt.path), '.resolve-tmp')
@@ -186,7 +253,14 @@ export async function stageResolve(liveRoot: string, wt: Worktree): Promise<Reso
     } catch {
       continue // deleted/renamed — no marker to find
     }
-    if (text.includes('<<<<<<<') && text.includes('>>>>>>>')) conflicted.push(rel)
+    if (text.includes('<<<<<<<') && text.includes('>>>>>>>')) {
+      conflicted.push(rel)
+      continue
+    }
+    const target = await readBlobAt(wt.path, chatHead, rel)
+    if (!target || !target.includes(0)) continue // text, or removed on the chat's side — marker scan already covers it
+    const current = await readFile(join(wt.path, rel)).catch(() => null)
+    if (!current || !target.equals(current)) await writeFile(join(wt.path, rel), target)
   }
   return { conflicted, files, clean: conflicted.length === 0 }
 }
@@ -198,5 +272,5 @@ export async function stageResolve(liveRoot: string, wt: Worktree): Promise<Reso
  */
 export async function discardParked(wt: Worktree): Promise<void> {
   await git(wt.path, ['reset', '--hard', wt.baseSha]).catch(() => {})
-  await git(wt.path, ['clean', '-fd']).catch(() => {})
+  await git(wt.path, cleanArgs()).catch(() => {})
 }

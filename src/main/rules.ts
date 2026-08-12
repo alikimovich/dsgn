@@ -13,9 +13,11 @@
  *
  * Bump PRAXIS_RULES_VERSION whenever the rule text changes (so logs/tests can pin it).
  */
-export const PRAXIS_RULES_VERSION = 10
+import { projectMemoryRules } from './project-memory'
 
-export function praxisRules(opts?: { previewTools?: boolean }): string {
+export const PRAXIS_RULES_VERSION = 11
+
+export function praxisRules(opts?: { previewTools?: boolean; projectMemory?: string }): string {
   const lines: string[] = [
     `# Praxis operating rules (v${PRAXIS_RULES_VERSION})`,
     `Praxis is a design tool: you edit the user's real repository while they watch a`,
@@ -40,7 +42,8 @@ export function praxisRules(opts?: { previewTools?: boolean }): string {
     `## Git is Praxis-managed`,
     `On a git repo your chat runs in its own worktree on a \`praxis/chat-*\` branch.`,
     `When your turn completes, Praxis auto-merges your work onto the live checkout`,
-    `(the tree the preview serves) and squashes the branch's pending work into a`,
+    `(the tree the preview serves), commits it there as ONE commit per turn (so the`,
+    `user can follow or revert each turn), and squashes the branch's pending work into a`,
     `single commit — whose hash is rewritten every turn. Therefore:`,
     `- Do NOT mutate git state yourself: no commit, branch, checkout, merge, rebase,`,
     `  reset, or moving refs — in your worktree or the live checkout. Any commit you`,
@@ -56,6 +59,8 @@ export function praxisRules(opts?: { previewTools?: boolean }): string {
     `  ends, report it as a bug instead of working around it.`,
     `Read-only git (status, log, diff, show) is always fine.`
   ]
+
+  lines.push(...projectMemoryRules(opts?.projectMemory ?? ''))
 
   if (opts?.previewTools) {
     lines.push(

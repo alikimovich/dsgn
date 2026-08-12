@@ -1,12 +1,21 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  chatAgentSettingsFor,
-  DEFAULT_MODEL,
+  Fragment,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
+import {
+  agentModelId,
+  agentOptionsFor,
+  type ChatAgentSettings,
+  chatAgentSettingsFromSession,
   describeSelectionForPrompt,
+  type ModelSelection,
   selectionForBubble,
   isAuthError,
   oneLine,
-  toAgentOptions,
   useAnnotations,
   useChat,
   useComposer,
@@ -24,6 +33,18 @@ import {
   useWorkspace,
   usePropsIsland,
 } from "../store";
+import {
+  defaultChoiceFor,
+  providerOptions,
+  resolveSelection,
+  useProviders,
+} from "../providers-store";
+import {
+  type Attachment,
+  draftAttachments,
+  draftText,
+  useComposerDrafts,
+} from "../composer-drafts";
 import { projectKey } from "../../../shared/projectKey";
 import { parseSlashToken } from "../../../shared/slash-token";
 import type {
@@ -50,6 +71,7 @@ import { useStickToBottomContext } from "use-stick-to-bottom";
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { splitUrls } from "@/lib/elide-url";
 import {
   ArrowUp,
   Check,
@@ -66,32 +88,14 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import CatLoader from "./CatLoader";
+import RunStats from "./RunStats";
 
-// A pending composer attachment. Images carry base64 bytes + a data URL for the
-// thumbnail (sent as a vision block); files carry only their name + absolute path
-// (folded into the prompt text so the agent reads them itself).
-type Attachment =
-  | { id: string; kind: "image"; mediaType: string; data: string; url: string }
-  | { id: string; kind: "file"; name: string; path: string };
-
-// The model picker is per-backend: Claude's own models vs. the models the
-// `codex` CLI accepts via --model. "Default" is a sentinel meaning "omit the
-// model, use the account/backend default" (see toAgentOptions). Handing a
-// Claude model name (e.g. "opus") to Codex would fail the turn, so switching
-// backend also resets the model to Default (see onProviderChange).
-const CLAUDE_MODELS = [
-  { value: DEFAULT_MODEL, label: "Default" },
-  { value: "opus", label: "Opus" },
-  { value: "sonnet", label: "Sonnet" },
-  { value: "haiku", label: "Haiku" },
-];
-const CODEX_MODELS = [
-  { value: DEFAULT_MODEL, label: "Default" },
-  { value: "gpt-5-codex", label: "GPT-5 Codex" },
-  { value: "gpt-5", label: "GPT-5" },
-];
-const modelsFor = (provider: string): { value: string; label: string }[] =>
-  provider === "codex" ? CODEX_MODELS : CLAUDE_MODELS;
+// The picker is TWO dropdowns (the pre-v10 shape): a provider — Claude, Codex,
+// then every saved connection — and that provider's models. Both are derived from
+// the ONE flat list main hands over (`providers.choices()`); nothing about models
+// or endpoints is hardcoded here any more. A sentinel row at the bottom of the
+// provider list opens Settings instead of selecting a provider.
+const MANAGE_PROVIDERS = "__manage-providers__";
 
 // `bypassPermissions` is intentionally omitted — see its "unused" doc note on
 // PermissionMode (shared/api.ts): skips praxis's own canUseTool guards too, not
@@ -102,26 +106,17 @@ const PERMISSION_MODES: { value: PermissionMode; label: string }[] = [
   { value: "default", label: "Ask always" },
 ];
 
-// Selectable backends (v7). Each authenticates with the user's own subscription
-// login — no API keys. Only backends wired in main's pickProvider are listed.
-// Gemini is EXPERIMENTAL/unwired (no SDK dep) and gated behind
-// PRAXIS_EXPERIMENTAL_GEMINI in main, so it's omitted here — listing it would let a
-// user pick a provider that silently falls back to Claude. Re-add when its
-// adapter ships. `login` is the one-time CLI step.
-const PROVIDERS: {
-  value: string;
-  label: string;
-  login: string | null;
-  blurb: string | null;
-}[] = [
-  { value: "claude", label: "Claude", login: null, blurb: null },
-  {
-    value: "codex",
-    label: "Codex",
+// The one-time CLI sign-in for a harness that authenticates with the user's own
+// subscription (v7). Keyed by HARNESS, not by picker row, and only consulted when
+// the chat is on that harness's OWN account: a saved connection is its own row in
+// the provider dropdown but runs on the Codex harness with its stored API key, so
+// telling that user to run `codex login` would send them the wrong way.
+const HARNESS_LOGIN: Record<string, { login: string; blurb: string }> = {
+  codex: {
     login: "codex login",
     blurb: "OpenAI Codex runs on your ChatGPT subscription",
   },
-];
+};
 
 /**
  * Framework-correct setup instructions for the agent. Returns null when the
@@ -188,6 +183,12 @@ function StepDisclosure({
  * vs `clientHeight`) rather than a line/character count, so it only ever
  * kicks in when the bubble truly exceeds the cap — short messages get no
  * fade, no pointer cursor, no click handler.
+ *
+ * That cap is vertical only, so long URLs got their own treatment (LKM-64):
+ * a pasted link is one unbreakable token, and the bubble is sized to its
+ * content, so a link wider than the pane used to drag the whole bubble off
+ * the left edge. Links now render elided (`splitUrls`) with the full URL on
+ * the tooltip, and `.msg__text` breaks anything still too long to fit.
  */
 function ClampedUserText({
   text,
@@ -204,6 +205,7 @@ function ClampedUserText({
   // ClampedUserText renders inside <Conversation>, so it can reach the
   // stick-to-bottom context directly — no prop plumbing needed.
   const { stopScroll } = useStickToBottomContext();
+  const runs = useMemo(() => splitUrls(text), [text]);
 
   // Only measurable while collapsed (the clamp's max-height is what makes
   // scrollHeight > clientHeight meaningful); once we've learned a bubble
@@ -240,7 +242,7 @@ function ClampedUserText({
     <div
       ref={ref}
       className={cn(
-        "msg__text w-fit rounded-lg border border-[var(--border-prominent)] bg-muted px-3 py-2 text-sm",
+        "msg__text w-fit max-w-full rounded-lg border border-[var(--border-prominent)] bg-muted px-3 py-2 text-sm",
         !expanded && "msg__text--clamp",
         clickable && "cursor-pointer",
       )}
@@ -258,7 +260,17 @@ function ClampedUserText({
           : undefined
       }
     >
-      {text}
+      {runs.map((run, i) =>
+        run.kind === "link" ? (
+          // Elided to host + last segment; the full URL stays in the tooltip.
+          // Not an anchor — a user's ask is plain text, not a link surface.
+          <span key={i} className="msg__link" title={run.href}>
+            {run.label}
+          </span>
+        ) : (
+          <Fragment key={i}>{run.text}</Fragment>
+        ),
+      )}
       {!expanded && overflows && (
         <div className="msg__text-fade" aria-hidden="true" />
       )}
@@ -397,11 +409,18 @@ export default function ChatPanel(): React.JSX.Element {
     startAssistant,
     appendDelta,
     appendStatus,
+    addUsage,
     finish,
   } = useChat();
-  const { model, provider, slashCommands, projectRoot, setModel, setProvider } =
+  const { model, modelId, provider, connectionId, slashCommands, projectRoot, setModelSelection } =
     useSession();
   const codexAuthNeeded = useSession((s) => s.codexAuthNeeded);
+  // v10 model picker contents (main is the single source of truth). Fetched once,
+  // and re-fetched by the settings dialog after every save/remove.
+  const choices = useProviders((s) => s.choices);
+  useEffect(() => {
+    useProviders.getState().ensureLoaded();
+  }, []);
   const { selected, setSelected } = useSelection();
   const selectMode = useSelection((s) => s.selectMode);
   const layersOpen = useLayersPanel((s) => s.open);
@@ -421,7 +440,26 @@ export default function ChatPanel(): React.JSX.Element {
     ok: boolean;
     text: string;
   } | null>(null);
-  const [input, setInput] = useState("");
+  // A half-written message belongs to the chat it was written in, so the
+  // composer's content is keyed by chat rather than held in component state:
+  // ChatPanel is mounted once for the whole app, so plain local state would just
+  // follow the user into whichever chat they switch to. Switching away parks the
+  // text; switching back finds it again; a chat never typed in opens blank.
+  const activeChatKey = useChat((s) => s.activeKey);
+  const input = useComposerDrafts((s) => draftText(s, activeChatKey));
+  const attachments = useComposerDrafts((s) => draftAttachments(s, activeChatKey));
+  // `useState`-shaped setters (value or updater) so every call site below reads
+  // as it did when these were `useState`.
+  const setInput = (value: React.SetStateAction<string>): void =>
+    useComposerDrafts.getState().update(activeChatKey, (d) => ({
+      ...d,
+      text: typeof value === "function" ? value(d.text) : value,
+    }));
+  const setAttachments = (value: React.SetStateAction<Attachment[]>): void =>
+    useComposerDrafts.getState().update(activeChatKey, (d) => ({
+      ...d,
+      attachments: typeof value === "function" ? value(d.attachments) : value,
+    }));
   // Caret position in the composer — drives which "/" token the slash menu reads
   // (the menu can open mid-message, not just at the start).
   const [caret, setCaret] = useState(0);
@@ -430,10 +468,6 @@ export default function ChatPanel(): React.JSX.Element {
   // The "/" menu is uncapped and scrolls (see rankSlashMatches); keep the
   // keyboard-selected row inside the viewport as you arrow past the fold.
   const activeItemRef = useRef<HTMLButtonElement>(null);
-  // Attachments pasted/dropped into the composer. Images ride the turn as base64
-  // vision blocks (as before); other files are handed to the agent by path (it
-  // reads them with its own tools) and shown as a filename card.
-  const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [dragOver, setDragOver] = useState(false);
   // Which conflict-card action is in flight (drives its spinners); null when idle.
   const [conflictBusy, setConflictBusy] = useState<null | "resolve" | "discard">(
@@ -488,6 +522,13 @@ export default function ChatPanel(): React.JSX.Element {
       el.removeEventListener("touchmove", onTouchMove);
     };
   }, []);
+
+  // The restored draft comes back with the cursor at its end — the caret is
+  // per-composer, not per-chat, so without this the slash menu would keep
+  // reading the outgoing chat's caret against the incoming chat's text.
+  useEffect(() => {
+    setCaret(useComposerDrafts.getState().byKey[activeChatKey]?.text.length ?? 0);
+  }, [activeChatKey]);
 
   // Auto-grow the composer with the text — from 2 lines up to 6, then scroll.
   useEffect(() => {
@@ -560,8 +601,12 @@ export default function ChatPanel(): React.JSX.Element {
               event.summary ? `${head}\n\n${event.summary}` : head,
               pkey,
             );
+          // `pkey` is the PARENT SESSION key now, not the bare project key — a
+          // spawn from a secondary chat reads `<projectKey>#<uuid>`. Match on the
+          // project prefix so the finished agent still refreshes its history.
           const root = useSession.getState().projectRoot;
-          if (root && projectKey(root) === pkey)
+          const pk = root ? projectKey(root) : null;
+          if (root && pk && (pkey === pk || pkey.startsWith(`${pk}#`)))
             void useHistory.getState().load(root);
         }
         return;
@@ -579,6 +624,13 @@ export default function ChatPanel(): React.JSX.Element {
         useChat.getState().setTitle(key, event.title);
       } else if (event.type === "status") {
         appendStatus(event.text, key);
+      } else if (event.type === "usage") {
+        // Token deltas from the backend (already deduped in main) — they sum into
+        // the chat's totals for the status line.
+        addUsage(
+          { input: event.input, output: event.output, cached: event.cached },
+          key,
+        );
       } else if (event.type === "error") {
         // A Claude auth failure gets a short line pointing at the (Claude-specific)
         // onboarding banner. Non-Claude backends (Codex/Gemini) have no such banner
@@ -645,7 +697,7 @@ export default function ChatPanel(): React.JSX.Element {
         }
       }
     });
-  }, [appendDelta, appendStatus, finish]);
+  }, [appendDelta, appendStatus, addUsage, finish]);
 
   // "/" slash-command menu state. The menu reads the "/" token containing the
   // caret, so it triggers anywhere in the message — at the very start or after a
@@ -853,18 +905,29 @@ export default function ChatPanel(): React.JSX.Element {
     [],
   );
 
-  // Read image files (paste/drop) into base64 attachments + a preview URL.
+  // Read image files (paste/drop) into base64 attachments + a preview URL. A
+  // dropped image also keeps its on-disk path (recovered in the preload); a
+  // pasted one has none, and gets one written for it at send time.
   const addImageFiles = (files: File[]): void => {
     let nextId = Date.now();
     for (const file of files) {
       if (!file.type.startsWith("image/")) continue;
+      const path = window.api.pathForFile(file);
       const reader = new FileReader();
       reader.onload = () => {
         const url = String(reader.result); // data:<mime>;base64,<data>
         const data = url.slice(url.indexOf(",") + 1);
         setAttachments((a) => [
           ...a,
-          { id: `att${nextId++}`, kind: "image", mediaType: file.type, data, url },
+          {
+            id: `att${nextId++}`,
+            kind: "image",
+            mediaType: file.type,
+            data,
+            url,
+            name: file.name,
+            path,
+          },
         ]);
       };
       reader.readAsDataURL(file);
@@ -913,9 +976,13 @@ export default function ChatPanel(): React.JSX.Element {
   const send = (raw: string = input): void => {
     const text = raw.trim();
     if ((!text && attachments.length === 0) || isRunning) return;
-    const images = attachments
-      .filter((a) => a.kind === "image")
-      .map((a) => ({ mediaType: a.mediaType, data: a.data }));
+    const imageAtts = attachments.flatMap((a) =>
+      a.kind === "image" ? [a] : [],
+    );
+    const images = imageAtts.map((a) => ({
+      mediaType: a.mediaType,
+      data: a.data,
+    }));
     const files = attachments.filter((a) => a.kind === "file");
     // File attachments ride as hidden context (like the selection pill below):
     // the agent gets each absolute path prepended so it can read the file with
@@ -937,9 +1004,11 @@ export default function ChatPanel(): React.JSX.Element {
       ? `📎 ${files.map((f) => f.name).join(", ")}`
       : "";
     appendUser(text || fileSummary, undefined, {
-      attachments: attachments
-        .filter((a) => a.kind === "image")
-        .map((a) => ({ id: a.id, mediaType: a.mediaType, url: a.url })),
+      attachments: imageAtts.map((a) => ({
+        id: a.id,
+        mediaType: a.mediaType,
+        url: a.url,
+      })),
       selection: selected ? selectionForBubble(selected) : undefined,
     });
     startAssistant();
@@ -949,10 +1018,33 @@ export default function ChatPanel(): React.JSX.Element {
     // A newly-sent ask becomes the pinned message — any previously-expanded
     // ask should collapse back to its clamp instead of hanging around full-height.
     setExpandedUserMsgs(new Set());
-    void window.api.agent.send(
-      fileCtx + ctx + text,
-      images.length ? images : undefined,
-    );
+    // Images ride as vision blocks, but the agent also needs to know WHERE each
+    // one is: without a path it can see a screenshot and still have to ask the
+    // user to find it before it can copy it into the repo. Dropped images
+    // already have their real path; pasted ones are only clipboard bytes, so
+    // main writes them out first (at send, not at paste — an attachment the user
+    // removes again should never hit the disk). A save that fails just yields no
+    // path, leaving that image vision-only as before.
+    void (async () => {
+      const paths = await Promise.all(
+        imageAtts.map((a) =>
+          a.path
+            ? Promise.resolve(a.path)
+            : window.api.agent
+                .saveAttachment({ mediaType: a.mediaType, data: a.data }, a.name)
+                .catch(() => ""),
+        ),
+      );
+      const imageCtx = paths.some(Boolean)
+        ? `[Attached images — the image(s) in this message are on disk at]\n${paths
+            .filter(Boolean)
+            .join("\n")}\n\n`
+        : "";
+      await window.api.agent.send(
+        fileCtx + imageCtx + ctx + text,
+        images.length ? images : undefined,
+      );
+    })();
     if (selected) setSelected(null);
   };
 
@@ -971,33 +1063,104 @@ export default function ChatPanel(): React.JSX.Element {
     void window.api.agent.interrupt();
   };
 
-  const onModelChange = (value: string): void => {
-    setModel(value);
-    const entry = useWorkspace.getState().projects.find((p) => p.root === projectRoot);
-    if (entry) {
-      const sessionKey = entry.activeSessionKey ?? entry.key;
-      useWorkspace.getState().patchEntry(entry.key, {
-        chatSettings: {
-          ...entry.chatSettings,
-          [sessionKey]: { ...chatAgentSettingsFor(entry, sessionKey), model: value },
-        },
-      });
-    }
-    // Codex fixes the model when the thread starts — a live `setModel` is a
-    // no-op there (see backends/codex.ts), so restart only THIS chat on the
-    // new model. Reopening the whole project would replace its default chat,
-    // even when the user is looking at an additional chat.
-    if (provider === "codex") {
-      if (!projectRoot || !entry) return;
-      const sessionKey = entry.activeSessionKey ?? entry.key;
-      void window.api.agent.restartChat(projectRoot, sessionKey, {
-        ...toAgentOptions({ ...useSession.getState(), model: value }),
-        permissionMode: usePermissions.getState().mode,
-      });
+  // The toolbar IS this chat's settings: every picker change persists the whole
+  // set for the active sessionKey (so switching away and back restores it) and
+  // returns it, so whatever we then hand main matches what's on screen — mode
+  // included. Returns null when there's no open project to attribute it to.
+  const persistChatSettings = (
+    partial: Partial<ChatAgentSettings>,
+  ): { sessionKey: string; settings: ChatAgentSettings } | null => {
+    const entry = useWorkspace
+      .getState()
+      .projects.find((p) => p.root === projectRoot);
+    if (!entry) return null;
+    const sessionKey = entry.activeSessionKey ?? entry.key;
+    const settings = {
+      ...chatAgentSettingsFromSession(useSession.getState()),
+      ...partial,
+    };
+    useWorkspace.getState().patchEntry(entry.key, {
+      chatSettings: { ...entry.chatSettings, [sessionKey]: settings },
+    });
+    return { sessionKey, settings };
+  };
+
+  // The two dropdowns' contents, derived from main's one flat choice list: the
+  // providers (Claude, Codex, then each saved connection) and — via
+  // `resolveSelection` — which provider row and which of ITS models this chat's
+  // stored settings should show. Model ids are discovered now, so a chat
+  // persisted against one the harness has since retired (or against a deleted
+  // connection) resolves to that provider's Default instead of a dead row; the
+  // stored settings themselves are left alone until the user actually picks.
+  const providers = useMemo(() => providerOptions(choices), [choices]);
+  const selection = useMemo(
+    () => resolveSelection(providers, { model, provider, connectionId }),
+    [providers, model, provider, connectionId],
+  );
+
+  /**
+   * Apply one picker choice — whichever dropdown produced it. The whole tuple
+   * moves together (and the undefined members are SET, not omitted, so moving to
+   * a plain Claude model clears a previous choice's `modelId`/`connectionId`
+   * instead of inheriting them).
+   *
+   * Restart rules, unchanged since the pre-v10 pair of dropdowns: Claude alone
+   * can swap models mid-thread. Codex fixes its model when the thread starts (a
+   * live `setModel` is a no-op there — see backends/codex.ts), and a connection
+   * rides the SAME Codex harness with a different endpoint, so any move onto, off
+   * of, or between Codex/connection models restarts just THIS chat. Reopening the
+   * whole project would replace its default chat even while the user is looking
+   * at an additional one.
+   */
+  const applySelection = (next: ModelSelection): void => {
+    const liveSwap =
+      next.provider === "claude" &&
+      provider === "claude" &&
+      !next.connectionId &&
+      !connectionId;
+    setModelSelection(next);
+    const chat = persistChatSettings(next);
+    if (!liveSwap) {
+      if (!projectRoot || !chat) return;
+      void window.api.agent.restartChat(
+        projectRoot,
+        chat.sessionKey,
+        agentOptionsFor(chat.settings),
+      );
       useChat.getState().finish();
       return;
     }
-    if (value !== DEFAULT_MODEL) void window.api.agent.setModel(value);
+    // "Default" means "no model" — there's nothing to hand the live session.
+    const id = agentModelId(next);
+    if (id) void window.api.agent.setModel(id);
+  };
+
+  // Switching provider lands on that provider's Default (a connection has no
+  // Default sentinel, so its first model) — a model id never carries across
+  // providers, and the chat's stored one may not even exist on the new one.
+  const onProviderChange = (key: string): void => {
+    const option = providers.find((o) => o.key === key);
+    const choice = option && defaultChoiceFor(option);
+    if (!option || !choice) return;
+    applySelection({
+      model: choice.value,
+      modelId: choice.modelId,
+      provider: option.provider,
+      connectionId: option.connectionId,
+    });
+  };
+
+  // Only the selected provider's models are offered, so the choice is looked up
+  // within it — the same id can appear under several providers.
+  const onModelChange = (value: string): void => {
+    const choice = selection.option?.models.find((c) => c.value === value);
+    if (!choice) return;
+    applySelection({
+      model: choice.value,
+      modelId: choice.modelId,
+      provider: choice.provider,
+      connectionId: choice.connectionId,
+    });
   };
 
   const onPermissionModeChange = (value: string): void => {
@@ -1005,52 +1168,8 @@ export default function ChatPanel(): React.JSX.Element {
     setMode(mode);
     // Persist per-chat (mirrors onModelChange) so switching away and back restores
     // THIS chat's mode instead of the toolbar drifting from the session's real mode.
-    const entry = useWorkspace
-      .getState()
-      .projects.find((p) => p.root === projectRoot);
-    if (entry) {
-      const sessionKey = entry.activeSessionKey ?? entry.key;
-      useWorkspace.getState().patchEntry(entry.key, {
-        chatSettings: {
-          ...entry.chatSettings,
-          [sessionKey]: {
-            ...chatAgentSettingsFor(entry, sessionKey),
-            permissionMode: mode,
-          },
-        },
-      });
-    }
+    persistChatSettings({ permissionMode: mode });
     void window.api.agent.setPermissionMode(mode);
-  };
-
-  // Switching the backend means a different agent session entirely — the model
-  // can't change live across providers. Reopen the active project's session on the
-  // new backend (the visible transcript stays; context resets, like an LRU reopen).
-  const onProviderChange = (value: string): void => {
-    setProvider(value);
-    // Model names don't carry across backends ("opus" is meaningless to Codex,
-    // "gpt-5" to Claude), so reset to the backend default on switch — the picker
-    // repopulates with the new backend's models (see modelsFor).
-    setModel(DEFAULT_MODEL);
-    const entry = useWorkspace.getState().projects.find((p) => p.root === projectRoot);
-    if (!projectRoot || !entry) return;
-    const sessionKey = entry.activeSessionKey ?? entry.key;
-    useWorkspace.getState().patchEntry(entry.key, {
-      chatSettings: {
-        ...entry.chatSettings,
-        [sessionKey]: {
-          ...chatAgentSettingsFor(entry, sessionKey),
-          provider: value,
-          model: DEFAULT_MODEL,
-        },
-      },
-    });
-    void window.api.agent.restartChat(projectRoot, sessionKey, {
-      ...toAgentOptions({ ...useSession.getState(), provider: value }),
-      permissionMode: usePermissions.getState().mode,
-    });
-    // The reopened session starts idle — clear any turn left "running" on the slice.
-    useChat.getState().finish();
   };
 
   const respondPermission = (id: string, behavior: "allow" | "deny"): void => {
@@ -1126,6 +1245,15 @@ export default function ChatPanel(): React.JSX.Element {
   // native <option> values via $$eval — a Radix portal would break it.
   const selectCls =
     "h-6 cursor-pointer appearance-none rounded-md border-0 bg-transparent px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+  // Before main's choices land, `selection` resolves to nothing at all — a
+  // placeholder <option> in each control keeps them from rendering blank for that
+  // beat (and covers a `provider` no group claims).
+  const providerFallback = connectionId
+    ? "Connection"
+    : provider === "codex"
+      ? "Codex"
+      : "Claude";
 
   // Group the flat message list into "turns" — a user ask plus everything
   // that follows until the next ask — each wrapped in its own container so
@@ -1289,16 +1417,14 @@ export default function ChatPanel(): React.JSX.Element {
         />
       </Conversation>
 
-      {/* Live status line — a cat that runs (with the current step, like a
-          terminal "Architecting…" indicator) while a turn is in flight and
-          settles on the idle sprite while waiting for input. */}
-      <div className="chat__status" aria-live="polite">
+      {/* Live status line — a cat that runs while a turn is in flight and settles
+          on the idle sprite while waiting for input, alongside what the chat has
+          spent (tokens in/out) and how long it has been working. No aria-live: the
+          clock ticks every second, and announcing that on a loop is noise — the
+          cat's own role="img" label already says whether a turn is running. */}
+      <div className="chat__status">
         <CatLoader running={isRunning} />
-        {isRunning && (
-          <span className="chat__status-text">
-            {messages[messages.length - 1]?.statuses.at(-1) ?? "Working…"}
-          </span>
-        )}
+        <RunStats />
       </div>
 
       <div className="composer">
@@ -1327,9 +1453,11 @@ export default function ChatPanel(): React.JSX.Element {
         {/* v7: a non-Claude backend authenticates with its own subscription
             login (no API keys). Only surface the hint once a turn has actually
             failed to connect (codexAuthNeeded) — an already-logged-in user
-            shouldn't be nagged every time they switch to the backend. */}
+            shouldn't be nagged every time they switch to the backend. v10: a
+            connection-backed model runs on the same harness but authenticates
+            with its own stored key, so it never gets the CLI-login hint. */}
         {(() => {
-          const p = PROVIDERS.find((x) => x.value === provider);
+          const p = connectionId ? undefined : HARNESS_LOGIN[provider];
           if (!p?.login || !codexAuthNeeded) return null;
           return (
             <div
@@ -1363,11 +1491,15 @@ export default function ChatPanel(): React.JSX.Element {
             <Inspector element={selected} onClear={() => setSelected(null)} />
           )}
           {attachments.length > 0 && (
-            <div className="flex flex-wrap gap-1.5 px-2 pt-2">
+            /* w-full: the InputGroup is a flex COLUMN with `items-center`, so a
+               shrink-to-fit row would sit centered above the textarea. Full
+               width + the textarea's own 14px left padding lines the chips up
+               with the prompt text (same trick as Inspector's pill row). */
+            <div className="composer__attachments flex w-full flex-wrap gap-1.5 pl-[14px] pr-3 pt-2">
               {attachments.map((a) => (
                 <div
                   key={a.id}
-                  title={a.kind === "file" ? a.path : undefined}
+                  title={a.path || undefined}
                   className={
                     a.kind === "image"
                       ? "relative h-12 w-12 overflow-hidden rounded-md border border-border"
@@ -1472,27 +1604,57 @@ export default function ChatPanel(): React.JSX.Element {
                   <Layers className="size-3.5" aria-hidden="true" />
                 </button>
               )}
+              {/* Provider: the two built-in seats, then every saved connection
+                  (main's own order), then the row that opens Settings. */}
               <select
                 className={selectCls}
-                value={provider}
-                onChange={(e) => onProviderChange(e.target.value)}
-                aria-label="Backend"
+                value={selection.providerKey}
+                onChange={(e) => {
+                  const key = e.target.value;
+                  if (key === MANAGE_PROVIDERS) {
+                    // Not a provider — bounce the control back and open Settings.
+                    e.currentTarget.value = selection.providerKey;
+                    useProviders.getState().setSettingsOpen(true);
+                    return;
+                  }
+                  onProviderChange(key);
+                }}
+                aria-label="Provider"
+                title="Which harness (or saved connection) runs this chat"
               >
-                {PROVIDERS.map((p) => (
-                  <option key={p.value} value={p.value}>
-                    {p.label}
+                {!selection.option && (
+                  <option value={selection.providerKey}>
+                    {providerFallback}
+                  </option>
+                )}
+                {providers.map((o) => (
+                  <option key={o.key} value={o.key}>
+                    {o.label}
                   </option>
                 ))}
+                <option value={MANAGE_PROVIDERS}>Add new…</option>
               </select>
+              {/* Model: only the selected provider's. */}
               <select
                 className={selectCls}
-                value={model}
+                value={selection.choice?.value ?? model}
                 onChange={(e) => onModelChange(e.target.value)}
                 aria-label="Model"
               >
-                {modelsFor(provider).map((m) => (
-                  <option key={m.value} value={m.value}>
-                    {m.label}
+                {/* The placeholder must render a human label, never the raw picker
+                    value: since v10 `model` holds a namespaced `ModelChoice.value`
+                    (`claude:opus`, `codex:8f3a…:moonshotai/kimi-k2`), so printing it
+                    flashed `claude:opus` in the toolbar on every mount before
+                    `providers.choices()` resolved. `agentModelId` unwraps the tuple
+                    to the real model id, or undefined for the Default sentinel. */}
+                {!selection.choice && (
+                  <option value={model}>
+                    {agentModelId({ model, modelId }) ?? "Default"}
+                  </option>
+                )}
+                {selection.option?.models.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
                   </option>
                 ))}
               </select>
