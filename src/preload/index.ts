@@ -31,6 +31,7 @@ import type {
   PermissionMode,
   PraxisApi,
   PreviewComment,
+  ProjectIcon,
   ProjectMemory,
   PropEdit,
   PropEditResult,
@@ -188,6 +189,7 @@ const api: PraxisApi = {
   project: {
     pick: (): Promise<string | null> => ipcRenderer.invoke('project:pick'),
     detect: (root: string): Promise<DetectedProject> => ipcRenderer.invoke('project:detect', root),
+    icon: (root: string): Promise<ProjectIcon | null> => ipcRenderer.invoke('project:icon', root),
     pickNew: (): Promise<string | null> => ipcRenderer.invoke('project:pick-new'),
     create: (root: string): Promise<{ ok: boolean; root?: string; error?: string }> =>
       ipcRenderer.invoke('project:create', root)

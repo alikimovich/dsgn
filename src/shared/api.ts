@@ -77,6 +77,19 @@ export interface DetectedProject {
   previewKind: PreviewKind
 }
 
+/**
+ * A project's own favicon, resolved from its source tree (see
+ * `src/main/project-icon.ts`). The rail leads each project with this instead of
+ * the generic folder glyph, so a wall of open projects is scannable by icon.
+ */
+export interface ProjectIcon {
+  /** Project-relative path the icon came from — shown in the rail row's title
+   *  so it's obvious WHICH file the rail is showing. */
+  path: string
+  /** `data:` URL, ready for an `<img src>`. Capped at 512 KB by main. */
+  dataUrl: string
+}
+
 export interface RunningDevServer {
   url: string
   pid: number
@@ -1181,6 +1194,10 @@ export interface PraxisApi {
   project: {
     pick: () => Promise<string | null>
     detect: (root: string) => Promise<DetectedProject>
+    /** The project's own favicon, read from its source tree, so the rail can
+     *  lead the project with its real icon instead of a folder glyph. Null when
+     *  the project ships none. */
+    icon: (root: string) => Promise<ProjectIcon | null>
     /** Save-dialog for a folder to create (New Project…). Null when cancelled. */
     pickNew: () => Promise<string | null>
     /** Scaffold a minimal Vite+React app there, git init, install deps. */

@@ -696,6 +696,21 @@ body.is-fullscreen .sidebar-toggle {
     color: var(--text-muted);
     transition: opacity 0.12s ease;
 }
+/* A project's own favicon standing in for the folder. It rides .rail__folder
+   for the 16px placement and the hover cross-fade, so only the things an <img>
+   needs differ. Deliberately NOT muted like the folder above: the icon is the
+   project's identity, and dimming it would defeat scanning the rail by it —
+   `color` simply doesn't apply to a raster, and the rule is left in place for
+   an SVG favicon that inherits currentColor (rare, and it should read as the
+   folder does when it happens). */
+.rail__favicon {
+    width: 16px;
+    height: 16px;
+    object-fit: contain;
+    /* Square favicons dominate; a hair of rounding keeps one from reading as a
+       sticker pasted over the row. */
+    border-radius: 3px;
+}
 /* Chevron hidden until the row is hovered; it rotates from pointing right
    (collapsed) to pointing down (expanded/active). */
 .rail__chevron {

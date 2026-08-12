@@ -1,6 +1,7 @@
 import { Brain, ChevronRight, Folder, FolderOpen, MessageSquare, Plus, X } from 'lucide-react'
 import { Fragment, useEffect, useState } from 'react'
 import type { SessionRecord } from '../../../shared/api'
+import { useProjectIcons } from '../project-icons'
 import {
   chatAgentSettingsFor,
   chatModelLabel,
@@ -110,6 +111,9 @@ export default function Rail({
   const history = useHistory((s) => s.byKey)
   // v8 F1: comment-spawned background agents currently running, per project.
   const spawns = useSpawns((s) => s.byKey)
+  // Each project's own favicon, keyed like the rest — the project row's glyph
+  // when the project has one (see the useEffect below).
+  const icons = useProjectIcons((s) => s.byKey)
   const updateStatus = useUpdate((s) => s.status)
   const updateSubject = useUpdate((s) => s.subject)
   const updateProgress = useUpdate((s) => s.progress)
@@ -134,6 +138,14 @@ export default function Rail({
       if (hist.byKey[p.key] || hist.loading[p.key]) continue
       void hist.load(p.root)
     }
+  }, [projects])
+
+  // Favicons load for EVERY open project, collapsed or not — the project row is
+  // always visible, and its glyph is the whole point. `load` no-ops once a
+  // project's icon (or its absence) is known, so this is one fetch per project.
+  useEffect(() => {
+    const store = useProjectIcons.getState()
+    for (const p of projects) void store.load(p.root)
   }, [projects])
 
   if (projects.length === 0) return null
@@ -217,13 +229,18 @@ export default function Rail({
             const pastVisible = showAllPast ? past : past.slice(0, MAX_HISTORY_ROWS)
             const hiddenPast = past.length - pastVisible.length
             const FolderIcon = expanded ? FolderOpen : Folder
+            const icon = icons[p.key]
             return (
               <li key={p.key} className={`rail__item ${active ? 'rail__item--active' : ''}`}>
                 <div className="rail__row">
-                  <div className="rail__open" title={p.root}>
-                    {/* Cursor-style glyph: a subdued folder (open when expanded,
-                      closed otherwise) that, on hover, gives way to a chevron —
-                      pointing down while expanded, right while collapsed.
+                  <div className="rail__open" title={icon ? `${p.root} — ${icon.path}` : p.root}>
+                    {/* Project glyph: the project's OWN favicon when it ships one,
+                      else the Cursor-style subdued folder (open when expanded,
+                      closed otherwise). Either way it gives way to a chevron on
+                      hover — pointing down while expanded, right while collapsed.
+                      The favicon rides `rail__folder` so it inherits the same
+                      16px slot and the same hover cross-fade as the folder it
+                      replaces; only the paint differs.
                       It only ever folds THIS project's chat list, active or not
                       — switching projects is the name button's job, so a fold
                       never drags the preview along with it. */}
@@ -237,7 +254,16 @@ export default function Rail({
                       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${p.name}'s chats`}
                     >
                       <span className="rail__glyph" aria-hidden="true">
-                        <FolderIcon className="rail__folder size-4" />
+                        {icon ? (
+                          <img
+                            className="rail__folder rail__favicon"
+                            src={icon.dataUrl}
+                            alt=""
+                            draggable={false}
+                          />
+                        ) : (
+                          <FolderIcon className="rail__folder size-4" />
+                        )}
                         <ChevronRight
                           className={`rail__chevron size-4 ${expanded ? 'rail__chevron--open' : ''}`}
                         />
@@ -298,9 +324,7 @@ export default function Rail({
                         const name = main ? 'Main' : conversationName
                         const parked = byKey[sk]?.isolation === 'parked'
                         const childAgents =
-                          row === 0
-                            ? [...(spawns[sk] ?? []), ...orphanAgents]
-                            : (spawns[sk] ?? [])
+                          row === 0 ? [...(spawns[sk] ?? []), ...orphanAgents] : (spawns[sk] ?? [])
                         const status: ChatStatus =
                           byKey[sk]?.isRunning ||
                           childAgents.some((agent) => agent.status === 'running')

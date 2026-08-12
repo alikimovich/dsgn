@@ -3,6 +3,30 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+> **The Electron tier runs on a machine with NO display** (found 2026-08-12),
+> which the 2026-08-07 correction below didn't cover: after an
+> `electron-vite build`, `PRAXIS_USER_DATA=$(mktemp -d) xvfb-run -a node
+> test/<name>.mjs` launches a real window under a virtual X server, screenshots
+> and all. So "needs a display" is no longer a reason to leave an electron-tier
+> assertion unrun anywhere below.
+
+## A project's favicon leads its rail row (2026-08-12, user-requested) — SHIPPED
+
+- [x] **Show the project's own favicon instead of the folder icon.** ✅ 2026-08-12
+      — new `src/main/project-icon.ts` resolves an icon from the project's source
+      tree (declared `<link rel="icon">` first, then the conventional paths) and
+      inlines it as a `data:` URL over a new `project:icon` IPC; a
+      `useProjectIcons` store feeds `Rail.tsx`, where the `<img>` rides
+      `.rail__folder` so it keeps the 16px slot and the hover-to-chevron
+      cross-fade. Reads FILES, not the running page, so a cold project has an
+      icon too. `test/project-icon.mjs` (unit), `test/rail-favicon.mjs`
+      (electron, screenshot 19). See PROGRESS 2026-08-12.
+- [ ] **Follow-up: a first favicon added mid-session needs a relaunch.** Main
+      revalidates a *changed* icon by mtime, but the renderer caches a miss for
+      the session, so a project that gains its first favicon while open keeps
+      the folder until next launch. A `refresh()` on the store (called after a
+      turn touches the project) closes it; not worth a poll.
+
 ## Editor media previews (2026-08-09, user-reported)
 
 - [x] **Opening an image in the editor showed its bytes as text.** ✅ 2026-08-09 —

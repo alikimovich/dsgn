@@ -2,6 +2,55 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-12 — A project's own favicon leads its rail row
+
+User request: a project with a favicon should show it in the sidebar instead of
+the generic folder icon. New `src/main/project-icon.ts` resolves one from the
+project's SOURCE TREE and inlines it as a `data:` URL; `project:icon` IPC + a
+`useProjectIcons` store (its own file — `store.ts` is long past the ~500-line
+convention) feed `Rail.tsx`, where the `<img>` rides the existing
+`.rail__folder` class so it inherits the same 16px slot and the same
+hover-to-chevron cross-fade. Projects without one are unchanged.
+
+Resolution order: a declared `<link rel="icon">` in an HTML entry wins (it's
+what the project itself says its icon is), then the conventional paths —
+dir-major, `src/app`/`app` ahead of `public` because Next's app router serves
+`app/favicon.ico` in preference, and svg ahead of png ahead of ico within a
+dir. A dangling declaration falls THROUGH to the conventions rather than
+leaving the project iconless.
+
+Why files and not the preview: `page-favicon-updated` would only ever cover the
+project whose dev server is up, and the rail lists every open project — most of
+them cold. Scanning the checkout is the only source that covers the whole list.
+
+Three things worth keeping in mind here. (1) The HTML is project content, so a
+declared href is untrusted input: `../../secret.png` is refused by a
+`withinRoot` check rather than joined blindly. (2) Icons are capped at 512 KB
+and an oversized candidate is SKIPPED (the next one wins) rather than
+disqualifying the project — a 3 MB `icon.png` shouldn't cost a folder glyph.
+(3) Main caches per root and revalidates by the source file's mtime+size, so
+editing a favicon in place updates the rail; the renderer caches misses for the
+session, so ADDING a first favicon to an open project shows on next launch.
+Noted in `project-icons.ts` — a `refresh()` is the fix if it ever bites.
+
+**The Electron tier runs with no display at all.** The 2026-08-07 correction
+established that the tier works when driven through `test/run.mjs` (which
+isolates `PRAXIS_USER_DATA`); this adds the other half — it doesn't need a real
+desktop either. Under `xvfb-run -a`, `test/rail.mjs` passes and the new
+`test/rail-favicon.mjs` drove two real projects and screenshotted the result
+(`test/artifacts/19-rail-favicon.png` — magenta favicon on one row, grey folder
+on the next). Recipe: `electron-vite build`, then
+`PRAXIS_USER_DATA=$(mktemp -d) xvfb-run -a node test/<name>.mjs`. Both halves
+matter — dropping `PRAXIS_USER_DATA` reintroduces the `.empty__open` timeout
+(2026-08-04 hazard note), and dropping `xvfb-run` gives no window. "Needs a
+display" is no longer a reason to leave an electron-tier assertion unrun.
+
+`test/project-icon.mjs` (unit) covers the pure rules plus an end-to-end pick
+over real temp trees; `test/rail-favicon.mjs` (electron) proves the glyph swap,
+including `naturalWidth > 0` so a broken data URL can't pass as a rendered
+icon. `selectable-app` gained a deliberately loud `public/favicon.svg` so the
+screenshot is readable by a human.
+
 ## 2026-08-09 — One indent grid for the rail, and actions that stop reserving space
 
 Yesterday's re-sort put the rail's controls in the right places but left them on four

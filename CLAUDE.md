@@ -75,6 +75,10 @@ src/
                     (framework 'static': no package.json/dev command; live-reload)
     file-tree.ts    list a project's files (git ls-files / fs-walk) for the
                     pop-out editor's @pierre/trees sidecar (source:tree IPC)
+    project-icon.ts the project's own favicon for its rail row (project:icon) —
+                    a declared <link rel="icon"> first, else the conventional
+                    paths; inlined as a data: URL, mtime-revalidated. Reads the
+                    FILES, not the running page, so an un-run project has one too
     file-ops.ts     the same sidebar's file MANAGER — create/rename/delete
                     (source:create-file/rename-file/delete-file). Pure; every
                     renderer-supplied path is re-validated (no traversal, no

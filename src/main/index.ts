@@ -32,6 +32,7 @@ import { registerGithubIpc } from './github'
 import { registerMediaProtocol, registerMediaScheme } from './media'
 import { applyMoveNode } from './move-node'
 import { registerPreviewSource } from './preview-state'
+import { readProjectIcon } from './project-icon'
 import { registerPropsIpc } from './props'
 import { createProject } from './scaffold'
 import { registerSetupIpc } from './setup'
@@ -1174,6 +1175,10 @@ function registerPreviewIpc(): void {
     return res.canceled ? null : (res.filePath ?? null)
   })
   ipcMain.handle('project:create', (_e, root: string) => createProject(root))
+  // The project's own favicon for its rail row. Cheap + cached in main, and
+  // read from the source tree rather than the preview, so a project that has
+  // never been run still shows its icon.
+  ipcMain.handle('project:icon', (_e, root: string) => readProjectIcon(root))
 }
 
 // Dev-mode CDP endpoint: run `bun run dev`, then open chrome://inspect in a real
