@@ -58,13 +58,13 @@ try {
   // Drive the store exactly as a finished setup turn does: arm verification and
   // request the restart. App's effect should pick it up and relaunch.
   await win.evaluate(() => {
-    const s = window.__dsgnSetup.getState()
+    const s = window.__praxisSetup.getState()
     s.setVerifying(true)
     s.setRestartRequested(true)
   })
 
   // The one-shot flag must be consumed (set back to false) by App's effect.
-  await win.waitForFunction(() => window.__dsgnSetup.getState().restartRequested === false, {
+  await win.waitForFunction(() => window.__praxisSetup.getState().restartRequested === false, {
     timeout: 10000
   })
 
@@ -73,14 +73,14 @@ try {
   // WebContents URL is unreliable here: a killed page keeps its last URL string.)
   const logLines = () =>
     win.evaluate(() =>
-      window.__dsgnLog
+      window.__praxisLog
         .getState()
         .lines.map((l) => l.text)
         .join('\n')
     )
   await win.waitForFunction(
     () =>
-      window.__dsgnLog
+      window.__praxisLog
         .getState()
         .lines.some((l) => l.text.includes('Preview restarted at')),
     { timeout: 60000 }
@@ -97,10 +97,10 @@ try {
   // The post-restart readiness report is the verdict. The static fixture has zero
   // stamps, so verification must fire (verifying cleared) and warn — not report
   // silent success.
-  await win.waitForFunction(() => window.__dsgnSetup.getState().verifying === false, {
+  await win.waitForFunction(() => window.__praxisSetup.getState().verifying === false, {
     timeout: 20000
   })
-  const status = await win.evaluate(() => window.__dsgnSetup.getState().status ?? '')
+  const status = await win.evaluate(() => window.__praxisSetup.getState().status ?? '')
   if (!/no elements got stamped/i.test(status)) {
     throw new Error(`expected zero-stamp verdict after restart, got status: "${status}"`)
   }

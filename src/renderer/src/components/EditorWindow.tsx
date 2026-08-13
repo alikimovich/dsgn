@@ -4,7 +4,7 @@ import { useCodeDrawer } from '../store'
 
 /**
  * The code drawer popped out into its own native window (main/index.ts opens the
- * renderer bundle with ?dsgnEditor=1&root=…&source=…). It renders CodeDrawer in
+ * renderer bundle with ?praxisEditor=1&root=…&source=…). It renders CodeDrawer in
  * its full-window variant, driven by the drawer store so Cmd+click navigation and
  * back/forward work inside this window exactly as they do docked. A second pop-out
  * for the same project reuses this window via the `editor:navigate` event.

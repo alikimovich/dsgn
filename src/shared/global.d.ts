@@ -1,8 +1,8 @@
-import type { DsgnApi } from './api'
+import type { PraxisApi } from './api'
 
 declare global {
   interface Window {
-    api: DsgnApi
+    api: PraxisApi
   }
 }
 

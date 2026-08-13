@@ -27,7 +27,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   const list = (d) => win.evaluate((p) => window.api.sessions.list(p), d)
@@ -44,7 +44,7 @@ try {
   // Open, tag a branch, send a prompt (the turn 401s without creds; the user
   // message is recorded synchronously before any SDK interaction), then close.
   await win.evaluate((p) => window.api.agent.openProject(p), A)
-  await win.evaluate((p) => window.api.agent.tagSession(p, { branch: 'dsgn/history-test' }), A)
+  await win.evaluate((p) => window.api.agent.tagSession(p, { branch: 'praxis/history-test' }), A)
   await win.evaluate((p) => window.api.agent.send('make the header blue'), A)
   await new Promise((r) => setTimeout(r, 300))
   await win.evaluate((p) => window.api.agent.closeProject(p), A)
@@ -55,7 +55,7 @@ try {
   const fresh = after.filter((r) => !before.has(r.id))
   assert(fresh.length === 1, `expected exactly one new record, got ${fresh.length}`)
   const rec = fresh[0]
-  assert(rec.branch === 'dsgn/history-test', `branch tag persisted (got ${rec.branch})`)
+  assert(rec.branch === 'praxis/history-test', `branch tag persisted (got ${rec.branch})`)
   assert(typeof rec.endedAt === 'number', 'endedAt set on teardown')
   assert(rec.projectKey && rec.projectRoot === A, 'project identity recorded')
   assert(

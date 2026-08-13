@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react'
-import type { PropInspection, SelectedElement } from '../../../shared/api'
+import type {
+  PropInspection,
+  ResolvedControlPanel,
+  SelectedElement,
+  TokenSet
+} from '../../../shared/api'
 import { usePreviewFreeze } from '../store'
 
 /** Shadow padding inside the island view (kept in sync with PanelApp). */
@@ -19,12 +24,23 @@ export default function PanelHost({
   root,
   element,
   inspection,
-  inspecting
+  inspecting,
+  controls,
+  canInstrument,
+  tokens
 }: {
   root: string
   element: SelectedElement
   inspection: PropInspection | null
   inspecting: boolean
+  /** AI-surfaced control panels for the selection (Custom Controls, v10) —
+   *  fetched by App via controls:get; null while unfetched. */
+  controls: ResolvedControlPanel[] | null
+  /** Can praxis instrument this project? Tailors the Styles tab read-only guidance. */
+  canInstrument: boolean | null
+  /** The project's design tokens, for the Styles tab's token chips + picker.
+   *  Referentially stable between detections, so it can't cause a push storm. */
+  tokens: TokenSet | null
 }): null {
   const [size, setSize] = useState({ width: 268 + PAD.left + PAD.right, height: 160 })
   const [maxHeight, setMaxHeight] = useState(480)
@@ -39,8 +55,17 @@ export default function PanelHost({
   )
 
   useEffect(() => {
-    window.api.panel.setState({ root, element, inspection, inspecting, maxHeight })
-  }, [root, element, inspection, inspecting, maxHeight])
+    window.api.panel.setState({
+      root,
+      element,
+      inspection,
+      inspecting,
+      maxHeight,
+      controls,
+      canInstrument,
+      tokens
+    })
+  }, [root, element, inspection, inspecting, maxHeight, controls, canInstrument, tokens])
 
   // Place at the top right of the preview card body, tracked live.
   useEffect(() => {

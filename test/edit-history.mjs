@@ -1,6 +1,6 @@
 /**
  * edit-history unit test (pure — no Electron). The v8 F3b undo/redo engine that
- * wraps ALL direct dsgn source edits (props, text, token swaps): record + coalesce,
+ * wraps ALL direct praxis source edits (props, text, token swaps): record + coalesce,
  * undo writes `before` / redo writes `after`, the on-disk conflict guard (refuse to
  * clobber a file the user changed under us), per-project-root scoping (the rail
  * keeps several projects open), and the fresh-edit-invalidates-redo rule.
@@ -13,13 +13,15 @@ import {
   redo,
   canUndo,
   canRedo,
-  clearHistory
+  clearHistory,
+  canRevertGroup,
+  revertGroup
 } from '../src/main/edit-history.ts'
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const base = mkdtempSync(join(tmpdir(), 'dsgn-edits-'))
+const base = mkdtempSync(join(tmpdir(), 'praxis-edits-'))
 let failed = 0
 const ok = (cond, msg) => {
   if (!cond) {
@@ -149,7 +151,57 @@ try {
   ok(!r.ok && r.conflict, `group undo refuses when any file drifted: ${JSON.stringify(r)}`)
   ok(read(gA) === 'A2', 'all-or-nothing: the un-drifted file was NOT reverted')
 
-  if (failed === 0) console.log('EDIT-HISTORY OK — record/coalesce/undo/redo/conflict/group/root-scope')
+  // --- addressable per-turn revert (chat "Revert changes"): a group anywhere in the
+  //     stack restores its `before`, all-or-nothing, and leaves the undo stack after ---
+  clearHistory(ROOT)
+  const t1a = file('turn1-a.tsx')
+  const t1b = file('turn1-b.tsx')
+  const t2 = file('turn2.tsx')
+  // Turn 1 edits two files (one group), turn 2 edits a THIRD, later file.
+  write(t1a, 'T1A-new')
+  write(t1b, 'T1B-new')
+  recordEdit(ROOT, t1a, 'T1A-old', 'T1A-new', undefined, 'chat:wt:1')
+  recordEdit(ROOT, t1b, 'T1B-old', 'T1B-new', undefined, 'chat:wt:1')
+  write(t2, 'T2-new')
+  recordEdit(ROOT, t2, 'T2-old', 'T2-new', undefined, 'chat:wt:2')
+
+  ok(await canRevertGroup(ROOT, 'chat:wt:1'), 'turn 1 revertable while its files are untouched')
+  ok(!(await canRevertGroup(ROOT, 'chat:wt:nope')), 'unknown group is not revertable')
+
+  // Revert the OLDER turn 1 even though turn 2 is on top of the stack (addressable).
+  r = await revertGroup(ROOT, 'chat:wt:1')
+  ok(r.ok, `revert turn 1 ok: ${JSON.stringify(r)}`)
+  ok(read(t1a) === 'T1A-old' && read(t1b) === 'T1B-old', 'revert restored BOTH of turn 1 files')
+  ok(read(t2) === 'T2-new', 'reverting turn 1 left the later turn 2 untouched')
+  ok(!(await canRevertGroup(ROOT, 'chat:wt:1')), 'turn 1 no longer revertable (left the stack)')
+  ok(canUndo(ROOT), 'turn 2 still on the undo stack after reverting turn 1')
+
+  // --- revert is refused (conflict) when a file drifted since the turn, and does not clobber ---
+  clearHistory(ROOT)
+  const dr = file('drift.tsx')
+  write(dr, 'D-new')
+  recordEdit(ROOT, dr, 'D-old', 'D-new', undefined, 'chat:wt:9')
+  write(dr, 'USER-EDIT') // a later hand edit — the turn's files drifted
+  ok(!(await canRevertGroup(ROOT, 'chat:wt:9')), 'drifted group reports not-revertable')
+  r = await revertGroup(ROOT, 'chat:wt:9')
+  ok(!r.ok && r.conflict && r.file === dr, `revert refuses on drift: ${JSON.stringify(r)}`)
+  ok(read(dr) === 'USER-EDIT', 'conflicted revert did NOT clobber the drifted file')
+
+  // --- group revert is all-or-nothing: one drifted file blocks the whole turn ---
+  clearHistory(ROOT)
+  const ga = file('rg-a.tsx')
+  const gb = file('rg-b.tsx')
+  write(ga, 'GA-new')
+  write(gb, 'GB-new')
+  recordEdit(ROOT, ga, 'GA-old', 'GA-new', undefined, 'chat:wt:5')
+  recordEdit(ROOT, gb, 'GB-new', 'GB-new2', undefined, 'chat:wt:5') // second write in the group
+  write(gb, 'GB-new2')
+  write(ga, 'GA-DRIFTED') // only one file in the group drifted
+  r = await revertGroup(ROOT, 'chat:wt:5')
+  ok(!r.ok && r.conflict, `group revert refuses when any file drifted: ${JSON.stringify(r)}`)
+  ok(read(gb) === 'GB-new2', 'all-or-nothing: the un-drifted file was NOT reverted')
+
+  if (failed === 0) console.log('EDIT-HISTORY OK — record/coalesce/undo/redo/conflict/group/root-scope/revert')
   else console.error(`EDIT-HISTORY: ${failed} assertion(s) failed`)
   process.exitCode = failed === 0 ? 0 : 1
 } catch (err) {

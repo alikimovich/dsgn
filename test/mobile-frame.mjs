@@ -22,7 +22,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 
 // A copy of the static fixture with a Tailwind-preflight-style img reset — the
 // hostile page CSS this test exists for.
-const fixture = mkdtempSync(join(tmpdir(), 'dsgn-reset-app-'))
+const fixture = mkdtempSync(join(tmpdir(), 'praxis-reset-app-'))
 cpSync(join(root, 'test', 'fixtures', 'static-app'), fixture, { recursive: true })
 const serverPath = join(fixture, 'server.mjs')
 writeFileSync(
@@ -77,13 +77,13 @@ try {
       .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
     if (!wc) return null
     return wc.executeJavaScript(`(() => {
-      const img = document.querySelector('[data-dsgn-frame] img')
+      const img = document.querySelector('[data-praxis-frame] img')
       if (!img) return null
       const r = img.getBoundingClientRect()
       return { x: r.x, y: r.y, w: r.width, h: r.height, vw: innerWidth, vh: innerHeight }
     })()`)
   })
-  if (!frame) throw new Error('no [data-dsgn-frame] img injected into the mobile preview')
+  if (!frame) throw new Error('no [data-praxis-frame] img injected into the mobile preview')
   if (frame.w <= frame.vw || frame.h <= frame.vh) {
     throw new Error(
       `page CSS clamped the bezel: frame ${frame.w}x${frame.h} must exceed viewport ${frame.vw}x${frame.vh}`

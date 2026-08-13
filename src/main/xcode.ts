@@ -31,7 +31,7 @@ export function xcodeFailureReason(err: unknown): string {
  * Pull the *meaningful* failure out of an xcodebuild / Metro log. xcodebuild
  * prints a large "Explicit dependency on target …" graph both before and after
  * the real error, so naively tailing the log surfaces that graph instead of the
- * cause (which is exactly what dsgn showed for the broken-node build). Prefer
+ * cause (which is exactly what praxis showed for the broken-node build). Prefer
  * high-signal lines — script-phase aborts, dyld load failures, compiler/linker
  * errors — and carry a couple of trailing lines for context. Falls back to the
  * raw tail when nothing high-signal is present. Pure / unit-testable.

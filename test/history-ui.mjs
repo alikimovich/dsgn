@@ -31,7 +31,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
   const assert = (cond, msg) => {
     if (!cond) throw new Error(msg)
@@ -40,12 +40,12 @@ try {
   // Seed an open project (so the rail renders it as active) + a past session in
   // useHistory keyed by that project's projectKey.
   const key = await win.evaluate(() => {
-    const ws = window.__dsgnWorkspace.getState()
+    const ws = window.__praxisWorkspace.getState()
     ws.reset()
     const k = ws.openOrActivate('/fake/proj', { name: 'proj' })
-    window.__dsgnStore.getState().setActiveChat(k)
+    window.__praxisStore.getState().setActiveChat(k)
     const now = Date.now()
-    window.__dsgnHistory.setState({
+    window.__praxisHistory.setState({
       byKey: {
         [k]: [
           {
@@ -55,7 +55,7 @@ try {
             projectName: 'proj',
             startedAt: now - 3_600_000,
             endedAt: now - 3_500_000,
-            branch: 'dsgn/history-x',
+            branch: 'praxis/history-x',
             prUrl: 'https://github.com/x/y/pull/1',
             filesTouched: ['src/App.tsx'],
             transcript: [
@@ -70,6 +70,10 @@ try {
     return k
   })
   assert(key, 'workspace should produce a project key')
+
+  // The History section starts folded — unfold it to get at the past chat rows.
+  await win.waitForSelector('.rail__section-toggle', { timeout: 5000 })
+  await win.evaluate(() => document.querySelector('.rail__section-toggle').click())
 
   // The rail shows the past chat row: an auto-generated name (from the first
   // user prompt) + a compact trailing "time ago", no status dot.
@@ -88,7 +92,7 @@ try {
   await win.click(pastChat)
   await win.waitForSelector('.review', { timeout: 5000 })
   const meta = (await win.textContent('.review__meta')) ?? ''
-  assert(meta.includes('dsgn/history-x'), `review should show the branch chip (got "${meta}")`)
+  assert(meta.includes('praxis/history-x'), `review should show the branch chip (got "${meta}")`)
   assert(meta.toLowerCase().includes('pr'), 'review should show the PR link chip')
   assert(meta.includes('1 file'), `review should show files-touched count (got "${meta}")`)
   const tx = (await win.textContent('.review__transcript')) ?? ''
@@ -103,12 +107,12 @@ try {
   // The modal is renderer DOM and the native preview always paints over DOM, so
   // while the modal is open the native view must be hidden (the freeze-frame
   // <img> stands in for it). Read visibility from the main process — the panel
-  // view is the one whose URL carries dsgnPanel; the preview is the other child.
+  // view is the one whose URL carries praxisPanel; the preview is the other child.
   const previewVisible = () =>
     app.evaluate(({ BrowserWindow }) => {
       const win = BrowserWindow.getAllWindows()[0]
       const pv = win.contentView.children.find(
-        (v) => v.webContents && !(v.webContents.getURL() ?? '').includes('dsgnPanel')
+        (v) => v.webContents && !(v.webContents.getURL() ?? '').includes('praxisPanel')
       )
       return pv ? pv.getVisible() : null
     })
@@ -137,7 +141,11 @@ try {
 
   // Delete the row → it leaves the rail (drives useHistory.remove; the main-side
   // sessions:remove is a harmless no-op on a fake id).
-  await win.click('.rail__chat-item:has(.rail__chat-time) .rail__chat-x')
+  // JS-click: the row's actions are a hover-revealed overlay (pointer-events off
+  // until the row is hovered), so drive the handler directly.
+  await win.evaluate(() =>
+    document.querySelector('.rail__chat-item:has(.rail__chat-time) .rail__chat-x').click()
+  )
   await win.waitForFunction(
     () => !document.querySelector('.rail__chat-time'),
     { timeout: 5000 }

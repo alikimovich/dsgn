@@ -1,10 +1,10 @@
 /**
  * Preview preload — injected into the previewed app's native WebContentsView.
  *
- * This is what makes dsgn's differentiator possible: a click-to-select overlay
+ * This is what makes praxis's differentiator possible: a click-to-select overlay
  * laid over the *real running repo*. When "select mode" is on it highlights the
  * hovered element and, on click, captures that element's identity (tag, a
- * best-effort CSS selector, its `data-dsgn-source` stamp if the repo opts in,
+ * best-effort CSS selector, its `data-praxis-source` stamp if the repo opts in,
  * and a few key computed styles) and ships it to the main process, which relays
  * it to the chat renderer.
  *
@@ -16,48 +16,85 @@
 import { ipcRenderer } from 'electron'
 import type { SelectedElement } from '../shared/api'
 import { FRAME_DATA_URI, FRAME_INSET } from '../shared/iphone-frame'
+import { buildLayersSnapshot, type LayerFingerprint, resolveLayerElement } from './layers'
+import { specifiedValues, varRefName } from './style-provenance'
 
 // Channels (preview ⇄ main). Kept local — main mirrors these strings.
-const SET_MODE = 'dsgn:preview:set-select-mode'
-const PICKED = 'dsgn:preview:element-picked'
-const CANCELLED = 'dsgn:preview:select-cancelled'
-const SET_PINS = 'dsgn:preview:set-annotations'
-const PIN_CLICK = 'dsgn:preview:pin-click'
-const READINESS = 'dsgn:preview:readiness'
-const TEXT_EDIT = 'dsgn:preview:text-edit'
+const SET_MODE = 'praxis:preview:set-select-mode'
+const PICKED = 'praxis:preview:element-picked'
+const CANCELLED = 'praxis:preview:select-cancelled'
+const SET_PINS = 'praxis:preview:set-annotations'
+const PIN_CLICK = 'praxis:preview:pin-click'
+const READINESS = 'praxis:preview:readiness'
+const TEXT_EDIT = 'praxis:preview:text-edit'
 // Figma-style inline commenting: comment-to-agent (C) and annotation (Y).
-const SET_COMMENT_MODE = 'dsgn:preview:set-comment-mode' // renderer → preload
-const COMMENT_MODE = 'dsgn:preview:comment-mode' // preload → renderer (keyboard-initiated)
-const COMMENT = 'dsgn:preview:comment' // preload → renderer (submitted)
-const SET_FRAME = 'dsgn:preview:set-frame' // renderer → preload (mobile bezel overlay)
-const TOOLBAR_ACTION = 'dsgn:preview:toolbar-action' // preload → renderer (code/delete)
-const CLEAR_SELECTED = 'dsgn:preview:clear-selected' // renderer → preload (pill ×, send)
-const SET_STATUS = 'dsgn:preview:set-status' // main → preload (launch progress pill)
-const TOGGLE_SELECT = 'dsgn:preview:toggle-select' // preload → renderer (S pressed in preview)
+const SET_COMMENT_MODE = 'praxis:preview:set-comment-mode' // renderer → preload
+const COMMENT_MODE = 'praxis:preview:comment-mode' // preload → renderer (keyboard-initiated)
+const COMMENT = 'praxis:preview:comment' // preload → renderer (submitted)
+const SET_FRAME = 'praxis:preview:set-frame' // renderer → preload (mobile bezel overlay)
+const TOOLBAR_ACTION = 'praxis:preview:toolbar-action' // preload → renderer (code/delete)
+const CLEAR_SELECTED = 'praxis:preview:clear-selected' // renderer → preload (pill ×, send)
+const SET_STATUS = 'praxis:preview:set-status' // main → preload (launch progress pill)
+const TOGGLE_SELECT = 'praxis:preview:toggle-select' // preload → renderer (S pressed in preview)
+// Styles panel (island → main → this preload): live inline injection while
+// scrubbing, exact revert, fresh computed reads, transition replay.
+const STYLES_PREVIEW = 'styles:preview' // renderer → preload {prop, value}
+const STYLES_CLEAR_PREVIEW = 'styles:clear-preview' // renderer → preload {prop?}
+const STYLES_READ = 'styles:read' // renderer → preload {id, props}
+const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null, declaredVars|null, specified|null}
+const STYLES_REPLAY = 'styles:replay' // renderer → preload {prop, from, to}
+// Layers panel: bulk DOM-tree read (request-id round trip, like styles:read),
+// panel-driven select/hover by child-index path, and a watch toggle that arms
+// a MutationObserver only while the panel is open.
+const LAYERS_READ = 'layers:read' // renderer → preload {id}
+const LAYERS_READ_REPLY = 'layers:read-reply' // preload → renderer {id, snapshot}
+const LAYERS_CHANGED = 'layers:changed' // preload → renderer (debounced DOM-mutation ping)
+const LAYERS_SELECT = 'layers:select' // renderer → preload {path, fingerprint}
+const LAYERS_HOVER = 'layers:hover' // renderer → preload {path, fingerprint} | null
+const LAYERS_SET_WATCH = 'layers:set-watch' // renderer → preload boolean
 
 type CommentMode = 'comment' | 'annotate' | null
 
-// The simulator preview loads dsgn's own sim-bridge page (an MJPEG <img> of the
-// booted device), flagged with `?dsgnSim=1`. There's no previewed-app DOM there
+// The simulator preview loads praxis's own sim-bridge page (an MJPEG <img> of the
+// booted device), flagged with `?praxisSim=1`. There's no previewed-app DOM there
 // to highlight/stamp/inspect, so the entire web overlay below is skipped. The
 // query param (not a page global) is the signal because the preload runs in an
 // isolated world and can't see the page's `window`, but `location` is shared.
 // Phase 2/3 add the simulator-specific overlay separately.
 const IS_SIM_BRIDGE =
-  typeof location !== 'undefined' && /[?&]dsgnSim=1\b/.test(location.search)
+  typeof location !== 'undefined' && /[?&]praxisSim=1\b/.test(location.search)
 
-/** Computed styles worth surfacing in the inspector (curated, not the whole CSSOM). */
+/** Computed styles worth surfacing in the inspector + Styles panel: the v1
+ *  longhand set (curated, not the whole CSSOM). Longhands, not shorthands, so
+ *  each maps 1:1 to a panel control and to a `styles:preview` override. */
 const TRACKED_STYLES = [
+  // Layout
+  'padding-top',
+  'padding-right',
+  'padding-bottom',
+  'padding-left',
+  'margin-top',
+  'margin-right',
+  'margin-bottom',
+  'margin-left',
+  'gap',
+  // Appearance
   'color',
   'background-color',
+  'border-radius',
+  'opacity',
+  // Typography
   'font-size',
-  'font-family',
   'font-weight',
   'line-height',
-  'padding',
-  'margin',
-  'border-radius',
-  'display'
+  'letter-spacing',
+  'font-family',
+  'display',
+  // Transition
+  'transition-property',
+  'transition-duration',
+  'transition-delay',
+  'transition-timing-function'
 ] as const
 
 let active = false
@@ -105,7 +142,7 @@ function setStatusPill(text: string | null): void {
   }
   if (!statusEl) {
     const el = document.createElement('div')
-    el.setAttribute('data-dsgn-status', '')
+    el.setAttribute('data-praxis-status', '')
     el.style.cssText =
       'position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:2147483646;' +
       'max-width:82%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;' +
@@ -121,7 +158,8 @@ function setStatusPill(text: string | null): void {
 // Persistent selection highlight — outlines that STAY while the mouse hovers
 // other elements (the hover box is separate). When the picked element resolves
 // to a source stamp, every element with the same stamp is outlined too (a
-// component rendered in a loop), with an "h3 × 4" count badge on the pick.
+// component rendered in a loop), with an "h3 × 4" count badge on the pick. The
+// badge also carries the pick's rendered size (see makeChip).
 let selLayer: HTMLDivElement | null = null
 let selEls: Element[] = []
 
@@ -129,7 +167,7 @@ let selEls: Element[] = []
 function ensureOverlay(): void {
   if (overlayHost) return
   const host = document.createElement('div')
-  host.setAttribute('data-dsgn-overlay', '')
+  host.setAttribute('data-praxis-overlay', '')
   // Host itself never paints or intercepts; the shadow tree draws the box.
   host.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;'
   const shadow = host.attachShadow({ mode: 'open' })
@@ -140,11 +178,7 @@ function ensureOverlay(): void {
     'border:2px solid #2563eb;border-radius:3px;background:rgba(37,99,235,0.08);' +
     'transition:all 60ms ease-out;display:none;'
 
-  const label = document.createElement('div')
-  label.style.cssText =
-    'position:fixed;pointer-events:none;font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;' +
-    'color:#fff;background:#2563eb;padding:2px 6px;border-radius:4px;white-space:nowrap;' +
-    'transform:translateY(-100%);display:none;'
+  const label = makeChip()
 
   const pins = document.createElement('div')
   pins.style.cssText = 'position:fixed;inset:0;pointer-events:none;'
@@ -166,7 +200,7 @@ function ensureOverlay(): void {
   // an inline comment/annotate input (State B); enterInputState/collapseInput
   // morph between them in place.
   const toolbar = document.createElement('div')
-  toolbar.setAttribute('data-dsgn-toolbar', '')
+  toolbar.setAttribute('data-praxis-toolbar', '')
   toolbar.style.cssText =
     'position:fixed;pointer-events:auto;display:none;box-sizing:border-box;align-items:center;gap:2px;' +
     'padding:4px;background:#1f1f1f;border:1px solid rgba(255,255,255,0.08);border-radius:10px;' +
@@ -176,9 +210,9 @@ function ensureOverlay(): void {
   // textarea's scrollbar) from a <style> scoped inside the shadow root.
   const style = document.createElement('style')
   style.textContent =
-    '[data-dsgn-toolbar] textarea::placeholder{color:#8a8a8a}' +
-    '[data-dsgn-toolbar] textarea{scrollbar-width:none}' +
-    '[data-dsgn-toolbar] textarea::-webkit-scrollbar{display:none}' +
+    '[data-praxis-toolbar] textarea::placeholder{color:#8a8a8a}' +
+    '[data-praxis-toolbar] textarea{scrollbar-width:none}' +
+    '[data-praxis-toolbar] textarea::-webkit-scrollbar{display:none}' +
     // Squircle the injected overlay UI's rounded corners (toolbar pill, icon
     // buttons, badges) to match the app — matches styles.css's global rule.
     ':host *{corner-shape:squircle}'
@@ -212,7 +246,7 @@ function ensureOverlay(): void {
       svg: '<polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>'
     },
     delete: {
-      title: 'Ask dsgn to delete this element',
+      title: 'Ask Praxis to delete this element',
       svg: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'
     }
   }
@@ -327,7 +361,7 @@ const NON_TEXT_TAGS = new Set([
 
 /**
  * True when an element can be edited in place: a directly-stamped element whose
- * only content is plain text (no child elements) — so its `data-dsgn-source`
+ * only content is plain text (no child elements) — so its `data-praxis-source`
  * maps to exactly this element's text child. Matches the onDblClick guard so the
  * toolbar's Edit button and the double-click gesture agree on "when it's possible".
  */
@@ -335,7 +369,7 @@ function isTextEditable(el: Element): el is HTMLElement {
   return (
     el instanceof HTMLElement &&
     el.childElementCount === 0 &&
-    el.hasAttribute('data-dsgn-source') &&
+    el.hasAttribute('data-praxis-source') &&
     !NON_TEXT_TAGS.has(el.tagName.toLowerCase())
   )
 }
@@ -350,7 +384,7 @@ function setEditAction(): void {
 
 /**
  * Outline the picked element persistently. Stamped elements highlight every
- * sibling with the same data-dsgn-source (the same component/loop instance
+ * sibling with the same data-praxis-source (the same component/loop instance
  * set), Figma-style; the badge on the pick reads "h3 × 4" then.
  */
 function setSelectionHighlight(el: Element | null): void {
@@ -365,7 +399,7 @@ function setSelectionHighlight(el: Element | null): void {
     try {
       // The stamp may live on el itself or an ancestor; the stamped elements ARE
       // the component instances — outline those (all of them).
-      const same = Array.from(document.querySelectorAll(`[data-dsgn-source="${CSS.escape(src)}"]`))
+      const same = Array.from(document.querySelectorAll(`[data-praxis-source="${CSS.escape(src)}"]`))
       if (same.length) els = same
     } catch {
       /* malformed stamp for a selector — outline just the pick */
@@ -374,21 +408,19 @@ function setSelectionHighlight(el: Element | null): void {
   selEls = els
   for (let i = 0; i < els.length; i++) {
     const b = document.createElement('div')
-    b.setAttribute('data-dsgn-selbox', '')
+    b.setAttribute('data-praxis-selbox', '')
     // Thinner than the 2px hover box — selected-but-not-hovered reads calmer.
     b.style.cssText =
       'position:fixed;pointer-events:none;box-sizing:border-box;display:none;' +
       'border:1px solid #2563eb;border-radius:3px;'
     selLayer.appendChild(b)
   }
-  const badge = document.createElement('div')
-  badge.setAttribute('data-dsgn-selbadge', '')
-  badge.style.cssText =
-    'position:fixed;pointer-events:none;display:none;font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;' +
-    'color:#fff;background:#2563eb;padding:2px 6px;border-radius:4px;white-space:nowrap;' +
-    'transform:translateY(-100%);'
+  const badge = makeChip()
+  badge.setAttribute('data-praxis-selbadge', '')
   const tag = (els[0] ?? el).tagName.toLowerCase()
-  badge.textContent = els.length > 1 ? `${tag} × ${els.length}` : shortLabel(el)
+  chipName(badge, els.length > 1 ? `${tag} × ${els.length}` : shortLabel(el))
+  // Size comes from positionSelection — it holds the anchor's live rect, and
+  // re-runs on every scroll/resize/mutation, so the numbers track the layout.
   selLayer.appendChild(badge)
   positionSelection()
 }
@@ -420,6 +452,7 @@ function positionSelection(): void {
       badge.style.display = 'block'
       badge.style.left = `${a.left}px`
       badge.style.top = `${Math.max(a.top - 2, 12)}px`
+      chipSize(badge, a)
     } else {
       badge.style.display = 'none'
     }
@@ -465,7 +498,7 @@ const pinDots = new Map<string, { selector: string; dot: HTMLDivElement }>()
 function buildPins(): void {
   // Don't materialize the overlay host just to hold an empty pins layer. An idle
   // preview (no annotations, select/comment off) must leave the previewed app's
-  // DOM untouched — otherwise a stray, empty `data-dsgn-overlay` div is injected
+  // DOM untouched — otherwise a stray, empty `data-praxis-overlay` div is injected
   // into every page on load, which shows up when inspecting the app.
   if (!annotationPins.length) {
     pinDots.clear()
@@ -525,6 +558,40 @@ function isOverlay(el: Element | null): boolean {
   return !!el && !!overlayHost && (el === overlayHost || overlayHost.contains(el))
 }
 
+// The blue chip that names the element — both the hover label and the selection
+// badge are one. It holds two spans: the name (`div.card`, or `h3 × 4` for a
+// multi-instance pick) and a dimmed `w × h` size read off the element's box.
+const CHIP_CSS =
+  'position:fixed;pointer-events:none;font:600 11px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;' +
+  'color:#fff;background:#2563eb;padding:2px 6px;border-radius:4px;white-space:nowrap;' +
+  'transform:translateY(-100%);display:none;'
+
+function makeChip(): HTMLDivElement {
+  const chip = document.createElement('div')
+  chip.style.cssText = CHIP_CSS
+  const name = document.createElement('span')
+  const size = document.createElement('span')
+  size.setAttribute('data-praxis-size', '')
+  size.style.cssText = 'margin-left:6px;font-weight:500;opacity:0.72;'
+  chip.append(name, size)
+  return chip
+}
+
+function chipName(chip: HTMLElement, text: string): void {
+  setText(chip.firstElementChild, text)
+}
+
+/** Rounded to whole px — sub-pixel rects are layout noise at this size. */
+function chipSize(chip: HTMLElement, r: DOMRect): void {
+  setText(chip.lastElementChild, `${Math.round(r.width)} × ${Math.round(r.height)}`)
+}
+
+/** Both chips are rewritten on every hover move and scroll frame; skip the
+ *  no-op writes so the overlay doesn't churn the DOM while nothing changed. */
+function setText(el: Element | null, text: string): void {
+  if (el && el.textContent !== text) el.textContent = text
+}
+
 function shortLabel(el: Element): string {
   const id = el.id ? `#${el.id}` : ''
   const cls =
@@ -546,7 +613,8 @@ function drawOverlay(el: Element): void {
   overlayLabel.style.display = 'block'
   overlayLabel.style.left = `${r.left}px`
   overlayLabel.style.top = `${Math.max(r.top - 2, 12)}px`
-  overlayLabel.textContent = shortLabel(el)
+  chipName(overlayLabel, shortLabel(el))
+  chipSize(overlayLabel, r)
 }
 
 /** A short, reasonably-stable CSS selector path (id wins; else tag:nth-of-type). */
@@ -574,14 +642,14 @@ function cssPath(el: Element): string {
 
 /**
  * The source stamp the opened repo opts into (see DESIGN.md): a
- * `data-dsgn-source="path/to/File.tsx:line"` attribute. We walk up to the
+ * `data-praxis-source="path/to/File.tsx:line"` attribute. We walk up to the
  * nearest stamped ancestor so a click on a deep text node still resolves to the
  * component that owns it.
  */
 function findSource(el: Element): string | null {
   let node: Element | null = el
   while (node) {
-    const stamp = node.getAttribute('data-dsgn-source')
+    const stamp = node.getAttribute('data-praxis-source')
     if (stamp) return stamp
     node = node.parentElement
   }
@@ -589,15 +657,15 @@ function findSource(el: Element): string | null {
 }
 
 /**
- * The nearest COMPONENT-instance call site (v8 F3a): `data-dsgn-component-source`,
+ * The nearest COMPONENT-instance call site (v8 F3a): `data-praxis-component-source`,
  * which the stamp plugin forwards through `{...props}` so the authored
- * `<Component …/>` wins over the innermost host's `data-dsgn-source`. Walk up the
+ * `<Component …/>` wins over the innermost host's `data-praxis-source`. Walk up the
  * same way so a click on a deep child still resolves to its owning instance.
  */
 function findComponentSource(el: Element): string | null {
   let node: Element | null = el
   while (node) {
-    const stamp = node.getAttribute('data-dsgn-component-source')
+    const stamp = node.getAttribute('data-praxis-component-source')
     if (stamp) return stamp
     node = node.parentElement
   }
@@ -630,6 +698,297 @@ function describe(el: Element): SelectedElement {
     rect: { x: r.x, y: r.y, width: r.width, height: r.height },
     styles
   }
+}
+
+// ---- Layers panel: bulk tree read, panel-driven select/hover, DOM watch -----
+
+function isValidFingerprint(fp: unknown): fp is LayerFingerprint {
+  const f = fp as LayerFingerprint | null | undefined
+  return !!f && typeof f.tag === 'string' && (f.source === null || typeof f.source === 'string')
+}
+
+/**
+ * A Layers row click. Reuses the exact same functions the real in-page click
+ * handler uses (`describe`/`showToolbar`/`setSelectionHighlight`), so the
+ * resulting SelectedElement carries a real rect/styles/selector and the normal
+ * persistent outline draws — no separate selection path to keep in sync.
+ * Ignored while an inline edit/comment composer is open, same guard `onMove`
+ * uses for HMR self-healing, so a Layers pick can't step on it.
+ */
+function layersSelect(path: number[], fingerprint: LayerFingerprint): void {
+  if (editing || commenting) return
+  const el = resolveLayerElement(path, fingerprint)
+  if (!el) return
+  ipcRenderer.send(PICKED, describe(el))
+  resetInput()
+  showToolbar(el)
+  setSelectionHighlight(el)
+}
+
+/** A Layers row hover — the transient hover box, not the persistent selection. */
+function layersHover(path: number[] | null, fingerprint: LayerFingerprint | null): void {
+  if (!path || !fingerprint) {
+    hideOverlay()
+    return
+  }
+  const el = resolveLayerElement(path, fingerprint)
+  if (el) drawOverlay(el)
+  else hideOverlay()
+}
+
+let layersObserver: MutationObserver | null = null
+let layersDebounceTimer: ReturnType<typeof setTimeout> | null = null
+let layersFirstMutationAt = 0
+const LAYERS_DEBOUNCE_MS = 400
+// Hard ceiling so a page that never stops mutating can't starve the debounce
+// indefinitely — force-emit once this much time has passed since the first
+// unflushed mutation in the current burst.
+const LAYERS_MAX_WAIT_MS = 2000
+
+function emitLayersChanged(): void {
+  if (layersDebounceTimer) {
+    clearTimeout(layersDebounceTimer)
+    layersDebounceTimer = null
+  }
+  layersFirstMutationAt = 0
+  ipcRenderer.send(LAYERS_CHANGED)
+}
+
+function onLayersMutation(): void {
+  const now = Date.now()
+  if (!layersFirstMutationAt) layersFirstMutationAt = now
+  if (now - layersFirstMutationAt >= LAYERS_MAX_WAIT_MS) {
+    emitLayersChanged()
+    return
+  }
+  if (layersDebounceTimer) clearTimeout(layersDebounceTimer)
+  layersDebounceTimer = setTimeout(emitLayersChanged, LAYERS_DEBOUNCE_MS)
+}
+
+/**
+ * Arm/disarm a debounced structural watch, gated to "panel open" so it costs
+ * nothing otherwise. `childList`-only, no `attributes`/`characterData`: class
+ * or text churn doesn't invalidate a child-index PATH, only a row's cosmetic
+ * label (a manual refresh covers that) — watching them would multiply
+ * mutation-callback volume on a busy page for nothing structural.
+ */
+function setLayersWatch(on: boolean): void {
+  if (on) {
+    if (layersObserver || !document.body) return
+    layersObserver = new MutationObserver(onLayersMutation)
+    layersObserver.observe(document.body, { childList: true, subtree: true })
+  } else {
+    layersObserver?.disconnect()
+    layersObserver = null
+    if (layersDebounceTimer) {
+      clearTimeout(layersDebounceTimer)
+      layersDebounceTimer = null
+    }
+    layersFirstMutationAt = 0
+  }
+}
+
+// ---- Styles panel: live injection, exact revert, reads, transition replay ---
+
+// Original inline values, stashed on FIRST touch per property so clear-preview
+// restores the element exactly ('' = the property was absent → removeProperty).
+// The stash is bound to the element it was taken from (styleStashEl): restores
+// always target THAT element — never whatever happens to be selected when a
+// deferred clear-preview finally arrives — and previewing a different element
+// first reverts the old one and resets the stash, so a stale entry can neither
+// leak an override nor be replayed onto the wrong element.
+// Navigation wipes this whole isolated world, which is the correct lifetime: a
+// fresh page has no overrides left to revert.
+const styleOriginals = new Map<string, string>()
+let styleStashEl: HTMLElement | null = null
+
+/**
+ * The element style ops target: the current selection, re-resolved through its
+ * `data-praxis-source` stamp when HMR swapped the node out from under us.
+ */
+function resolveStyleTarget(): HTMLElement | null {
+  let el: Element | null = selectedEl
+  if (el && !el.isConnected) {
+    const src = findSource(el) // attributes survive on detached nodes
+    el = null
+    if (src) {
+      try {
+        el = document.querySelector(`[data-praxis-source="${CSS.escape(src)}"]`)
+      } catch {
+        el = null
+      }
+    }
+    if (el) selectedEl = el // heal the selection for subsequent ops
+  }
+  return el instanceof HTMLElement && el.isConnected ? el : null
+}
+
+/** Point the stash at `el`, reverting any overrides left on a previous target. */
+function retargetStash(el: HTMLElement): void {
+  if (styleStashEl === el) return
+  if (styleStashEl?.isConnected) {
+    for (const [prop, orig] of styleOriginals) {
+      if (orig) styleStashEl.style.setProperty(prop, orig)
+      else styleStashEl.style.removeProperty(prop)
+    }
+  }
+  styleOriginals.clear()
+  styleStashEl = el
+}
+
+function stashOriginal(el: HTMLElement, prop: string): void {
+  retargetStash(el)
+  if (!styleOriginals.has(prop)) styleOriginals.set(prop, el.style.getPropertyValue(prop))
+}
+
+/** Restore one stashed inline value exactly (removeProperty when it was absent)
+ *  onto the element the stash was taken from. A disconnected stash element means
+ *  HMR replaced the node — the override died with it, so only the entry drops. */
+function restoreOriginal(prop: string): void {
+  if (!styleOriginals.has(prop)) return
+  const orig = styleOriginals.get(prop) ?? ''
+  styleOriginals.delete(prop)
+  const el = styleStashEl
+  if (!styleOriginals.size) styleStashEl = null
+  if (!el?.isConnected) return
+  if (orig) el.style.setProperty(prop, orig)
+  else el.style.removeProperty(prop)
+}
+
+/** Live scrub override: stash the original inline value, then inject. */
+function previewStyle(prop: string, value: string): void {
+  const el = resolveStyleTarget()
+  if (!el) return
+  stashOriginal(el, prop)
+  el.style.setProperty(prop, value)
+}
+
+function clearStylePreview(prop?: string): void {
+  if (prop) restoreOriginal(prop)
+  else for (const p of Array.from(styleOriginals.keys())) restoreOriginal(p)
+}
+
+/**
+ * Fresh computed values for the panel (pick-time snapshots go stale).
+ *
+ * `props` may include CUSTOM properties (`--color-text`): the Styles panel asks
+ * for the project's design tokens by name so it can resolve each one AGAINST
+ * THIS ELEMENT. That's what makes token naming correct under a
+ * `@media (prefers-color-scheme: dark)` override or a `var()` alias chain,
+ * where the value recorded in the token file is not.
+ *
+ * `declaredVars` is the proof half: for each EDITABLE longhand (never the
+ * `--var` names above — those are read for their own value, not to prove some
+ * other property references them), the exact `--name` its SPECIFIED
+ * declaration references, via `style-provenance.ts`, or null when it's a
+ * literal. `computed`'s value-equality was always a guess (`var()` never
+ * survives `getComputedStyle`); this is what lets the panel tell "IS this
+ * token" from "happens to equal it" instead.
+ */
+function readStyles(id: unknown, props: string[]): void {
+  const el = resolveStyleTarget()
+  if (!el) {
+    ipcRenderer.send(STYLES_READ_REPLY, { id, values: null, declaredVars: null, specified: null })
+    return
+  }
+  const cs = getComputedStyle(el)
+  const values: Record<string, string> = {}
+  // Same cap discipline as describe(): the page is only semi-trusted, so bound
+  // every string that crosses the IPC boundary. Generous enough for the ~20
+  // editable longhands plus a real project's token set.
+  const bounded: string[] = []
+  for (const prop of props.slice(0, 240)) {
+    if (typeof prop !== 'string') continue
+    const p = prop.slice(0, 64)
+    bounded.push(p)
+    values[p] = cs.getPropertyValue(p).trim().slice(0, 256)
+  }
+  // One stylesheet walk yields BOTH proof halves: `declaredVars` (the var name
+  // a design token must match to be NAMED) and `specified` (the AUTHORED css
+  // text — `1.5rem`, not the `24px` computed style collapses it to;
+  // getComputedStyle always serializes lengths as used px, so the authored
+  // unit only survives here). Same boundary caps as `values`: all of it is
+  // page-controlled CSS. An absurd var name just fails the proof match —
+  // fails safe to the raw value.
+  const spec = specifiedValues(
+    el,
+    bounded.filter((b) => !b.startsWith('--'))
+  )
+  const declaredVars: Record<string, string | null> = {}
+  const specified: Record<string, string> = {}
+  for (const [p, text] of Object.entries(spec)) {
+    const name = varRefName(text)
+    declaredVars[p] = name ? name.slice(0, 128) : null
+    specified[p] = text.trim().slice(0, 256)
+  }
+  ipcRenderer.send(STYLES_READ_REPLY, { id, values, declaredVars, specified })
+}
+
+// One pending replay at a time (there's only one selection); starting another
+// finalizes the previous immediately so its timer can't restore stale values.
+let replayDone: (() => void) | null = null
+
+/** Worst-case transition time for the element, bounding the replay cleanup. */
+function replayTimeoutMs(cs: CSSStyleDeclaration): number {
+  const maxMs = (list: string): number => {
+    let max = 0
+    for (const part of list.split(',')) {
+      const n = parseFloat(part)
+      if (Number.isFinite(n)) max = Math.max(max, /ms\s*$/.test(part.trim()) ? n : n * 1000)
+    }
+    return max
+  }
+  return Math.min(maxMs(cs.transitionDuration) + maxMs(cs.transitionDelay) + 150, 5000)
+}
+
+/**
+ * Replay a transition: jump to `from` with transitions disabled, force reflow so
+ * that becomes the committed start state, re-enable, then set `to` — the browser
+ * sees a discrete change and runs the transition again. After transitionend (or
+ * a computed-duration timeout) the temporary inline values are reverted.
+ *
+ * Replay keeps its OWN snapshot of the inline values it touches — never the
+ * preview stash: a live scrub override (say `transition-duration: 500ms`
+ * mid-tune) must survive the replay, drive its timing, and still be revertable
+ * by a later clear-preview; completion restores the values that were current
+ * when the replay STARTED, not the pre-scrub originals. Transitions are
+ * disabled via the `transition-property` LONGHAND only: the shorthand
+ * serializes to '' when just some longhands are inline, and setting/removing
+ * it would clobber every transition-* override on the element.
+ */
+function replayStyle(prop: string, from: string, to: string): void {
+  const el = resolveStyleTarget()
+  if (!el) return
+  replayDone?.()
+  const snap = new Map<string, string>()
+  const save = (p: string): void => {
+    if (!snap.has(p)) snap.set(p, el.style.getPropertyValue(p))
+  }
+  const restore = (p: string): void => {
+    const v = snap.get(p) ?? ''
+    if (v) el.style.setProperty(p, v)
+    else el.style.removeProperty(p)
+  }
+  save('transition-property')
+  save(prop)
+  el.style.setProperty('transition-property', 'none')
+  el.style.setProperty(prop, from)
+  void el.offsetWidth // force reflow — commit `from` before transitions return
+  restore('transition-property')
+  el.style.setProperty(prop, to)
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const done = (): void => {
+    if (timer) clearTimeout(timer)
+    el.removeEventListener('transitionend', onEnd)
+    replayDone = null
+    if (el.isConnected) restore(prop)
+  }
+  const onEnd = (e: TransitionEvent): void => {
+    if (e.target === el && e.propertyName === prop) done()
+  }
+  el.addEventListener('transitionend', onEnd)
+  timer = setTimeout(done, replayTimeoutMs(getComputedStyle(el)))
+  replayDone = done
 }
 
 function onMove(e: MouseEvent): void {
@@ -738,7 +1097,7 @@ function commitEdit(): void {
   const el = endEdit()
   if (!el) return
   const text = el.textContent ?? ''
-  const source = el.getAttribute('data-dsgn-source')
+  const source = el.getAttribute('data-praxis-source')
   if (source && text.trim() !== editOriginal.trim()) {
     ipcRenderer.send(TEXT_EDIT, { source: source.slice(0, 256), text: text.slice(0, 2000) })
   }
@@ -827,7 +1186,7 @@ function resetInput(): void {
   commenting = null
   inputKind = null
   inputFromMode = false
-  if (toolbarEl) toolbarEl.removeAttribute('data-dsgn-composer')
+  if (toolbarEl) toolbarEl.removeAttribute('data-praxis-composer')
   if (inputEl) inputEl.value = ''
   if (inputWrapEl) {
     inputWrapEl.style.opacity = '0'
@@ -850,7 +1209,7 @@ function enterInputState(kind: CommentMode, el: Element, fromMode: boolean): voi
   inputEl.value = ''
   inputEl.placeholder = kind === 'annotate' ? 'Add a note…' : 'Ask for changes…'
   submitEl.style.background = kind === 'annotate' ? '#f59e0b' : '#2563eb'
-  toolbarEl.setAttribute('data-dsgn-composer', '')
+  toolbarEl.setAttribute('data-praxis-composer', '')
   setTrailingActions(false)
   paintToggles()
   animatePill(() => {
@@ -1051,7 +1410,7 @@ function setFrame(on: boolean): void {
   // desktop-style bar drew right over the frame's edge otherwise).
   if (on && !frameStyle) {
     frameStyle = document.createElement('style')
-    frameStyle.setAttribute('data-dsgn-frame-style', '')
+    frameStyle.setAttribute('data-praxis-frame-style', '')
     frameStyle.textContent =
       '::-webkit-scrollbar{display:none !important;width:0 !important;height:0 !important}' +
       'html,body{scrollbar-width:none !important}'
@@ -1070,7 +1429,7 @@ function setFrame(on: boolean): void {
     return
   }
   const host = document.createElement('div')
-  host.setAttribute('data-dsgn-frame', '')
+  host.setAttribute('data-praxis-frame', '')
   host.style.cssText =
     'position:fixed !important;inset:0 !important;overflow:hidden !important;' +
     'pointer-events:none !important;z-index:2147483646 !important'
@@ -1136,13 +1495,13 @@ window.addEventListener('pagehide', () => {
   if (editing) endEdit()
 })
 
-// Report whether the previewed app is "dsgn-ready" — i.e. its elements carry
-// data-dsgn-source stamps — so the app can offer to set up an unprepared project.
+// Report whether the previewed app is "praxis-ready" — i.e. its elements carry
+// data-praxis-source stamps — so the app can offer to set up an unprepared project.
 // Re-sampled a few times so a slow-rendering SPA (stamps appear after `load`)
 // isn't falsely flagged; the renderer retracts the offer on any stamps>0 report.
 function reportReadiness(): number {
   if (!location.protocol.startsWith('http')) return -1 // skip the placeholder
-  const stamps = document.querySelectorAll('[data-dsgn-source]').length
+  const stamps = document.querySelectorAll('[data-praxis-source]').length
   ipcRenderer.send(READINESS, { stamps })
   return stamps
 }
@@ -1175,4 +1534,35 @@ window.addEventListener('load', () => {
     setSelectionHighlight(null)
   })
   ipcRenderer.on(SET_STATUS, (_e, text: string | null) => setStatusPill(text))
+  // Styles panel (relayed from the island by main): payloads originate in our
+  // own renderer but are validated anyway — this file runs inside the preview.
+  ipcRenderer.on(STYLES_PREVIEW, (_e, p: { prop?: unknown; value?: unknown }) => {
+    if (typeof p?.prop === 'string' && typeof p?.value === 'string') previewStyle(p.prop, p.value)
+  })
+  ipcRenderer.on(STYLES_CLEAR_PREVIEW, (_e, p: { prop?: unknown } | undefined) => {
+    clearStylePreview(typeof p?.prop === 'string' ? p.prop : undefined)
+  })
+  ipcRenderer.on(STYLES_READ, (_e, p: { id?: unknown; props?: unknown }) => {
+    readStyles(p?.id, Array.isArray(p?.props) ? (p.props as string[]) : [])
+  })
+  ipcRenderer.on(STYLES_REPLAY, (_e, p: { prop?: unknown; from?: unknown; to?: unknown }) => {
+    if (typeof p?.prop === 'string' && typeof p?.from === 'string' && typeof p?.to === 'string')
+      replayStyle(p.prop, p.from, p.to)
+  })
+  ipcRenderer.on(LAYERS_READ, (_e, p: { id?: unknown }) => {
+    if (typeof p?.id !== 'number') return
+    ipcRenderer.send(LAYERS_READ_REPLY, { id: p.id, snapshot: buildLayersSnapshot() })
+  })
+  ipcRenderer.on(LAYERS_SELECT, (_e, p: { path?: unknown; fingerprint?: unknown }) => {
+    if (!Array.isArray(p?.path) || !isValidFingerprint(p?.fingerprint)) return
+    layersSelect(p.path as number[], p.fingerprint)
+  })
+  ipcRenderer.on(LAYERS_HOVER, (_e, p: { path?: unknown; fingerprint?: unknown } | null) => {
+    if (!p || !Array.isArray(p.path) || !isValidFingerprint(p.fingerprint)) {
+      layersHover(null, null)
+      return
+    }
+    layersHover(p.path as number[], p.fingerprint)
+  })
+  ipcRenderer.on(LAYERS_SET_WATCH, (_e, on: boolean) => setLayersWatch(!!on))
 }

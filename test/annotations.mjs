@@ -2,7 +2,7 @@
  * v3 handoff test — drives the annotation flow through real IPC and UI:
  *
  *   seed a selected element + project root → "Note" in the inspector → save →
- *   the note persists to <root>/.dsgn/annotations.json AND shows in the notes
+ *   the note persists to <root>/.praxis/annotations.json AND shows in the notes
  *   panel → remove clears both. No dev server / auth needed.
  *
  * Run with: bun run test:annotations
@@ -17,8 +17,8 @@ import { tmpdir } from 'node:os'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
-const projectRoot = mkdtempSync(join(tmpdir(), 'dsgn-annot-'))
-const sidecar = join(projectRoot, '.dsgn', 'annotations.json')
+const projectRoot = mkdtempSync(join(tmpdir(), 'praxis-annot-'))
+const sidecar = join(projectRoot, '.praxis', 'annotations.json')
 const NOTE = 'Tighten the hero spacing before ship'
 
 let app
@@ -30,14 +30,14 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   // Seed a running project + a selected element (no source → only the Note path).
   await win.evaluate(
     (args) => {
-      window.__dsgnSession.getState().setProjectRoot(args.root)
-      window.__dsgnSelection.getState().setSelected({
+      window.__praxisSession.getState().setProjectRoot(args.root)
+      window.__praxisSelection.getState().setSelected({
         tag: 'div',
         id: 'hero',
         classes: ['hero'],
@@ -61,7 +61,7 @@ try {
         tag: 'div',
         text: args.note
       })
-      window.__dsgnAnnotations.getState().setList(list)
+      window.__praxisAnnotations.getState().setList(list)
     },
     { root: projectRoot, note: NOTE }
   )
@@ -73,7 +73,7 @@ try {
   await win.screenshot({ path: join(artifacts, '11-annotations.png') })
 
   // ...and persisted to the sidecar.
-  if (!existsSync(sidecar)) throw new Error('.dsgn/annotations.json was not written')
+  if (!existsSync(sidecar)) throw new Error('.praxis/annotations.json was not written')
   const saved = JSON.parse(readFileSync(sidecar, 'utf8'))
   if (!Array.isArray(saved) || saved.length !== 1) throw new Error('sidecar should hold 1 note')
   if (saved[0].text !== NOTE || saved[0].selector !== '#hero') {
@@ -86,7 +86,7 @@ try {
   const after = JSON.parse(readFileSync(sidecar, 'utf8'))
   if (after.length !== 0) throw new Error('sidecar should be empty after remove')
 
-  console.log('ANNOTATIONS OK — note saved to .dsgn sidecar, shown, and removed')
+  console.log('ANNOTATIONS OK — note saved to .praxis sidecar, shown, and removed')
 } catch (err) {
   console.error('ANNOTATIONS FAILED:', err?.message ?? err)
   process.exitCode = 1

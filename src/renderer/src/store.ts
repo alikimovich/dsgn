@@ -12,10 +12,37 @@ import type {
   SessionRecord,
   SessionTranscriptEntry,
   SlashCommandItem,
+  GithubStatus,
   TokenSet,
   UpdateStatus
 } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
+import { useComposerDrafts } from './composer-drafts'
+import { emptyUsage, addUsage as sumUsage, type TokenUsage } from '../../shared/run-stats'
+import {
+  type ChatAgentSettings,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  type ModelSelection
+} from './chat-settings'
+
+// The per-chat agent choices + their AgentOptions mappings live in their own
+// (pure, unit-testable) module; re-exported here so importers keep one entry point.
+export {
+  type ChatAgentSettings,
+  type ModelSelection,
+  DEFAULT_EFFORT,
+  DEFAULT_MODEL,
+  DEFAULT_PROVIDER,
+  agentModelId,
+  agentOptionsFor,
+  chatAgentSettingsFor,
+  chatModelLabel,
+  chatAgentSettingsFromOptions,
+  defaultChatAgentSettings,
+  resumeChatSettings,
+  toAgentOptions
+} from './chat-settings'
 
 /**
  * One ordered chunk of an assistant turn — additive alongside the flat
@@ -53,6 +80,10 @@ export interface ChatMessage {
   attachments?: MsgAttachment[]
   /** The element the user had selected when they sent this turn (user messages). */
   selection?: MsgSelection
+  /** Edit-history group id (`chat:<wtId>:<turnNo>`) whose file changes this assistant
+   *  turn made — set from the 'merged' isolation event; drives the per-turn Revert
+   *  button. Absent for turns that made no edits or whose work was already pushed. */
+  revertGroup?: string
 }
 
 /** One project's chat. `streamingId` is the assistant message currently being
@@ -65,8 +96,42 @@ interface ChatSlice {
    *  event). The rail prefers it over the first-message heuristic; undefined
    *  until generated. */
   title?: string
+  /** Per-chat git-worktree isolation status (v9). `'live'` for a non-repo
+   *  project (no worktree — the old behavior); `'isolated'` while its worktree
+   *  auto-merges cleanly after each turn; `'parked'` when a turn's merge
+   *  conflicted and the work awaits review in the sidebar. Driven by the
+   *  `'isolation'` `AgentEvent` and rehydrated from `LiveChatSnapshot.isolation`. */
+  isolation: 'live' | 'isolated' | 'parked'
+  /** Files carrying the unmerged changes while `'parked'` — named in the in-chat
+   *  conflict card. Empty/undefined otherwise (and after a reload, where the snapshot
+   *  doesn't carry them — the card then omits the file list). */
+  isolationFiles?: string[]
+  /** Tokens this chat has spent since it opened (summed from the backends' `usage`
+   *  event deltas) — the status line's ↑/↓ counters. */
+  usage: TokenUsage
+  /** Time this chat has spent WORKING, in ms: the sum of its finished turns'
+   *  durations. Idle time between turns is deliberately excluded — a wall-clock
+   *  "session age" would mostly measure how long the user was at lunch. */
+  workedMs: number
+  /** When the turn in flight started (`Date.now()`), or null when idle. The status
+   *  line adds the live remainder to `workedMs`; `finish` folds it in. */
+  turnStartedAt: number | null
+  /** A turn finished while the user was looking at some OTHER chat — the rail
+   *  marks it green ("done, go check it"). Cleared the moment they open it. A
+   *  turn that finishes on the chat that's already on screen never sets this:
+   *  they watched it land. */
+  needsReview: boolean
 }
-const emptySlice = (): ChatSlice => ({ messages: [], isRunning: false, streamingId: null })
+const emptySlice = (): ChatSlice => ({
+  messages: [],
+  isRunning: false,
+  streamingId: null,
+  isolation: 'live',
+  usage: emptyUsage(),
+  workedMs: 0,
+  turnStartedAt: null,
+  needsReview: false
+})
 
 interface ChatState {
   /** Per-project chat, keyed by projectKey ('' is the default / no-project slice). */
@@ -75,6 +140,8 @@ interface ChatState {
   // Mirrors of the active slice — what ChatPanel and the tests read.
   messages: ChatMessage[]
   isRunning: boolean
+  isolation: 'live' | 'isolated' | 'parked'
+  isolationFiles?: string[]
   /** Show a project's chat (preserves each project's history across switches). */
   setActiveChat: (key: string) => void
   /**
@@ -90,8 +157,22 @@ interface ChatState {
   /** Store this chat's auto-generated name (main's `title` event / a resumed
    *  chat's persisted title). Preserves the slice's messages. */
   setTitle: (key: string, title: string) => void
-  /** Drop a project's chat buffer (on close). */
+  /** Update a chat's worktree-isolation status (the `'isolation'` `AgentEvent`,
+   *  or a `LiveChatSnapshot` rehydrate on reload). `files` accompany a `'parked'`
+   *  status (the unmerged files) and are cleared on any other status. */
+  setIsolation: (
+    key: string,
+    isolation: 'live' | 'isolated' | 'parked',
+    files?: string[]
+  ) => void
+  /** Tag this chat's latest assistant turn with the edit-history group that reverts
+   *  its file changes (the 'merged' isolation event). No-op if there's no assistant
+   *  message yet. Call it BEFORE any post-merge note so the real turn gets tagged. */
+  tagRevert: (key: string, group: string) => void
+  /** Drop a project's chat buffer (on close) — including its unsent composer draft. */
   clearChat: (key: string) => void
+  /** Clear a chat's "done — go check it" flag (it's been read). */
+  markReviewed: (key: string) => void
   // Actions default to the active project; pass a key to target a backgrounded one.
   appendUser: (
     text: string,
@@ -103,6 +184,8 @@ interface ChatState {
   startAssistant: (key?: string) => void
   appendDelta: (text: string, key?: string) => void
   appendStatus: (text: string, key?: string) => void
+  /** Add one backend `usage` event's token delta to this chat's running totals. */
+  addUsage: (delta: TokenUsage, key?: string) => void
   finish: (key?: string) => void
   /** Is the given project's turn in flight (for the rail's working dot)? */
   isRunningFor: (key: string) => boolean
@@ -128,7 +211,13 @@ export const useChat = create<ChatState>((set, get) => {
       const slice = fn(state.byKey[k] ?? emptySlice())
       const byKey = { ...state.byKey, [k]: slice }
       return k === state.activeKey
-        ? { byKey, messages: slice.messages, isRunning: slice.isRunning }
+        ? {
+            byKey,
+            messages: slice.messages,
+            isRunning: slice.isRunning,
+            isolation: slice.isolation,
+            isolationFiles: slice.isolationFiles
+          }
         : { byKey }
     })
   return {
@@ -136,14 +225,19 @@ export const useChat = create<ChatState>((set, get) => {
     activeKey: '',
     messages: [],
     isRunning: false,
+    isolation: 'live',
     setActiveChat: (key) =>
       set((s) => {
-        const slice = s.byKey[key] ?? emptySlice()
+        const prev = s.byKey[key] ?? emptySlice()
+        // Opening a chat IS reading it — drop any "done, go check it" mark.
+        const slice = prev.needsReview ? { ...prev, needsReview: false } : prev
         return {
           activeKey: key,
           byKey: { ...s.byKey, [key]: slice },
           messages: slice.messages,
-          isRunning: slice.isRunning
+          isRunning: slice.isRunning,
+          isolation: slice.isolation,
+          isolationFiles: slice.isolationFiles
         }
       }),
     hydrate: (key, messages, isRunning = false) =>
@@ -158,17 +252,69 @@ export const useChat = create<ChatState>((set, get) => {
           msgs = [...messages, { id, role: 'assistant', text: '', statuses: [], segments: [] }]
           streamingId = id
         }
-        const slice: ChatSlice = { messages: msgs, isRunning, streamingId, title: prev.title }
+        const slice: ChatSlice = {
+          messages: msgs,
+          isRunning,
+          streamingId,
+          title: prev.title,
+          isolation: prev.isolation,
+          isolationFiles: prev.isolationFiles,
+          // A restored chat's past turns carry no usage/timing (neither the
+          // transcript nor the live snapshot records them), so its counters start
+          // from zero and describe this app run's work on the chat. A reattached
+          // in-flight turn times from now — its real start is already gone.
+          usage: prev.usage,
+          workedMs: prev.workedMs,
+          turnStartedAt: isRunning ? Date.now() : prev.turnStartedAt,
+          needsReview: prev.needsReview
+        }
         return key === s.activeKey
-          ? { byKey: { ...s.byKey, [key]: slice }, messages: slice.messages, isRunning }
+          ? {
+              byKey: { ...s.byKey, [key]: slice },
+              messages: slice.messages,
+              isRunning,
+              isolation: slice.isolation,
+              isolationFiles: slice.isolationFiles
+            }
           : { byKey: { ...s.byKey, [key]: slice } }
       }),
     setTitle: (key, title) => patch(key, (sl) => ({ ...sl, title })),
-    clearChat: (key) =>
+    setIsolation: (key, isolation, files) =>
+      // Only a park carries files; clear them on any other status so a stale list can't
+      // linger after a merge.
+      patch(key, (sl) => ({ ...sl, isolation, isolationFiles: isolation === 'parked' ? files : undefined })),
+    tagRevert: (key, group) =>
+      patch(key, (sl) => {
+        const idx = sl.messages.map((m) => m.role).lastIndexOf('assistant')
+        if (idx < 0) return sl
+        const messages = sl.messages.slice()
+        messages[idx] = { ...messages[idx], revertGroup: group }
+        return { ...sl, messages }
+      }),
+    clearChat: (key) => {
+      // A closed chat's half-written message goes with it — otherwise a new chat
+      // that reuses the key (a project's default `key` after closing all of them)
+      // would open showing the dead chat's text.
+      useComposerDrafts.getState().clear(key)
       set((s) => {
         const byKey = { ...s.byKey }
         delete byKey[key]
-        return { byKey }
+        return key === s.activeKey
+          ? {
+              byKey,
+              messages: [],
+              isRunning: false,
+              isolation: 'live' as const,
+              isolationFiles: undefined
+            }
+          : { byKey }
+      })
+    },
+    markReviewed: (key) =>
+      set((s) => {
+        const slice = s.byKey[key]
+        if (!slice?.needsReview) return {}
+        return { byKey: { ...s.byKey, [key]: { ...slice, needsReview: false } } }
       }),
     appendUser: (text, key, extras) =>
       patch(key, (sl) => ({
@@ -204,12 +350,16 @@ export const useChat = create<ChatState>((set, get) => {
       patch(key, (sl) => {
         const id = nextId()
         return {
+          ...sl,
           messages: [
             ...sl.messages,
             { id, role: 'assistant', text: '', statuses: [], segments: [] }
           ],
           isRunning: true,
-          streamingId: id
+          streamingId: id,
+          // Start the working-time clock unless a turn is somehow already timing
+          // (two starts without a finish would otherwise lose the first's elapsed).
+          turnStartedAt: sl.turnStartedAt ?? Date.now()
         }
       }),
     appendDelta: (text, key) =>
@@ -244,10 +394,52 @@ export const useChat = create<ChatState>((set, get) => {
           return { ...m, statuses: [...m.statuses, text], segments }
         })
       })),
-    finish: (key) => patch(key, (sl) => ({ ...sl, isRunning: false, streamingId: null })),
+    addUsage: (delta, key) => patch(key, (sl) => ({ ...sl, usage: sumUsage(sl.usage, delta) })),
+    finish: (key) => {
+      // A turn that lands on a chat the user isn't looking at is the one worth
+      // flagging green in the rail; one that lands on screen was already seen.
+      const unseen = key !== undefined && key !== get().activeKey
+      patch(key, (sl) => ({
+        ...sl,
+        isRunning: false,
+        streamingId: null,
+        // Fold the finished turn's elapsed time into the chat's total and stop the
+        // clock — the gap until the next turn is idle time, which doesn't count.
+        workedMs: sl.workedMs + (sl.turnStartedAt ? Date.now() - sl.turnStartedAt : 0),
+        turnStartedAt: null,
+        // Only a turn that was actually running counts as a completion — the bare
+        // `finish()` calls that clear a reopened session's stale running flag must
+        // not light the badge.
+        needsReview: sl.needsReview || (unseen && sl.isRunning)
+      }))
+    },
     isRunningFor: (key) => !!get().byKey[key]?.isRunning
   }
 })
+
+/** What the chat's status line shows: the active chat's token totals + how long
+ *  it has been working (`turnStartedAt` non-null ⟺ that clock is still running). */
+export interface RunStats {
+  usage: TokenUsage
+  workedMs: number
+  turnStartedAt: number | null
+}
+
+/**
+ * The active chat's run stats. Selects the slice itself (a stable reference that
+ * only changes when that chat changes) rather than a derived object, so this
+ * doesn't re-render on every unrelated store write.
+ */
+export const useRunStats = (): RunStats => {
+  const slice = useChat((s) => s.byKey[s.activeKey])
+  return {
+    usage: slice?.usage ?? EMPTY_USAGE,
+    workedMs: slice?.workedMs ?? 0,
+    turnStartedAt: slice?.turnStartedAt ?? null
+  }
+}
+// Module-level so an absent slice yields the same object every render.
+const EMPTY_USAGE = emptyUsage()
 
 /**
  * Rebuild chat messages from a persisted session transcript (v9 resume). The
@@ -294,32 +486,15 @@ export const messagesFromTranscript = (
   return messages
 }
 
-// Sentinel values mean "use the account/model default" (omit from SDK options).
-export const DEFAULT_MODEL = 'default'
-export const DEFAULT_EFFORT = 'auto'
-/** The default backend (the Claude Agent SDK). */
-export const DEFAULT_PROVIDER = 'claude'
-
-/** Agent choices belong to a chat. `useSession` mirrors the active chat so the
- * toolbar stays simple, while `ProjectEntry.chatSettings` retains every chat's
- * choice as the user moves through the rail. */
-export interface ChatAgentSettings {
-  model: string
-  effort: string
-  provider: string
-}
-
-export const defaultChatAgentSettings = (): ChatAgentSettings => ({
-  model: DEFAULT_MODEL,
-  effort: 'high',
-  provider: DEFAULT_PROVIDER
-})
-
 interface SessionState {
   model: string
+  /** See `ChatAgentSettings.modelId`. */
+  modelId?: string
   effort: string
   /** Which backend runs the agent ('claude' | 'codex' | …) — v7. */
   provider: string
+  /** v10: the user-added endpoint this chat runs against, if any. */
+  connectionId?: string
   /** "/" menu entries — project skills first, described; built by main (LKM-54). */
   slashCommands: SlashCommandItem[]
   /** Set when the agent reports an auth failure — drives the onboarding banner. */
@@ -333,9 +508,12 @@ interface SessionState {
   codexAuthNeeded: boolean
   /** Absolute path of the open project (needed to resolve prop-edit sources). */
   projectRoot: string | null
-  /** The `dsgn/*` branch dsgn is working on (null if not a git repo). */
+  /** The `praxis/*` branch praxis is working on (null if not a git repo). */
   branch: string | null
   setModel: (model: string) => void
+  /** Apply a whole picker choice at once — model, its backend id, harness and
+   *  endpoint move together, so no subscriber ever sees a half-applied pair. */
+  setModelSelection: (selection: ModelSelection) => void
   setEffort: (effort: string) => void
   setProvider: (provider: string) => void
   setChatAgentSettings: (settings: ChatAgentSettings) => void
@@ -355,10 +533,31 @@ export const useSession = create<SessionState>((set) => ({
   codexAuthNeeded: false,
   projectRoot: null,
   branch: null,
-  setModel: (model) => set({ model }),
+  // Since v10 the model choice is a TUPLE — `model` (the picker's identity),
+  // `modelId` (what the backend is actually told to run) and `connectionId` (which
+  // endpoint runs it). `agentModelId` prefers `modelId`, and `connectionId` pins the
+  // harness whatever `provider` says, so a setter that moves one member and leaves
+  // the rest is worse than no setter at all: `setModel('haiku')` over a chat holding
+  // `{ model: 'claude:opus', modelId: 'opus' }` would still run opus. These two only
+  // survive for tests/imperative callers, so they set the whole tuple to a consistent
+  // state: a bare model id names itself and belongs to no connection, and switching
+  // harness drops a model value that was namespaced to the previous one.
+  setModel: (model) => set({ model, modelId: undefined, connectionId: undefined }),
+  setModelSelection: ({ model, modelId, provider, connectionId }) =>
+    set({ model, modelId, provider, connectionId }),
   setEffort: (effort) => set({ effort }),
-  setProvider: (provider) => set({ provider }),
-  setChatAgentSettings: ({ model, effort, provider }) => set({ model, effort, provider }),
+  setProvider: (provider) =>
+    set({ provider, model: DEFAULT_MODEL, modelId: undefined, connectionId: undefined }),
+  setChatAgentSettings: ({ model, modelId, effort, provider, connectionId, permissionMode }) => {
+    // `modelId`/`connectionId` are set even when undefined — a chat with no
+    // connection must CLEAR the outgoing chat's, not inherit it.
+    set({ model, modelId, effort, provider, connectionId })
+    // Mode is a per-chat choice too, but it lives in usePermissions (which also owns
+    // the pending-prompt queue). Restore it here so activating a chat re-points the
+    // toolbar dropdown to THAT chat's real mode instead of a stale global value —
+    // this is the single place every switch/boot path funnels through.
+    usePermissions.getState().setMode(permissionMode)
+  },
   setSlashCommands: (slashCommands) => set({ slashCommands }),
   setAuthNeeded: (authNeeded) => set({ authNeeded }),
   setCodexAuthNeeded: (codexAuthNeeded) => set({ codexAuthNeeded }),
@@ -398,9 +597,11 @@ export interface ProjectEntry {
   /** Preview viewport for THIS project — each remembers its own; restored on
    *  switch (a global viewport leaked one project's Mobile into the next). */
   viewport?: Viewport
-  /** Rail: hide this project's chat list while it stays active (chevron toggle).
-   *  Independent of `activeKey` — collapsing doesn't deactivate the project, its
-   *  dev server/preview stay live. Defaults to expanded (undefined = false). */
+  /** Rail: hide this project's chat list (chevron toggle). Fully independent of
+   *  `activeKey` — collapsing doesn't deactivate the project (its dev server/
+   *  preview stay live), and switching to another project doesn't collapse this
+   *  one: the fold is per-project state the user sets, persisted with the entry.
+   *  Defaults to expanded (undefined = false). */
   chatsCollapsed?: boolean
   /** Monotonic recency stamp (bumped on activate) — drives LRU warm-server eviction. */
   touchedAt: number
@@ -423,17 +624,15 @@ export interface ProjectEntry {
   chatSettings?: Record<string, ChatAgentSettings>
 }
 
-export const chatAgentSettingsFor = (
-  entry: ProjectEntry,
-  sessionKey: string
-): ChatAgentSettings => ({ ...defaultChatAgentSettings(), ...entry.chatSettings?.[sessionKey] })
-
 export const chatAgentSettingsFromSession = (
-  session: Pick<SessionState, 'model' | 'effort' | 'provider'>
+  session: Pick<SessionState, 'model' | 'modelId' | 'effort' | 'provider' | 'connectionId'>
 ): ChatAgentSettings => ({
   model: session.model,
+  modelId: session.modelId,
   effort: session.effort,
-  provider: session.provider
+  provider: session.provider,
+  connectionId: session.connectionId,
+  permissionMode: usePermissions.getState().mode
 })
 
 interface WorkspaceState {
@@ -441,6 +640,8 @@ interface WorkspaceState {
   activeKey: string | null
   /** Collapse the left projects rail to a thin strip (persisted across launches). */
   collapsed: boolean
+  /** Hide the chat pane so the preview fills the window (persisted across launches). */
+  chatHidden: boolean
   /** Open a project (or re-activate it if already open). Returns its key. */
   openOrActivate: (root: string, meta?: { name?: string }) => string
   activate: (key: string) => void
@@ -448,7 +649,8 @@ interface WorkspaceState {
   patchEntry: (key: string, partial: Partial<ProjectEntry>) => void
   close: (key: string) => void
   toggleCollapsed: () => void
-  /** Toggle whether an (active) project's chat list is hidden — see `chatsCollapsed`. */
+  toggleChatHidden: () => void
+  /** Toggle whether a project's chat list is hidden — see `chatsCollapsed`. */
   toggleChatsCollapsed: (key: string) => void
   reset: () => void
   /** Replace the whole set (boot restore) — see restore.ts. Also advances the
@@ -477,7 +679,7 @@ const applyTheme = (t: Theme): void => {
     /* no DOM (tests) */
   }
 }
-applyTheme(systemTheme()) // set the class before first paint — dsgn always matches the OS
+applyTheme(systemTheme()) // set the class before first paint — praxis always matches the OS
 
 /** Preview viewport: 'desktop' = fill the pane, 'mobile' = a centered phone width. */
 export type Viewport = 'desktop' | 'mobile'
@@ -572,7 +774,7 @@ export const usePanelInset = create<PanelInsetState>((set) => ({
  * preview (right side) and reserves a bottom inset (usePanelInset).
  */
 interface CodeDrawerState {
-  /** The `data-dsgn-source` string of the file open in the drawer, or null. */
+  /** The `data-praxis-source` string of the file open in the drawer, or null. */
   source: string | null
   /** Navigation history (Cmd+click jumps push here); index points at `source`. */
   stack: string[]
@@ -610,7 +812,7 @@ export interface RecentProject {
   name: string
   at: number
 }
-const RECENTS_KEY = 'dsgn:recent-projects'
+const RECENTS_KEY = 'praxis:recent-projects'
 const readRecents = (): RecentProject[] => {
   try {
     const v = JSON.parse(localStorage.getItem(RECENTS_KEY) ?? '[]') as RecentProject[]
@@ -665,7 +867,7 @@ export const useRecents = create<RecentsState>((set) => ({
  * the split button's settings menu; persisted across launches.
  */
 export type PublishMode = 'merge' | 'pr'
-const PUBLISH_MODE_KEY = 'dsgn:publish-mode'
+const PUBLISH_MODE_KEY = 'praxis:publish-mode'
 const readPublishMode = (): PublishMode => {
   try {
     return localStorage.getItem(PUBLISH_MODE_KEY) === 'pr' ? 'pr' : 'merge'
@@ -695,7 +897,7 @@ export const usePublishMode = create<PublishModeState>((set) => ({
  * `subject` it was dismissed for (persisted) so the SAME update doesn't
  * re-nag, but a newer one (different subject) still surfaces.
  */
-const UPDATE_DISMISSED_KEY = 'dsgn:update-dismissed-subject'
+const UPDATE_DISMISSED_KEY = 'praxis:update-dismissed-subject'
 const readDismissed = (): string | null => {
   try {
     return localStorage.getItem(UPDATE_DISMISSED_KEY)
@@ -746,14 +948,16 @@ try {
 }
 
 // Remember the rail collapse preference across launches (renderer-only UI state).
-const RAIL_KEY = 'dsgn:rail-collapsed'
-const readCollapsed = (): boolean => {
+const RAIL_KEY = 'praxis:rail-collapsed'
+const CHAT_KEY = 'praxis:chat-hidden'
+const readFlag = (key: string): boolean => {
   try {
-    return localStorage.getItem(RAIL_KEY) === '1'
+    return localStorage.getItem(key) === '1'
   } catch {
     return false
   }
 }
+const readCollapsed = (): boolean => readFlag(RAIL_KEY)
 
 const basename = (p: string): string => p.replace(/[/\\]+$/, '').split(/[/\\]/).pop() || p
 // Monotonic recency counter for LRU warm-server eviction (process-lifetime; fine
@@ -775,6 +979,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
         /* private mode / no storage — keep it in memory only */
       }
       return { collapsed }
+    }),
+  chatHidden: readFlag(CHAT_KEY),
+  toggleChatHidden: () =>
+    set((s) => {
+      const chatHidden = !s.chatHidden
+      try {
+        localStorage.setItem(CHAT_KEY, chatHidden ? '1' : '0')
+      } catch {
+        /* private mode / no storage — keep it in memory only */
+      }
+      return { chatHidden }
     }),
   openOrActivate: (root, meta) => {
     const key = projectKey(root)
@@ -844,13 +1059,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
  * reload / app relaunch can restore it (see restore.ts). In-memory today, mirrored
  * to localStorage here; every ProjectEntry field is plain JSON data (launchSpec /
  * viewport included), so it round-trips. Only the MAIN renderer persists — the
- * floating prop-panel view (`?dsgnPanel=1`) shares this origin's localStorage but
+ * floating prop-panel view (`?praxisPanel=1`) shares this origin's localStorage but
  * has its own (empty) workspace, so it must never write over the real one.
  */
-const WORKSPACE_KEY = 'dsgn:workspace'
+const WORKSPACE_KEY = 'praxis:workspace'
 const isPanelWindow = (): boolean => {
   try {
-    return new URLSearchParams(window.location.search).has('dsgnPanel')
+    return new URLSearchParams(window.location.search).has('praxisPanel')
   } catch {
     return false
   }
@@ -907,6 +1122,8 @@ interface HistoryState {
   load: (root: string) => Promise<void>
   /** Delete one record and drop it from the list. */
   remove: (root: string, id: string) => Promise<void>
+  /** Rename one record (rail inline rename); no-op if main rejects the name. */
+  rename: (root: string, id: string, title: string) => Promise<void>
 }
 
 export const useHistory = create<HistoryState>((set) => ({
@@ -932,11 +1149,26 @@ export const useHistory = create<HistoryState>((set) => ({
     set((s) => ({
       byKey: { ...s.byKey, [key]: (s.byKey[key] ?? []).filter((r) => r.id !== id) }
     }))
+  },
+  rename: async (root, id, title) => {
+    const key = projectKey(root)
+    // Main normalises + validates the name, and is the only writer of the record —
+    // adopt what it echoes back rather than the raw input.
+    const res = await window.api.sessions.rename(id, title).catch(() => null)
+    if (!res?.ok || !res.title) return
+    const named = res.title
+    set((s) => ({
+      byKey: {
+        ...s.byKey,
+        [key]: (s.byKey[key] ?? []).map((r) => (r.id === id ? { ...r, title: named } : r))
+      }
+    }))
   }
 }))
 
 /**
- * v8 F1: detached comment spawns currently running, keyed by `projectKey`. A row
+ * v8 F1: detached comment spawns currently running, keyed by their parent
+ * `sessionKey`, so the rail can nest each agent beneath the chat that created it. A row
  * appears the moment a comment is dispatched and is removed on `spawn-finished` (the
  * finished run reappears in `useHistory` as a "previous agent" carrying its branch).
  * These never enter `useChat` — the main chat stream stays byte-clean.
@@ -945,6 +1177,8 @@ export interface SpawnRow {
   id: string
   branch: string | null
   label: string
+  /** Actual inherited harness/model, captured when the spawn was dispatched. */
+  modelLabel: string
   /** 'queued' until a per-repo slot frees (Phase 3), then 'running'. */
   status: 'running' | 'queued'
 }
@@ -1026,18 +1260,6 @@ export const isAuthError = (message: string): boolean =>
     message
   )
 
-/** Convert the UI sentinels into AgentOptions the SDK understands. */
-export const toAgentOptions = (s: { model: string; effort: string; provider?: string }): {
-  model?: string
-  effort?: string
-  provider?: string
-} => ({
-  model: s.model === DEFAULT_MODEL ? undefined : s.model,
-  effort: s.effort === DEFAULT_EFFORT ? undefined : s.effort,
-  // Default Claude is implied — only send a non-default backend.
-  ...(s.provider && s.provider !== DEFAULT_PROVIDER ? { provider: s.provider } : {})
-})
-
 /**
  * v2 element selection. `selectMode` mirrors the overlay armed in the preview;
  * `selected` is the most recently picked element. The composer reads `selected`
@@ -1075,8 +1297,11 @@ export const useSelection = create<SelectionState>((set) => ({
 
 /**
  * Tool-permission posture + the queue of pending approve/deny prompts. `mode`
- * is the SDK's PermissionMode: 'default' asks (cards), 'acceptEdits' auto-accepts
- * edits, 'bypassPermissions' is Auto (no prompts — approve-all via the SDK).
+ * is the SDK's PermissionMode: 'auto' is Auto (the SDK's classifier approves the
+ * routine calls; only what it flags reaches a card), 'default' asks for every
+ * gated tool, 'acceptEdits' auto-accepts edits. This mirrors the ACTIVE chat's
+ * mode — main holds one per session, so every path that creates or switches a
+ * chat has to move both together (see chat-settings.ts).
  */
 interface PermissionState {
   mode: PermissionMode
@@ -1089,9 +1314,9 @@ interface PermissionState {
 
 export const usePermissions = create<PermissionState>((set) => ({
   // Auto mode by default — the SDK's model classifier approves/denies each tool
-  // call; only the ones it flags as risky fall through to dsgn's canUseTool card.
+  // call; only the ones it flags as risky fall through to praxis's canUseTool card.
   // No prompts for routine work, dangerous ops still surface, and canUseTool still
-  // runs (so the .dsgn/ sidecar guard + AskUserQuestion card stay in force).
+  // runs (so the .praxis/ sidecar guard + AskUserQuestion card stay in force).
   mode: 'auto',
   pending: [],
   setMode: (mode) => set({ mode }),
@@ -1188,6 +1413,26 @@ export const useFeedback = create<FeedbackState>((set) => ({
   setOpen: (open) => set({ open })
 }))
 
+/**
+ * "Connect to GitHub" (the first-publish bridge). `status` is the opened
+ * project's GitHub link — `null` when it isn't a git repo (the header then keeps
+ * the normal Publish control). When `status.connected` is false the header shows
+ * "Connect to GitHub" instead, and `connectOpen` raises the one connect sheet
+ * App renders (same single-flag pattern as the feedback dialog).
+ */
+interface GithubState {
+  status: GithubStatus | null
+  connectOpen: boolean
+  setStatus: (status: GithubStatus | null) => void
+  setConnectOpen: (open: boolean) => void
+}
+export const useGithub = create<GithubState>((set) => ({
+  status: null,
+  connectOpen: false,
+  setStatus: (status) => set({ status }),
+  setConnectOpen: (connectOpen) => set({ connectOpen })
+}))
+
 /** Render a chat slice as a plain-text transcript for a feedback attachment. */
 export const formatConversation = (messages: ChatMessage[]): string =>
   messages
@@ -1214,12 +1459,72 @@ export const usePropsIsland = create<PropsIslandState>((set) => ({
   setOpen: (open) => set({ open })
 }))
 
+// Layers panel visibility + resizable height, persisted across launches like
+// the rail's collapse preference.
+const LAYERS_OPEN_KEY = 'praxis:layers-open'
+const LAYERS_HEIGHT_KEY = 'praxis:layers-height'
+const LAYERS_HEIGHT_MIN = 120
+const LAYERS_HEIGHT_MAX = 420
+const LAYERS_HEIGHT_DEFAULT = 220
+
+const readLayersOpen = (): boolean => {
+  try {
+    return localStorage.getItem(LAYERS_OPEN_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+const readLayersHeight = (): number => {
+  try {
+    const n = Number(localStorage.getItem(LAYERS_HEIGHT_KEY))
+    return Number.isFinite(n) && n >= LAYERS_HEIGHT_MIN && n <= LAYERS_HEIGHT_MAX
+      ? n
+      : LAYERS_HEIGHT_DEFAULT
+  } catch {
+    return LAYERS_HEIGHT_DEFAULT
+  }
+}
+
+interface LayersPanelState {
+  open: boolean
+  height: number
+  setOpen: (open: boolean) => void
+  setHeight: (height: number) => void
+}
+
+export const useLayersPanel = create<LayersPanelState>((set) => ({
+  open: readLayersOpen(),
+  height: readLayersHeight(),
+  setOpen: (open) => {
+    try {
+      localStorage.setItem(LAYERS_OPEN_KEY, open ? '1' : '0')
+    } catch {
+      /* private mode / no storage — keep it in memory only */
+    }
+    set({ open })
+  },
+  setHeight: (height) => {
+    const clamped = Math.min(LAYERS_HEIGHT_MAX, Math.max(LAYERS_HEIGHT_MIN, height))
+    try {
+      localStorage.setItem(LAYERS_HEIGHT_KEY, String(clamped))
+    } catch {
+      /* private mode / no storage — keep it in memory only */
+    }
+    set({ height: clamped })
+  }
+}))
 
 /** The on-open "set this project up for editing" offer. */
 interface SetupState {
   /** The previewed app isn't source-stamped — offer to set it up. */
   needed: boolean
   dismissed: boolean
+  /**
+   * Can praxis instrument this project (a supported UI framework was detected)?
+   * Gates the offer — never dead-end a static/vanilla project on "Set it up" —
+   * and tailors the Styles tab's read-only guidance. Null until the probe runs.
+   */
+  canInstrument: boolean | null
   busy: boolean
   /** A setup was applied; the next readiness report verifies stamps actually fired. */
   verifying: boolean
@@ -1232,6 +1537,7 @@ interface SetupState {
   status: string | null
   setNeeded: (needed: boolean) => void
   setDismissed: (dismissed: boolean) => void
+  setCanInstrument: (canInstrument: boolean | null) => void
   setBusy: (busy: boolean) => void
   setVerifying: (verifying: boolean) => void
   setRestartRequested: (restartRequested: boolean) => void
@@ -1242,12 +1548,14 @@ interface SetupState {
 export const useSetup = create<SetupState>((set) => ({
   needed: false,
   dismissed: false,
+  canInstrument: null,
   busy: false,
   verifying: false,
   restartRequested: false,
   status: null,
   setNeeded: (needed) => set({ needed }),
   setDismissed: (dismissed) => set({ dismissed }),
+  setCanInstrument: (canInstrument) => set({ canInstrument }),
   setBusy: (busy) => set({ busy }),
   setVerifying: (verifying) => set({ verifying }),
   setRestartRequested: (restartRequested) => set({ restartRequested }),
@@ -1256,6 +1564,7 @@ export const useSetup = create<SetupState>((set) => ({
     set({
       needed: false,
       dismissed: false,
+      canInstrument: null,
       busy: false,
       verifying: false,
       restartRequested: false,
@@ -1266,7 +1575,7 @@ export const useSetup = create<SetupState>((set) => ({
 /** Design tokens detected for the open project (one source wins). */
 interface TokenState {
   set: TokenSet | null
-  /** First-run offer to scaffold `.dsgn/tokens.json` when no tokens were found. */
+  /** First-run offer to scaffold `.praxis/tokens.json` when no tokens were found. */
   offerNeeded: boolean
   offerDismissed: boolean
   scaffolding: boolean
@@ -1390,36 +1699,40 @@ export const usePreviewLocation = create<PreviewLocationState>((set) => ({
 // Exposed for the Playwright test harness (and handy for live debugging).
 ;(
   window as unknown as {
-    __dsgnStore?: typeof useChat
-    __dsgnSession?: typeof useSession
-    __dsgnSelection?: typeof useSelection
-    __dsgnPermissions?: typeof usePermissions
-    __dsgnQuestions?: typeof useQuestions
-    __dsgnAnnotations?: typeof useAnnotations
-    __dsgnTokens?: typeof useTokens
-    __dsgnSetup?: typeof useSetup
+    __praxisStore?: typeof useChat
+    __praxisSession?: typeof useSession
+    __praxisSelection?: typeof useSelection
+    __praxisPermissions?: typeof usePermissions
+    __praxisQuestions?: typeof useQuestions
+    __praxisAnnotations?: typeof useAnnotations
+    __praxisTokens?: typeof useTokens
+    __praxisSetup?: typeof useSetup
   }
-).__dsgnStore = useChat
-;(window as unknown as { __dsgnSession?: typeof useSession }).__dsgnSession = useSession
+).__praxisStore = useChat
+;(window as unknown as { __praxisSession?: typeof useSession }).__praxisSession = useSession
 ;(
-  window as unknown as { __dsgnMessagesFromTranscript?: typeof messagesFromTranscript }
-).__dsgnMessagesFromTranscript = messagesFromTranscript
-;(window as unknown as { __dsgnSelection?: typeof useSelection }).__dsgnSelection = useSelection
-;(window as unknown as { __dsgnPermissions?: typeof usePermissions }).__dsgnPermissions =
+  window as unknown as { __praxisMessagesFromTranscript?: typeof messagesFromTranscript }
+).__praxisMessagesFromTranscript = messagesFromTranscript
+;(window as unknown as { __praxisSelection?: typeof useSelection }).__praxisSelection = useSelection
+;(window as unknown as { __praxisPermissions?: typeof usePermissions }).__praxisPermissions =
   usePermissions
-;(window as unknown as { __dsgnQuestions?: typeof useQuestions }).__dsgnQuestions = useQuestions
-;(window as unknown as { __dsgnAnnotations?: typeof useAnnotations }).__dsgnAnnotations =
+;(window as unknown as { __praxisQuestions?: typeof useQuestions }).__praxisQuestions = useQuestions
+;(window as unknown as { __praxisAnnotations?: typeof useAnnotations }).__praxisAnnotations =
   useAnnotations
-;(window as unknown as { __dsgnTokens?: typeof useTokens }).__dsgnTokens = useTokens
-;(window as unknown as { __dsgnSetup?: typeof useSetup }).__dsgnSetup = useSetup
-;(window as unknown as { __dsgnLog?: typeof useLog }).__dsgnLog = useLog
-;(window as unknown as { __dsgnWorkspace?: typeof useWorkspace }).__dsgnWorkspace = useWorkspace
-;(window as unknown as { __dsgnHistory?: typeof useHistory }).__dsgnHistory = useHistory
-;(window as unknown as { __dsgnSpawns?: typeof useSpawns }).__dsgnSpawns = useSpawns
-;(window as unknown as { __dsgnViewport?: typeof useViewport }).__dsgnViewport = useViewport
-;(window as unknown as { __dsgnPanelInset?: typeof usePanelInset }).__dsgnPanelInset = usePanelInset
-;(window as unknown as { __dsgnCodeDrawer?: typeof useCodeDrawer }).__dsgnCodeDrawer = useCodeDrawer
-;(window as unknown as { __dsgnPropsIsland?: typeof usePropsIsland }).__dsgnPropsIsland = usePropsIsland
+;(window as unknown as { __praxisTokens?: typeof useTokens }).__praxisTokens = useTokens
+;(window as unknown as { __praxisSetup?: typeof useSetup }).__praxisSetup = useSetup
+;(window as unknown as { __praxisLog?: typeof useLog }).__praxisLog = useLog
+;(window as unknown as { __praxisGithub?: typeof useGithub }).__praxisGithub = useGithub
+;(window as unknown as { __praxisWorkspace?: typeof useWorkspace }).__praxisWorkspace = useWorkspace
+;(window as unknown as { __praxisHistory?: typeof useHistory }).__praxisHistory = useHistory
+;(window as unknown as { __praxisSpawns?: typeof useSpawns }).__praxisSpawns = useSpawns
+;(window as unknown as { __praxisViewport?: typeof useViewport }).__praxisViewport = useViewport
+;(window as unknown as { __praxisPanelInset?: typeof usePanelInset }).__praxisPanelInset = usePanelInset
+;(window as unknown as { __praxisCodeDrawer?: typeof useCodeDrawer }).__praxisCodeDrawer = useCodeDrawer
+;(window as unknown as { __praxisPropsIsland?: typeof usePropsIsland }).__praxisPropsIsland = usePropsIsland
 ;(
-  window as unknown as { __dsgnPreviewLocation?: typeof usePreviewLocation }
-).__dsgnPreviewLocation = usePreviewLocation
+  window as unknown as { __praxisPreviewLocation?: typeof usePreviewLocation }
+).__praxisPreviewLocation = usePreviewLocation
+;(window as unknown as { __praxisLayersPanel?: typeof useLayersPanel }).__praxisLayersPanel =
+  useLayersPanel
+;(window as unknown as { __praxisComposer?: typeof useComposer }).__praxisComposer = useComposer

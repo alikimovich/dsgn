@@ -3,7 +3,7 @@
  * a bootable simulator only; SKIPs (exit 0) everywhere else, like agent-e2e.mjs.
  *
  * Full app-boot (expo run:ios) is heavy and needs a real Expo fixture, so this
- * gates behind DSGN_SIM_E2E=1 + DSGN_SIM_FIXTURE=<path to an Expo app>. Without
+ * gates behind PRAXIS_SIM_E2E=1 + PRAXIS_SIM_FIXTURE=<path to an Expo app>. Without
  * those it still verifies preflight succeeds on a capable Mac, then SKIPs the boot.
  *
  * Run with: bun run test:sim-e2e
@@ -30,7 +30,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   const pf = await win.evaluate(() => window.api.simulator.preflight())
@@ -40,15 +40,15 @@ try {
   }
   console.log(`preflight ok — ${pf.devices.length} device(s), runtimes: ${pf.runtimes.join(', ')}`)
 
-  const fixture = process.env.DSGN_SIM_FIXTURE
-  if (process.env.DSGN_SIM_E2E !== '1' || !fixture) {
+  const fixture = process.env.PRAXIS_SIM_FIXTURE
+  if (process.env.PRAXIS_SIM_E2E !== '1' || !fixture) {
     await app.close()
-    skip('set DSGN_SIM_E2E=1 and DSGN_SIM_FIXTURE=<expo app path> to boot a real app')
+    skip('set PRAXIS_SIM_E2E=1 and PRAXIS_SIM_FIXTURE=<expo app path> to boot a real app')
   }
 
   console.log(`Booting + launching ${fixture} …`)
   const sim = await win.evaluate((f) => window.api.simulator.start({ root: f }), fixture)
-  if (!/^http:\/\/127\.0\.0\.1:\d+\/\?dsgnSim=1$/.test(sim.url)) {
+  if (!/^http:\/\/127\.0\.0\.1:\d+\/\?praxisSim=1$/.test(sim.url)) {
     throw new Error(`unexpected sim url: ${sim.url}`)
   }
   await win.evaluate((u) => window.api.preview.load(u), sim.url)

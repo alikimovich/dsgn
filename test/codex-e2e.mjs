@@ -44,7 +44,7 @@ try {
 
   // Route this session to the Codex backend (default model/effort), then open the
   // fixture — `.btn--open` calls openProject with the session's provider.
-  await win.evaluate(() => window.__dsgnSession.getState().setProvider('codex'))
+  await win.evaluate(() => window.__praxisSession.getState().setProvider('codex'))
   await app.evaluate(async ({ dialog }, p) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] })
   }, fixture)
@@ -63,14 +63,14 @@ try {
 
   let finished = true
   try {
-    await win.waitForFunction(() => window.__dsgnStore.getState().isRunning === true, { timeout: 20000 })
-    await win.waitForFunction(() => window.__dsgnStore.getState().isRunning === false, { timeout: 180000 })
+    await win.waitForFunction(() => window.__praxisStore.getState().isRunning === true, { timeout: 20000 })
+    await win.waitForFunction(() => window.__praxisStore.getState().isRunning === false, { timeout: 180000 })
   } catch {
     finished = false
   }
 
   const assistant = await win.evaluate(() => {
-    const ms = window.__dsgnStore.getState().messages
+    const ms = window.__praxisStore.getState().messages
     const a = [...ms].reverse().find((m) => m.role === 'assistant')
     return a ? `${a.statuses.join('\n')}\n${a.text}`.trim() : ''
   })

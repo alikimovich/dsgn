@@ -1,13 +1,13 @@
 import { readFile, writeFile } from 'fs/promises'
 
 /**
- * Undo/redo for ALL dsgn source edits (v8 F3b) — props, inline text, token swaps,
+ * Undo/redo for ALL praxis source edits (v8 F3b) — props, inline text, token swaps,
  * React + Svelte. Every apply path calls `recordEdit(root, file, before, after)`
  * after a successful write; `undo(root)`/`redo(root)` revert/re-apply against the
  * file's CURRENT content, refusing to clobber if the user changed it in their own
  * editor since.
  *
- * History is scoped per project root — dsgn keeps several projects open in the rail
+ * History is scoped per project root — praxis keeps several projects open in the rail
  * (v5-C), so Cmd+Z in project B must never revert a file in project A. The edits
  * write straight to source, so the dev server's HMR refreshes the preview on undo
  * just like apply.
@@ -129,6 +129,61 @@ export const redo = (root: string): Promise<UndoResult> => {
 
 export const canUndo = (root: string): boolean => (byRoot.get(root)?.undo.length ?? 0) > 0
 export const canRedo = (root: string): boolean => (byRoot.get(root)?.redo.length ?? 0) > 0
+
+/**
+ * Can the turn recorded under `group` be reverted right now? True iff its entries are
+ * still on `root`'s undo stack AND every file it touched still holds exactly the text
+ * that turn last wrote — i.e. nothing later (another chat turn or a hand edit) has
+ * changed them since. A cheap pre-check so the UI can grey out a Revert button that
+ * would only conflict; `revertGroup` re-validates the same guard before it writes.
+ */
+export async function canRevertGroup(root: string, group: string): Promise<boolean> {
+  const batch = byRoot.get(root)?.undo.filter((e) => e.group === group) ?? []
+  if (!batch.length) return false
+  for (const e of batch) {
+    let current: string
+    try {
+      current = await readFile(e.file, 'utf8')
+    } catch {
+      return false
+    }
+    if (current !== e.after) return false
+  }
+  return true
+}
+
+/**
+ * Addressable revert of ONE recorded group (a chat turn: `chat:<wtId>:<turnNo>`),
+ * not necessarily the top of the undo stack. Restores every file's `before`,
+ * all-or-nothing: it validates the whole batch first and refuses (conflict) if any
+ * file drifted from the `after` that turn wrote — so a turn a LATER turn (or the user)
+ * touched can't be silently clobbered. On success the group's entries leave the undo
+ * stack; unlike `undo`, revert is a one-way addressable action outside the linear
+ * undo/redo model, so nothing is pushed onto the redo stack.
+ */
+export async function revertGroup(root: string, group: string): Promise<UndoResult> {
+  const s = byRoot.get(root)
+  const batch = s?.undo.filter((e) => e.group === group) ?? []
+  if (!s || !batch.length) return { ok: false, empty: true }
+  for (const e of batch) {
+    let current: string
+    try {
+      current = await readFile(e.file, 'utf8')
+    } catch {
+      return { ok: false, conflict: true, file: e.file }
+    }
+    if (current !== e.after) return { ok: false, conflict: true, file: e.file }
+  }
+  for (const e of batch) {
+    try {
+      await writeFile(e.file, e.before, 'utf8')
+    } catch {
+      return { ok: false, conflict: true, file: e.file }
+    }
+  }
+  s.undo = s.undo.filter((e) => e.group !== group)
+  return { ok: true, file: batch[batch.length - 1].file }
+}
 /** Drop a project's history (e.g. when it's closed in the rail). */
 export const clearHistory = (root: string): void => {
   byRoot.delete(root)

@@ -1,0 +1,60 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Propedit fixture</title>
+<style>
+  body {
+    font: 16px system-ui;
+    margin: 0;
+    padding: 48px;
+    color: #1a1a1a;
+  }
+  /* The static page can't run Tailwind — mirror the two utilities the styles
+     test scrubs, so computed values match what the classes claim. */
+  .p-4 {
+    padding: 16px;
+  }
+  .rounded-md {
+    border-radius: 6px;
+  }
+  #tw-box {
+    max-width: 240px;
+    background: #eef2ff;
+  }
+  /* Mirrors src/theme.css — the file tokens.detect reads off disk. Declared
+     here too so the panel's LIVE custom-property read
+     (getPropertyValue('--color-text') on the selected element) resolves; that
+     read is what names a token correctly even under a media-query override. */
+  :root {
+    --color-text: #6c6c6c;
+    --color-title: #212121;
+    --color-link: #212121;
+    --space-md: 24px;
+    --z-modal: 100;
+  }
+</style>
+<body>
+  <main data-praxis-source="src/Badge.tsx:17">
+    <h1 data-praxis-source="src/Badge.tsx:25">Propedit fixture</h1>
+    <!-- v10 Styles tab: a Tailwind-utility element (S1 class rewrite) … -->
+    <div id="tw-box" class="p-4 rounded-md" data-praxis-source="src/Styled.tsx:5">
+      Padded box
+    </div>
+    <!-- … and an inline-styled element (S2 style-object merge). -->
+    <div id="inline-box" style="padding: 8px" data-praxis-source="src/Styled.tsx:9">
+      Inline padded
+    </div>
+    <!-- … one whose color happens to BE a design token's value, but does NOT
+         reference it — the panel must show the raw hex, not name the token. -->
+    <div id="token-box" style="color: #6c6c6c" data-praxis-source="src/Styled.tsx:21">
+      Token colored
+    </div>
+    <!-- … and a BARE one: no class, no style, so S2 has nothing to extend and
+         the edit must fall through to the agent instead of inventing a prop. -->
+    <div id="bare-box" data-praxis-source="src/Styled.tsx:46">Bare box</div>
+    <!-- … and one that DOES reference the token — `style=` preserves var()
+         unresolved (unlike getComputedStyle), so this is the proven case. -->
+    <div id="proven-token-box" style="color: var(--color-text)" data-praxis-source="src/Styled.tsx:54">
+      Proven token colored
+    </div>
+  </main>
+</body>

@@ -1,7 +1,7 @@
-import { app, ipcMain, type BrowserWindow } from 'electron'
-import { spawn, type ChildProcess } from 'child_process'
-import type { Server } from 'http'
+import { type ChildProcess, spawn } from 'child_process'
+import { app, type BrowserWindow, ipcMain } from 'electron'
 import { access, readFile } from 'fs/promises'
+import type { Server } from 'http'
 import { basename, join } from 'path'
 import type {
   DetectedProject,
@@ -11,15 +11,16 @@ import type {
   PreviewKind,
   RunningDevServer
 } from '../shared/api'
+import { projectKey } from '../shared/projectKey'
 import {
-  URL_RE,
   findFreePort,
   hostVariants,
   normalizeUrl,
   stripAnsi,
+  URL_RE,
   waitForReachable
 } from './devserver-net'
-import { projectKey } from '../shared/projectKey'
+import { migrateLegacySidecar } from './sidecar-migrate'
 import { findStaticEntry, startStaticServer } from './static-server'
 
 // The preview always runs on a free port we pick (from this base) bound to IPv4
@@ -60,7 +61,8 @@ const exists = (p: string): Promise<boolean> =>
   )
 
 async function detectPackageManager(root: string): Promise<PackageManager> {
-  if ((await exists(join(root, 'bun.lockb'))) || (await exists(join(root, 'bun.lock')))) return 'bun'
+  if ((await exists(join(root, 'bun.lockb'))) || (await exists(join(root, 'bun.lock'))))
+    return 'bun'
   if (await exists(join(root, 'pnpm-lock.yaml'))) return 'pnpm'
   if (await exists(join(root, 'yarn.lock'))) return 'yarn'
   return 'npm'
@@ -119,7 +121,8 @@ async function detect(root: string): Promise<DetectedProject> {
     // less repos carry a package.json with no scripts). A recognized framework
     // (vite/next/…) with no dev script has a build-template index.html that won't
     // serve raw, so ask for a launch command instead.
-    if (framework === 'unknown' && (await findStaticEntry(root))) return staticProject(root, pkg.name)
+    if (framework === 'unknown' && (await findStaticEntry(root)))
+      return staticProject(root, pkg.name)
     throw new Error(
       'No "dev" or "start" script in package.json. Enter a command to launch this project.'
     )
@@ -224,7 +227,7 @@ const CONFLICT_RE =
 function interpretFailure(code: number | null, tail: string): string {
   if (CONFLICT_RE.test(tail)) {
     return (
-      'A dev server is already running for this project. dsgn manages the dev server itself — ' +
+      'A dev server is already running for this project. Praxis manages the dev server itself — ' +
       'stop your other instance (e.g. the `dev` running in your terminal) and try again.'
     )
   }
@@ -243,7 +246,7 @@ async function start(
   onLog(`Assigned free port ${port} (binding ${PREVIEW_HOST}).`)
 
   // Static sites (vanilla HTML/JS) have no command to spawn — serve them from
-  // dsgn's built-in in-process static server. A custom command override skips
+  // praxis's built-in in-process static server. A custom command override skips
   // this (the user gave us something explicit to run instead).
   if (opts.framework === 'static' && !opts.command) {
     return startStaticSite(opts.root, port, onLog)
@@ -269,7 +272,10 @@ async function startStaticSite(
 ): Promise<RunningDevServer> {
   const key = projectKey(root)
   try {
-    const { server, running: info } = await startStaticServer({ root, port, host: PREVIEW_HOST }, onLog)
+    const { server, running: info } = await startStaticServer(
+      { root, port, host: PREVIEW_HOST },
+      onLog
+    )
     staticServers.set(key, server)
     running.set(key, info)
     // Keep the maps + reserved port honest if the server closes on its own.
@@ -328,7 +334,8 @@ function spawnDevServer(
     // Primary: the server should come up on the exact port we assigned.
     const forcedUrl = `http://${PREVIEW_HOST}:${opts.port}`
     void (async () => {
-      if (await waitForReachable([forcedUrl], () => settled)) settleWith(forcedUrl, `Serving at ${forcedUrl}.`)
+      if (await waitForReachable([forcedUrl], () => settled))
+        settleWith(forcedUrl, `Serving at ${forcedUrl}.`)
     })()
 
     const onData = (buf: Buffer): void => {
@@ -344,7 +351,8 @@ function spawnDevServer(
         urlFound = normalizeUrl(match[1])
         void (async () => {
           const reachable = await waitForReachable(hostVariants(urlFound), () => settled)
-          if (reachable) settleWith(reachable, reachable !== forcedUrl ? `Serving at ${reachable}.` : undefined)
+          if (reachable)
+            settleWith(reachable, reachable !== forcedUrl ? `Serving at ${reachable}.` : undefined)
         })()
       }
     }
@@ -383,12 +391,24 @@ function spawnDevServer(
 }
 
 export function registerDevServerIpc(getWindow: () => BrowserWindow | null): void {
-  ipcMain.handle('project:detect', (_e, root: string) => detect(root))
+  ipcMain.handle('project:detect', async (_e, root: string) => {
+    // Move pre-rename `.dsgn/` data (annotations/tokens) into `.praxis/` before
+    // anything reads the sidecar. No-op except right after the 2026-07 rename.
+    await migrateLegacySidecar(root)
+    return detect(root)
+  })
 
   ipcMain.handle(
     'devserver:start',
     (_e, opts: { root: string; command: string; framework?: Framework }) =>
-      start(opts, (line) => getWindow()?.webContents.send('devserver:log', line))
+      // The dev server's stdout/stderr `onData` keeps firing after the renderer
+      // process is killed (OS display sleep / GPU loss): the window outlives its
+      // webContents, so guard isDestroyed() or `.send()` throws an uncaught
+      // "Object has been destroyed" — the crash dialog seen on wake.
+      start(opts, (line) => {
+        const wc = getWindow()?.webContents
+        if (wc && !wc.isDestroyed()) wc.send('devserver:log', line)
+      })
   )
 
   ipcMain.handle('devserver:stop', async (_e, root: string) => stop(root))
@@ -409,6 +429,6 @@ export function registerDevServerIpc(getWindow: () => BrowserWindow | null): voi
     return server ? { running: true, server } : { running: false }
   })
 
-  // Never leave a spawned dev server orphaned when dsgn quits.
+  // Never leave a spawned dev server orphaned when praxis quits.
   app.on('before-quit', stopAll)
 }

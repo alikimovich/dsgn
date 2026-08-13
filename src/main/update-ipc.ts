@@ -14,7 +14,11 @@ import { checkForUpdate } from './update'
 
 let getWindow_: () => BrowserWindow | null = () => null
 const push = (status: UpdateStatus): void => {
-  getWindow_()?.webContents.send('update:status', status)
+  // The update runs against a child process whose socket `onData` keeps firing;
+  // guard a destroyed webContents (renderer killed on display sleep) so a late
+  // status line can't throw an uncaught "Object has been destroyed".
+  const wc = getWindow_()?.webContents
+  if (wc && !wc.isDestroyed()) wc.send('update:status', status)
 }
 
 // A GUI-launched Electron process inherits a minimal PATH, so `bun`/`git` may

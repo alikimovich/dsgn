@@ -17,8 +17,8 @@
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const ROOT = dirname(TEST_DIR);
@@ -32,22 +32,57 @@ const UNIT = [
   'publish-message',
   'slash-token',
   'skills-discovery',
+  'github-connect',
+  'html-source',
   'project-key',
   'project-create',
+  'project-icon',
   'devserver-net',
   'xcode',
   'git',
+  'sidecar-migrate',
   'diag-cache',
   'diag-rules',
   'sessions-store',
+  'project-memory',
+  'providers-store',
+  'model-catalog',
+  'codex-retry-cause',
+  'codex-stream',
+  'interrupt-escalation',
+  'turn-terminal',
   'chat-title',
+  'chat-settings',
+  'run-stats',
+  'codex-usage',
   'edit-history',
   'worktrees',
+  'chat-worktrees',
+  'live-commit',
+  'file-tree',
+  'file-ops',
+  'media-types',
+  'attachments',
   'rules',
   'tw-classes',
+  'tw-styles',
+  'token-match',
+  'layers-move',
+  'inline-style',
+  'css-values',
+  'elide-url',
+  'control-panels',
   'svelte-instance',
   'docs-links',
   'update',
+  'spring',
+  'apca',
+  'fluid',
+  'oklch',
+  'shadows',
+  'type-metrics',
+  'skills-install',
+  'praxis-cli',
 ];
 
 // electron = the `node test/NAME.mjs` group AFTER `electron-vite build` in `test`.
@@ -59,6 +94,12 @@ const ELECTRON = [
   'viewport-per-project',
   'rail',
   'rail-collapse',
+  'rail-favicon',
+  'chat-hide',
+  'editor-search',
+  'rail-chat-overflow',
+  'rail-chat-status',
+  'project-memory-ui',
   'devserver-multi',
   'static-serve',
   'agent-multi',
@@ -67,20 +108,29 @@ const ELECTRON = [
   'agent-history',
   'history-ui',
   'chat-render',
+  'revert-action',
   'chat-route',
+  'composer-draft',
   'restore-reload',
   'preview-location',
   'feedback-dialog',
+  'connect-dialog',
+  'html-text-edit',
   'questions',
   'open-fail-console',
   'select-element',
   'comment-mode',
   'spawn-comment',
+  'chat-isolation',
   'prop-edit',
+  'style-edit',
+  'layers-panel',
+  'custom-controls',
   'prop-edit-svelte',
   'prop-svelte-self',
   'code-peek',
   'code-drawer',
+  'settings-connect',
   'annotations',
   'tokens',
   'tokens-scaffold',
@@ -95,8 +145,15 @@ const ELECTRON = [
   'sim-control',
 ];
 
-// live = the 3 tests present in `verify` but not in `test`.
-const LIVE = ['agent-e2e', 'codex-e2e', 'sim-e2e'];
+// live = the tests present in `verify` but not in `test`.
+const LIVE = [
+  'agent-e2e',
+  'codex-e2e',
+  'controls-agent',
+  'tool-invocation',
+  'sim-e2e',
+  'style-provenance',
+];
 
 const TIERS = {
   unit: { runner: 'bun', build: false, tests: UNIT },
@@ -137,16 +194,16 @@ function runOne(runner, name) {
   const file = join(TEST_DIR, `${name}.mjs`);
   const started = Date.now();
   // Each Electron test gets its own throwaway userData (main honors
-  // DSGN_USER_DATA): persisted state (workspace/recents localStorage) can't leak
+  // PRAXIS_USER_DATA): persisted state (workspace/recents localStorage) can't leak
   // between tests — boot restore would otherwise auto-reopen a prior test's
   // project — and each launch holds its own single-instance lock.
-  const userData = mkdtempSync(join(tmpdir(), `dsgn-test-${name}-`));
+  const userData = mkdtempSync(join(tmpdir(), `praxis-test-${name}-`));
   let res;
   try {
     res = spawnSync(runner, [file], {
       cwd: ROOT,
       stdio: 'inherit',
-      env: { ...process.env, DSGN_USER_DATA: userData },
+      env: { ...process.env, PRAXIS_USER_DATA: userData },
     });
   } finally {
     rmSync(userData, { recursive: true, force: true });

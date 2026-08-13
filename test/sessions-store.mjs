@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const base = mkdtempSync(join(tmpdir(), 'dsgn-sessions-'))
+const base = mkdtempSync(join(tmpdir(), 'praxis-sessions-'))
 let failed = 0
 const ok = (cond, msg) => {
   if (!cond) {
@@ -39,9 +39,9 @@ try {
   ok(store.get('nope') === null, 'get of missing id is null')
 
   // Save + get round-trips.
-  store.save(rec('s1', '/p/a', 100, { branch: 'dsgn/x', filesTouched: ['src/A.tsx'] }))
+  store.save(rec('s1', '/p/a', 100, { branch: 'praxis/x', filesTouched: ['src/A.tsx'] }))
   const got = store.get('s1')
-  ok(got && got.branch === 'dsgn/x', 'get returns saved record with branch')
+  ok(got && got.branch === 'praxis/x', 'get returns saved record with branch')
   ok(got && got.filesTouched[0] === 'src/A.tsx', 'filesTouched persisted')
 
   // Per-project filtering + newest-first ordering.

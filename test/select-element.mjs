@@ -5,7 +5,7 @@
  *   open fixture → enable Select mode (renderer → main → preview preload) →
  *   dispatch a click on a stamped element inside the preview WebContentsView →
  *   main relays the pick → renderer shows the inspector with the resolved
- *   `data-dsgn-source` → "Ask dsgn to change this…" seeds the composer.
+ *   `data-praxis-source` → "Ask praxis to change this…" seeds the composer.
  *
  * The preview is a separate CDP target, so we reach it via the main process
  * (`webContents.executeJavaScript`) rather than the renderer page.
@@ -16,7 +16,7 @@ import { _electron as electron } from 'playwright'
 import electronPath from 'electron'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = join(root, 'test', 'fixtures', 'selectable-app')
@@ -48,10 +48,10 @@ try {
   await win.waitForSelector('.empty__open', { timeout: 15000 })
 
   // The props panel lives in the floating ISLAND (its own webContents,
-  // ?dsgnPanel=1) — query its DOM there.
+  // ?praxisPanel=1) — query its DOM there.
   const panelEval = (code) =>
     app.evaluate(async ({ webContents }, c) => {
-      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('dsgnPanel'))
+      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('praxisPanel'))
       if (!wc) return '__no_panel__'
       try { return await wc.executeJavaScript(c) } catch { return '__no_panel__' }
     }, code)
@@ -64,9 +64,36 @@ try {
       await new Promise((res) => setTimeout(res, 250))
     }
   }
-  // Tests assume the expanded card (a previous run may have collapsed it).
-  const expandPanel = () =>
-    panelEval("localStorage.setItem('dsgn.proppanel.collapsed','0'); document.querySelector('.proppanel__expand')?.click(); true")
+  // Tests assume the expanded card ON THE PROPS TAB. Both are persisted in the
+  // shared userData that direct `bun run test:*` runs use, so a previous run
+  // (or the style-edit suite / real-app use) may have collapsed the card or
+  // left the Styles tab active — and Radix unmounts inactive tab content, so a
+  // stale 'styles' tab would make every props-content wait time out. Retried:
+  // the island's webContents appears asynchronously, so a one-shot eval could
+  // run before it (or its React tree) exists.
+  const expandPanel = async () => {
+    const end = Date.now() + 10000
+    for (;;) {
+      const ok = await panelEval(`(() => {
+        localStorage.setItem('praxis.proppanel.collapsed', '0')
+        localStorage.setItem('praxis.island.tab', 'props')
+        document.querySelector('.proppanel__expand')?.click()
+        // If the island is already mounted on Styles, click Props (Radix
+        // TabsTrigger activates on mousedown — a bare .click() is not enough).
+        const t = [...document.querySelectorAll('.proppanel__tab')].find((b) => b.textContent.trim() === 'Props')
+        if (t && t.getAttribute('data-state') !== 'active') {
+          for (const type of ['mousedown', 'mouseup', 'click']) {
+            t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }))
+          }
+        }
+        return !!t && t.getAttribute('data-state') === 'active'
+      })()`)
+      if (ok === true) return
+      // Give up quietly — the caller's next waitPanel surfaces the real failure.
+      if (Date.now() > end) return
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  }
 
   // Make the native folder picker return our fixture.
   await app.evaluate(async ({ dialog }, fixturePath) => {
@@ -155,8 +182,8 @@ try {
       .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
     if (!wc) return 'no-preview'
     return wc.executeJavaScript(`(() => {
-      const host = document.querySelector('[data-dsgn-overlay]')
-      const bar = host?.shadowRoot?.querySelector('[data-dsgn-toolbar]')
+      const host = document.querySelector('[data-praxis-overlay]')
+      const bar = host?.shadowRoot?.querySelector('[data-praxis-toolbar]')
       if (!bar) return 'no-toolbar'
       if (getComputedStyle(bar).display === 'none') return 'hidden'
       // Scope to [data-kind] so the inline-input's Submit button (no data-kind)
@@ -172,6 +199,40 @@ try {
   }
   await win.screenshot({ path: join(artifacts, '07-select-handoff.png') })
 
+  // The selection badge names the element AND reports its rendered size, so the
+  // pick can be measured without opening the inspector.
+  const badgeText = await app.evaluate(async ({ webContents }) => {
+    const wc = webContents
+      .getAllWebContents()
+      .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
+    if (!wc) return 'no-preview'
+    return wc.executeJavaScript(`(() => {
+      const host = document.querySelector('[data-praxis-overlay]')
+      const badge = host?.shadowRoot?.querySelector('[data-praxis-selbadge]')
+      if (!badge) return 'no-badge'
+      if (getComputedStyle(badge).display === 'none') return 'hidden'
+      const r = document.getElementById('hero-title').getBoundingClientRect()
+      const want = Math.round(r.width) + ' × ' + Math.round(r.height)
+      const size = badge.querySelector('[data-praxis-size]')?.textContent ?? ''
+      return badge.textContent + '|' + (size === want ? 'ok' : 'want ' + want + ', got ' + size)
+    })()`)
+  })
+  if (!/^h1#hero-title\d+ × \d+\|ok$/.test(badgeText)) {
+    throw new Error(`selection badge should read the tag plus its size: ${badgeText}`)
+  }
+
+  // The overlay lives in the preview WebContentsView, so it's absent from the
+  // renderer screenshots above — capture its own pixels to eyeball the badge.
+  const overlayPng = await app.evaluate(async ({ webContents }) => {
+    const wc = webContents
+      .getAllWebContents()
+      .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
+    if (!wc) return null
+    const img = await wc.capturePage()
+    return img.toPNG().toString('base64')
+  })
+  if (overlayPng) writeFileSync(join(artifacts, '07b-selection-badge.png'), Buffer.from(overlayPng, 'base64'))
+
   // Clicking Edit-text arms the inline contentEditable on the selected leaf —
   // the discoverable form of the double-click gesture. (Our own overlay button,
   // so a JS .click() drives the same onToolbarButton path a user click does.)
@@ -181,7 +242,7 @@ try {
       .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
     if (!wc) return 'no-preview'
     return wc.executeJavaScript(`(() => {
-      const bar = document.querySelector('[data-dsgn-overlay]')?.shadowRoot?.querySelector('[data-dsgn-toolbar]')
+      const bar = document.querySelector('[data-praxis-overlay]')?.shadowRoot?.querySelector('[data-praxis-toolbar]')
       bar?.querySelector('[data-kind="edit"]')?.click()
       const el = document.querySelector('#hero-title')
       return el?.getAttribute('contenteditable') ?? 'off'
@@ -203,13 +264,13 @@ try {
 
   // The pill is removable — × clears the selection AND the in-preview toolbar.
   await win.click('.inspector__close')
-  await win.waitForFunction(() => !window.__dsgnSelection.getState().selected, { timeout: 5000 })
+  await win.waitForFunction(() => !window.__praxisSelection.getState().selected, { timeout: 5000 })
   const toolbarAfter = await app.evaluate(async ({ webContents }) => {
     const wc = webContents
       .getAllWebContents()
       .find((w) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(w.getURL()))
     return wc?.executeJavaScript(`(() => {
-      const bar = document.querySelector('[data-dsgn-overlay]')?.shadowRoot?.querySelector('[data-dsgn-toolbar]')
+      const bar = document.querySelector('[data-praxis-overlay]')?.shadowRoot?.querySelector('[data-praxis-toolbar]')
       return bar ? getComputedStyle(bar).display : 'gone'
     })()`)
   })
@@ -218,7 +279,7 @@ try {
   }
   // Re-select for the owner-jump flow below (the pick flow was proven above).
   await win.evaluate((src) => {
-    window.__dsgnSelection.getState().setSelected({
+    window.__praxisSelection.getState().setSelected({
       tag: 'h1', id: 'hero-title', classes: [], selector: '#hero-title',
       source: src, componentSource: null, text: 'Welcome',
       rect: { x: 0, y: 0, width: 0, height: 0 }, styles: {}
@@ -231,8 +292,8 @@ try {
   // Open the props island + the code drawer on the CURRENT selection — picking
   // the next element must reset both (a fresh pick shows just the toolbar).
   await win.evaluate(() => {
-    window.__dsgnPropsIsland.getState().setOpen(true)
-    window.__dsgnCodeDrawer.getState().open('src/components/Hero.tsx:7')
+    window.__praxisPropsIsland.getState().setOpen(true)
+    window.__praxisCodeDrawer.getState().open('src/components/Hero.tsx:7')
   })
 
   const GET_AMOUNT = `(() => { const el = document.querySelector('#amount'); if (!el) return null;
@@ -267,26 +328,26 @@ try {
   if (!pickedAmount) throw new Error('inspector never showed the host source for #amount')
 
   const resetState = await win.evaluate(() => ({
-    island: window.__dsgnPropsIsland.getState().open,
-    drawer: window.__dsgnCodeDrawer.getState().source
+    island: window.__praxisPropsIsland.getState().open,
+    drawer: window.__praxisCodeDrawer.getState().source
   }))
   if (resetState.island || resetState.drawer) {
     throw new Error(`a new pick must close island + drawer: ${JSON.stringify(resetState)}`)
   }
 
   // The store carries the forwarded component-instance source.
-  const cs = await win.evaluate(() => window.__dsgnSelection.getState().selected?.componentSource)
+  const cs = await win.evaluate(() => window.__praxisSelection.getState().selected?.componentSource)
   if (cs !== 'src/screens/Wallet.tsx:18') {
     throw new Error(`componentSource should be the instance call site, got "${cs}"`)
   }
   // The "edit owner component" affordance is offered (in the props island), and
   // re-points the selection.
-  await win.evaluate(() => window.__dsgnPropsIsland.getState().setOpen(true))
+  await win.evaluate(() => window.__praxisPropsIsland.getState().setOpen(true))
   await expandPanel()
   await waitPanel("!!document.querySelector('.proppanel__owner')")
   await panelEval("document.querySelector('.proppanel__owner').click(); true")
   await win.waitForFunction(
-    () => window.__dsgnSelection.getState().selected?.source === 'src/screens/Wallet.tsx:18',
+    () => window.__praxisSelection.getState().selected?.source === 'src/screens/Wallet.tsx:18',
     { timeout: 5000 }
   )
 

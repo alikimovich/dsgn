@@ -4,10 +4,14 @@
  * leaves a durable branch, and its diff applies back onto the live (possibly dirty)
  * working tree via 3-way patch — NOT `git merge` (which fails on uncommitted WIP).
  *
- * Asserts: create forks WIP without touching the main tree; two concurrent creates
- * are isolated; commit captures the authoritative file list; diff→apply lands the
- * change onto a DIRTY main tree; remove reclaims the checkout (keeping the branch);
- * pruneOrphans reclaims a leftover. Uses real temp git repos.
+ * Asserts: captureBase returns a real sha snapshotting live WIP; create forks WIP
+ * without touching the main tree; a custom branchName scheme (per-chat isolation)
+ * lands on the expected branch; two concurrent creates are isolated; commit captures
+ * the authoritative file list; diff→apply lands the change onto a DIRTY main tree;
+ * remove reclaims the checkout (keeping the branch); pruneOrphans reclaims leftovers
+ * and reports each as `{id, dirty, branch, repoRoot}` (dirty from `status --porcelain`,
+ * not commit success; branch/repoRoot captured before removal) and FOLDS a parked
+ * chat squash's recovery commit into one commit. Uses real temp git repos.
  *
  * Run with: bun run test:worktrees
  */
@@ -19,14 +23,15 @@ import {
   autoApplyWorktree,
   removeWorktree,
   branchPatch,
-  pruneOrphans
+  pruneOrphans,
+  captureBase
 } from '../src/main/worktrees.ts'
 import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const base = mkdtempSync(join(tmpdir(), 'dsgn-wt-'))
+const base = mkdtempSync(join(tmpdir(), 'praxis-wt-'))
 const repo = join(base, 'repo')
 const worktreesDir = join(base, 'worktrees')
 const tmpDir = join(base, 'tmp')
@@ -47,19 +52,23 @@ try {
   g(repo, 'config', 'user.email', 'test@local')
   const appFile = join(repo, 'App.tsx')
   writeFileSync(appFile, 'export const App = () => <div className="root">hi</div>\n')
+  // Real projects gitignore node_modules/.env, so the worktree's symlinks to them are
+  // ignored (never staged, never leaked into the live tree by an apply). Without this a
+  // clean orphan's dangling symlinks show as untracked → a false "dirty".
+  writeFileSync(join(repo, '.gitignore'), 'node_modules\n.env\n')
   g(repo, 'add', '-A')
   g(repo, 'commit', '-q', '-m', 'init')
 
   // Simulate the interactive main agent having UNCOMMITTED WIP in the live tree.
   writeFileSync(appFile, 'export const App = () => <div className="root">hi</div>\n// WIP\n')
-  // ...AND an UNTRACKED new file — the dsgn agent constantly creates files; the fork
+  // ...AND an UNTRACKED new file — the praxis agent constantly creates files; the fork
   // base must include these (git stash create would silently drop them).
   writeFileSync(join(repo, 'Untracked.tsx'), 'export const New = () => null\n')
   const dirtyBefore = readFileSync(appFile, 'utf8')
 
   // --- create: forks the WIP, and does NOT disturb the main tree ---
   const wtA = await createWorktree(repo, worktreesDir, { label: 'make it blue' })
-  ok(wtA.branch === 'dsgn/comment-' + wtA.id, `branch name: ${wtA.branch}`)
+  ok(wtA.branch === 'praxis/comment-' + wtA.id, `branch name: ${wtA.branch}`)
   ok(existsSync(wtA.path), 'worktree checkout exists')
   ok(readFileSync(appFile, 'utf8') === dirtyBefore, 'create did NOT touch the main working tree')
   // The worktree forked from the live WIP — tracked modification...
@@ -72,6 +81,22 @@ try {
     existsSync(join(wtA.path, 'Untracked.tsx')),
     'worktree base includes UNTRACKED live files (new components the agent just made)'
   )
+
+  // --- captureBase is exported and returns a real commit sha off the live tree ---
+  const captured = await captureBase(repo, join(base, '.index-capturebase-test'))
+  ok(/^[0-9a-f]{40}$/.test(captured), `captureBase returns a sha: ${captured}`)
+  ok(
+    g(repo, 'show', `${captured}:App.tsx`).includes('// WIP'),
+    'captureBase snapshot includes the live WIP'
+  )
+
+  // --- createWorktree honors a custom branchName scheme (per-chat isolation) ---
+  const wtChat = await createWorktree(repo, worktreesDir, { branchName: (id) => `chat-${id}` })
+  ok(
+    wtChat.branch === `praxis/chat-${wtChat.id}`,
+    `custom branchName lands on praxis/chat-<id>: ${wtChat.branch}`
+  )
+  await removeWorktree(repo, wtChat, {})
 
   // --- two concurrent creates are isolated (distinct dirs + branches) ---
   const [w1, w2] = await Promise.all([
@@ -93,10 +118,10 @@ try {
     'export const App = () => <div className="root accent">hi</div>\n// WIP\n'
   )
   writeFileSync(join(wtA.path, 'New.tsx'), 'export const New = () => null\n')
-  // A stray .dsgn write (a spawn runs bypassPermissions, so the sidecar deny is off)
-  // must be excluded from the commit — the sidecar is dsgn-managed, not the agent's.
-  mkdirSync(join(wtA.path, '.dsgn'), { recursive: true })
-  writeFileSync(join(wtA.path, '.dsgn', 'annotations.json'), '[{"sneaky":true}]\n')
+  // A stray .praxis write (a spawn runs bypassPermissions, so the sidecar deny is off)
+  // must be excluded from the commit — the sidecar is praxis-managed, not the agent's.
+  mkdirSync(join(wtA.path, '.praxis'), { recursive: true })
+  writeFileSync(join(wtA.path, '.praxis', 'annotations.json'), '[{"sneaky":true}]\n')
   const committed = await commitWorktree(wtA, 'make it blue')
   ok(committed.committed, 'commitWorktree committed')
   ok(
@@ -104,8 +129,8 @@ try {
     `committed files: ${JSON.stringify(committed.files)}`
   )
   ok(
-    !committed.files.some((f) => f.startsWith('.dsgn')),
-    `.dsgn must be excluded from a spawn commit: ${JSON.stringify(committed.files)}`
+    !committed.files.some((f) => f.startsWith('.praxis')),
+    `.praxis must be excluded from a spawn commit: ${JSON.stringify(committed.files)}`
   )
 
   // --- diff → apply onto the DIRTY live tree (3-way, tolerates WIP) ---
@@ -154,15 +179,80 @@ try {
   // branch — but SKIPS a checkout named as live (an active spawn this session) ---
   const orphan = await createWorktree(repo, worktreesDir, {})
   writeFileSync(join(orphan.path, 'Scratch.tsx'), 'leftover\n')
+  const orphanClean = await createWorktree(repo, worktreesDir, {}) // untouched — nothing to recover
   const live = await createWorktree(repo, worktreesDir, {}) // pretend this one is active
   const reclaimed = await pruneOrphans(repo, worktreesDir, new Set([live.id]))
-  ok(reclaimed.includes(orphan.id), `pruneOrphans reclaimed the orphan: ${JSON.stringify(reclaimed)}`)
+  const reclaimedOrphan = reclaimed.find((r) => r.id === orphan.id)
+  const reclaimedClean = reclaimed.find((r) => r.id === orphanClean.id)
+  ok(!!reclaimedOrphan, `pruneOrphans reclaimed the orphan: ${JSON.stringify(reclaimed)}`)
   ok(!existsSync(orphan.path), 'orphan checkout removed by prune')
   ok(existsSync(live.path), 'pruneOrphans must SKIP a live (active) spawn checkout')
-  ok(!reclaimed.includes(live.id), 'live spawn id not reclaimed')
+  ok(!reclaimed.some((r) => r.id === live.id), 'live spawn id not reclaimed')
+  // {id, dirty, branch, repoRoot} shape: dirty true for the orphan with uncommitted
+  // changes, false for the untouched one — checked via `status --porcelain`, not commit
+  // success/failure. branch + owning repoRoot are captured BEFORE the checkout is gone.
+  ok(reclaimedOrphan?.dirty === true, `dirty orphan reports dirty:true: ${JSON.stringify(reclaimedOrphan)}`)
+  ok(reclaimedOrphan?.branch === orphan.branch, `reclaimed reports the branch: ${JSON.stringify(reclaimedOrphan)}`)
+  ok(
+    !!reclaimedOrphan?.repoRoot && existsSync(join(reclaimedOrphan.repoRoot, '.git')),
+    `reclaimed reports the owning repoRoot: ${JSON.stringify(reclaimedOrphan)}`
+  )
+  ok(!!reclaimedClean, `pruneOrphans also reclaimed the clean orphan: ${JSON.stringify(reclaimed)}`)
+  ok(reclaimedClean?.dirty === false, `clean orphan reports dirty:false: ${JSON.stringify(reclaimedClean)}`)
   // The orphan's dirty work was committed to its branch before removal (not lost).
   ok(g(repo, 'show', `${orphan.branch}:Scratch.tsx`).includes('leftover'), 'orphan work recovered to its branch')
   await removeWorktree(repo, live, {})
+
+  // --- W2: a PARKED chat orphan (tip = cumulative praxis squash, a `chatpark-<id>` record
+  // exists) that crashed mid-turn must FOLD the recovery commit into that squash, so
+  // branchPatch stays the full diff (a stacked recovery commit would hide the parked work
+  // from the record's Apply). The fold is gated on the `isParked` predicate. ---
+  const chatWt = await createWorktree(repo, worktreesDir, { branchName: (i) => `chat-${i}` })
+  // Turn 1 parked: the isolation layer squashes it into ONE praxis commit off base.
+  writeFileSync(join(chatWt.path, 'Parked.tsx'), 'export const P = () => null\n')
+  const pc = await commitWorktree(chatWt, 'parked turn one')
+  ok(pc.committed && pc.files.includes('Parked.tsx'), 'parked squash committed')
+  // Turn 2 crashed mid-run — leaves uncommitted WIP on top of the parked squash.
+  writeFileSync(join(chatWt.path, 'Parked.tsx'), 'export const P = () => null\n// turn two\n')
+  const chatReclaim = await pruneOrphans(repo, worktreesDir, new Set(), (id) => id === chatWt.id)
+  const rc = chatReclaim.find((r) => r.id === chatWt.id)
+  ok(rc?.dirty === true && rc?.branch === chatWt.branch, `chat orphan reclaimed: ${JSON.stringify(rc)}`)
+  // Folded → exactly ONE commit off base, carrying BOTH the parked turn and turn two.
+  const chatRevs = g(repo, 'rev-list', `${chatWt.baseSha}..${chatWt.branch}`).trim().split('\n').filter(Boolean)
+  ok(chatRevs.length === 1, `parked squash + recovery folded into one commit: ${chatRevs.length}`)
+  ok(g(repo, 'show', `${chatWt.branch}:Parked.tsx`).includes('turn two'), 'the crashed turn-two WIP was recovered')
+  const chatBp = await branchPatch(repo, chatWt.branch)
+  ok(/Parked\.tsx/.test(chatBp) && /turn two/.test(chatBp), 'branchPatch still carries the full parked diff')
+  await removeWorktree(repo, chatWt, { keepBranch: false })
+
+  // --- W2 regression: a chat orphan whose tip is a previously-MERGED turn (baseSha has
+  // ADVANCED to that tip, NO park record → NOT parked) that crashed mid-turn must NOT fold.
+  // Folding would splice the already-live merged commit into the recovery, so its Apply
+  // would re-apply live content and surface spurious 3-way conflicts. branchPatch must carry
+  // ONLY the genuinely-unmerged crash WIP, committed ON TOP of the merged tip. ---
+  const mergedWt = await createWorktree(repo, worktreesDir, { branchName: (i) => `chat-${i}` })
+  // Turn 1 merged: one commit, then baseSha advances to that tip (mirrors afterTurn's
+  // base-advance on a successful auto-apply). This is the merged content — already live.
+  writeFileSync(join(mergedWt.path, 'Merged.tsx'), 'export const M = 1\n')
+  const mc = await commitWorktree(mergedWt, 'merged turn one')
+  ok(mc.committed && mc.files.includes('Merged.tsx'), 'merged turn committed')
+  const mergedTip = g(mergedWt.path, 'rev-parse', 'HEAD').trim()
+  mergedWt.baseSha = mergedTip // baseSha advanced to the merged tip (nothing pending now)
+  // Turn 2 crashed mid-run — uncommitted WIP in a NEW file on top of the merged tip.
+  writeFileSync(join(mergedWt.path, 'Crash.tsx'), 'export const C = 2\n')
+  // No `chatpark-<id>` record for this worktree → predicate returns false → no fold.
+  const mergedReclaim = await pruneOrphans(repo, worktreesDir, new Set(), () => false)
+  const mrc = mergedReclaim.find((r) => r.id === mergedWt.id)
+  ok(mrc?.dirty === true && mrc?.branch === mergedWt.branch, `merged-tip orphan reclaimed: ${JSON.stringify(mrc)}`)
+  // NOT folded → recovery commit sits ON TOP of the merged tip (base..branch = 2 commits).
+  const mergedRevs = g(repo, 'rev-list', `${mergedTip}~1..${mergedWt.branch}`).trim().split('\n').filter(Boolean)
+  ok(mergedRevs.length === 2, `merged tip preserved + recovery on top (not folded): ${mergedRevs.length}`)
+  // The merged tip's parent IS the merged commit — so branchPatch (branch^..branch) carries
+  // ONLY the crash WIP, NOT the already-live Merged.tsx (which would cause re-apply conflicts).
+  const mergedBp = await branchPatch(repo, mergedWt.branch)
+  ok(/Crash\.tsx/.test(mergedBp), 'branchPatch carries the genuinely-unmerged crash WIP')
+  ok(!/Merged\.tsx/.test(mergedBp), 'branchPatch does NOT re-include the already-merged (live) content')
+  await removeWorktree(repo, mergedWt, { keepBranch: false })
 
   // --- empty patch applies as a no-op success ---
   const noop = await applyToWorkingTree(repo, '', tmpDir)
@@ -183,13 +273,13 @@ try {
   g2('add', '-A')
   g2('commit', '-qm', 'init')
   const wt2 = await createWorktree(repo2, worktreesDir, { label: 'edit readme' })
-  writeFileSync(join(wt2.path, 'README.md'), 'hello DSGN\n') // the "agent" edits in the worktree
+  writeFileSync(join(wt2.path, 'README.md'), 'hello PRAXIS\n') // the "agent" edits in the worktree
   const c2 = await commitWorktree(wt2, 'edit readme')
   const auto = await autoApplyWorktree(repo2, wt2, c2.files)
   ok(auto.applied, `autoApply should apply onto an unchanged live tree: ${JSON.stringify(auto)}`)
-  ok(readFileSync(join(repo2, 'README.md'), 'utf8') === 'hello DSGN\n', 'autoApply wrote the live file')
+  ok(readFileSync(join(repo2, 'README.md'), 'utf8') === 'hello PRAXIS\n', 'autoApply wrote the live file')
   ok(
-    auto.edits.length === 1 && auto.edits[0].before === 'hello world\n' && auto.edits[0].after === 'hello DSGN\n',
+    auto.edits.length === 1 && auto.edits[0].before === 'hello world\n' && auto.edits[0].after === 'hello PRAXIS\n',
     `autoApply returns before/after for the undo history: ${JSON.stringify(auto.edits)}`
   )
 

@@ -1,6 +1,6 @@
 /**
  * Token-manifest scaffold test — through real IPC (no dev server/auth):
- *  - a token-less project gets a starter `.dsgn/tokens.json` (source → manifest).
+ *  - a token-less project gets a starter `.praxis/tokens.json` (source → manifest).
  *  - scaffolding is idempotent (second call writes nothing).
  *  - it never shadows a live source: a Tailwind project is left untouched.
  *  - it never clobbers an existing manifest.
@@ -15,7 +15,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const work = mkdtempSync(join(tmpdir(), 'dsgn-tokens-'))
+const work = mkdtempSync(join(tmpdir(), 'praxis-tokens-'))
 
 const project = (name) => {
   const dir = join(work, name)
@@ -35,9 +35,9 @@ writeFileSync(
 )
 
 const manifestDir = project('manifest')
-mkdirSync(join(manifestDir, '.dsgn'), { recursive: true })
+mkdirSync(join(manifestDir, '.praxis'), { recursive: true })
 const existingManifest = JSON.stringify({ palette: { accent: '#ff0000' } }, null, 2)
-writeFileSync(join(manifestDir, '.dsgn', 'tokens.json'), existingManifest)
+writeFileSync(join(manifestDir, '.praxis', 'tokens.json'), existingManifest)
 
 let app
 try {
@@ -48,7 +48,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   const scaffold = (dir) => win.evaluate((d) => window.api.tokens.scaffold(d), dir)
@@ -58,7 +58,7 @@ try {
   const first = await scaffold(emptyDir)
   assert(first.ok && first.written, `empty scaffold should write: ${JSON.stringify(first)}`)
   assert(first.set?.source === 'manifest', `expected manifest source: ${JSON.stringify(first.set)}`)
-  assert(existsSync(join(emptyDir, '.dsgn', 'tokens.json')), 'tokens.json not on disk')
+  assert(existsSync(join(emptyDir, '.praxis', 'tokens.json')), 'tokens.json not on disk')
   const groups = (first.set?.groups ?? []).map((g) => g.name)
   for (const g of ['colors', 'spacing', 'radius', 'fontSize']) {
     assert(groups.includes(g), `starter missing "${g}" group; got ${groups.join(',')}`)
@@ -71,46 +71,46 @@ try {
   const second = await scaffold(emptyDir)
   assert(second.ok && !second.written, `scaffold should be idempotent: ${JSON.stringify(second)}`)
 
-  // Tailwind project → never shadowed; nothing written, no .dsgn created.
+  // Tailwind project → never shadowed; nothing written, no .praxis created.
   const tw = await scaffold(twDir)
   assert(tw.ok && !tw.written, `tailwind should not be scaffolded: ${JSON.stringify(tw)}`)
   assert(tw.set?.source === 'tailwind', `tailwind set expected: ${JSON.stringify(tw.set)}`)
-  assert(!existsSync(join(twDir, '.dsgn')), 'tailwind project should not get a .dsgn dir')
+  assert(!existsSync(join(twDir, '.praxis')), 'tailwind project should not get a .praxis dir')
 
   // Existing manifest → never clobbered.
   const man = await scaffold(manifestDir)
   assert(man.ok && !man.written, `existing manifest must be preserved: ${JSON.stringify(man)}`)
-  const onDisk = readFileSync(join(manifestDir, '.dsgn', 'tokens.json'), 'utf8')
+  const onDisk = readFileSync(join(manifestDir, '.praxis', 'tokens.json'), 'utf8')
   assert(onDisk === existingManifest, 'existing manifest was modified')
 
   // --- UI: the offer card renders and "Add tokens" wires through to a write. ---
   const uiDir = project('ui')
   await win.evaluate((d) => {
-    window.__dsgnSession.getState().setProjectRoot(d)
-    window.__dsgnTokens.getState().reset()
-    window.__dsgnTokens.getState().setOfferNeeded(true)
+    window.__praxisSession.getState().setProjectRoot(d)
+    window.__praxisTokens.getState().reset()
+    window.__praxisTokens.getState().setOfferNeeded(true)
   }, uiDir)
   await win.waitForSelector('text=Add a starter design-token palette?', { timeout: 5000 })
   await win.click('.setup__yes')
   await win.waitForFunction(
     () =>
-      window.__dsgnTokens.getState().offerNeeded === false &&
-      window.__dsgnTokens.getState().set?.source === 'manifest',
+      window.__praxisTokens.getState().offerNeeded === false &&
+      window.__praxisTokens.getState().set?.source === 'manifest',
     { timeout: 10000 }
   )
-  assert(existsSync(join(uiDir, '.dsgn', 'tokens.json')), 'UI accept did not write the manifest')
+  assert(existsSync(join(uiDir, '.praxis', 'tokens.json')), 'UI accept did not write the manifest')
 
   // --- UI: dismiss hides the card and suppresses it (offerDismissed sticks). ---
   await win.evaluate(() => {
-    window.__dsgnTokens.getState().reset()
-    window.__dsgnTokens.getState().setOfferNeeded(true)
+    window.__praxisTokens.getState().reset()
+    window.__praxisTokens.getState().setOfferNeeded(true)
   })
   await win.waitForSelector('text=Add a starter design-token palette?', { timeout: 5000 })
   await win.click('.setup__no')
   await win.waitForFunction(
     () =>
-      window.__dsgnTokens.getState().offerDismissed === true &&
-      window.__dsgnTokens.getState().offerNeeded === false,
+      window.__praxisTokens.getState().offerDismissed === true &&
+      window.__praxisTokens.getState().offerNeeded === false,
     { timeout: 5000 }
   )
   const cardGone = await win.evaluate(

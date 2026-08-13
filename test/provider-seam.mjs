@@ -33,16 +33,16 @@ try {
       // machines where the real CLIs resolve (a user-installed `gemini`, or the
       // codex shim that `bun run` puts on PATH via node_modules/.bin) — this
       // test asserts the fail-soft behavior, not a live provider turn.
-      DSGN_CODEX_BIN: join(root, 'test', 'fixtures', 'no-such-codex-bin'),
-      DSGN_GEMINI_BIN: join(root, 'test', 'fixtures', 'no-such-gemini-bin'),
+      PRAXIS_CODEX_BIN: join(root, 'test', 'fixtures', 'no-such-codex-bin'),
+      PRAXIS_GEMINI_BIN: join(root, 'test', 'fixtures', 'no-such-gemini-bin'),
       // Gemini is gated off by default (no SDK dep — see backends/index.ts); opt
       // in so `provider: 'gemini'` actually reaches the gemini backend under test.
-      DSGN_EXPERIMENTAL_GEMINI: '1'
+      PRAXIS_EXPERIMENTAL_GEMINI: '1'
     }
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
   const assert = (cond, msg) => {
     if (!cond) throw new Error(msg)
@@ -61,7 +61,7 @@ try {
       .waitForFunction(() => window.__ev.some((e) => e.type === 'done'), { timeout: 20000 })
       .catch(() => {})
 
-  // Select the Codex backend and send a turn. DSGN_CODEX_BIN (set at launch
+  // Select the Codex backend and send a turn. PRAXIS_CODEX_BIN (set at launch
   // above) makes the CLI probe fail, so the provider must emit an error + done
   // rather than throwing.
   await win.evaluate((p) => window.api.agent.openProject(p, { provider: 'codex' }), A)
@@ -79,7 +79,7 @@ try {
   )
   assert(err.projectKey && err.projectKey === done.projectKey, 'events tagged with the project key')
 
-  // Gemini dispatch: DSGN_GEMINI_BIN (set at launch above) points at a
+  // Gemini dispatch: PRAXIS_GEMINI_BIN (set at launch above) points at a
   // nonexistent binary, so the subprocess spawn fails regardless of whether a
   // real `gemini` is on PATH — the provider must still emit error + done.
   await win.evaluate((p) => window.api.agent.closeProject(p), A)

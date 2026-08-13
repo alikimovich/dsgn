@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
+import { contextBridge, type IpcRendererEvent, ipcRenderer, webUtils } from 'electron'
 import type {
   AgentEvent,
   AgentOptions,
@@ -7,33 +7,54 @@ import type {
   Bounds,
   BranchResult,
   CommentMode,
-  Diagnosis,
+  ControlPanelManifest,
   DetectedProject,
   DevServerInfo,
-  PanelAction,
-  PanelState,
-  DsgnApi,
+  Diagnosis,
   FeedbackInput,
   FeedbackResult,
+  FileOpResult,
   Framework,
+  GithubConnectOptions,
+  GithubConnectResult,
+  GithubStatus,
   ImageAttachment,
+  LayerFingerprint,
+  LayersSnapshot,
+  ModelCatalogInput,
+  ModelCatalogResult,
+  ModelChoice,
+  MoveNodeRequest,
+  MoveNodeResult,
+  PanelAction,
+  PanelState,
   PermissionMode,
+  PraxisApi,
   PreviewComment,
+  ProjectIcon,
+  ProjectMemory,
   PropEdit,
   PropEditResult,
-  QuestionAnswers,
-  TokenEdit,
   PropInspection,
+  ProviderConnection,
+  ProviderConnectionInput,
   PublishResult,
+  QuestionAnswers,
   RecentMenuEntry,
+  ResolvedControlPanel,
   RunningDevServer,
   RunningSimulator,
   SelectedElement,
   SessionRecord,
+  SetupProbe,
   SetupResult,
+  SimPreflight,
   SourceView,
   SourceWriteResult,
-  SimPreflight,
+  StyleEdit,
+  StyleEditResult,
+  StyleReadResult,
+  TokenEdit,
   TokenScaffoldResult,
   TokenSet,
   UndoResult,
@@ -41,7 +62,7 @@ import type {
   WorkspaceSnapshot
 } from '../shared/api'
 
-const api: DsgnApi = {
+const api: PraxisApi = {
   onMenuAction: (cb: (action: string) => void): (() => void) => {
     const listener = (_e: IpcRendererEvent, action: string): void => cb(action)
     ipcRenderer.on('menu:action', listener)
@@ -66,7 +87,8 @@ const api: DsgnApi = {
       const listener = (_e: IpcRendererEvent, root: string): void => cb(root)
       ipcRenderer.on('menu:open-recent', listener)
       return () => ipcRenderer.removeListener('menu:open-recent', listener)
-    }
+    },
+    nativeEdit: (cmd: 'undo' | 'redo'): void => ipcRenderer.send('menu:native-edit', cmd)
   },
   preview: {
     setBounds: (bounds: Bounds): void => ipcRenderer.send('preview:set-bounds', bounds),
@@ -148,6 +170,7 @@ const api: DsgnApi = {
       ipcRenderer.on('panel:state', listener)
       return () => ipcRenderer.removeListener('panel:state', listener)
     },
+    requestState: (): void => ipcRenderer.send('panel:request-state'),
     action: (action: PanelAction): void => ipcRenderer.send('panel:action', action),
     onAction: (cb: (action: PanelAction) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, action: PanelAction): void => cb(action)
@@ -166,6 +189,7 @@ const api: DsgnApi = {
   project: {
     pick: (): Promise<string | null> => ipcRenderer.invoke('project:pick'),
     detect: (root: string): Promise<DetectedProject> => ipcRenderer.invoke('project:detect', root),
+    icon: (root: string): Promise<ProjectIcon | null> => ipcRenderer.invoke('project:icon', root),
     pickNew: (): Promise<string | null> => ipcRenderer.invoke('project:pick-new'),
     create: (root: string): Promise<{ ok: boolean; root?: string; error?: string }> =>
       ipcRenderer.invoke('project:create', root)
@@ -234,6 +258,52 @@ const api: DsgnApi = {
     apply: (root: string, edit: { source: string; text: string }): Promise<PropEditResult> =>
       ipcRenderer.invoke('text:apply', root, edit)
   },
+  styles: {
+    apply: (root: string, edit: StyleEdit): Promise<StyleEditResult> =>
+      ipcRenderer.invoke('styles:apply', root, edit),
+    preview: (prop: string, value: string): void =>
+      ipcRenderer.send('styles:preview', { prop, value }),
+    clearPreview: (prop?: string): void => ipcRenderer.send('styles:clear-preview', { prop }),
+    read: (props: string[]): Promise<StyleReadResult | null> =>
+      ipcRenderer.invoke('styles:read', props),
+    replay: (prop: string, from: string, to: string): void =>
+      ipcRenderer.send('styles:replay', { prop, from, to })
+  },
+  layers: {
+    read: (): Promise<LayersSnapshot | null> => ipcRenderer.invoke('layers:read'),
+    onChanged: (cb: () => void): (() => void) => {
+      const listener = (): void => cb()
+      ipcRenderer.on('layers:changed', listener)
+      return () => ipcRenderer.removeListener('layers:changed', listener)
+    },
+    select: (path: number[], fingerprint: LayerFingerprint): void =>
+      ipcRenderer.send('layers:select', { path, fingerprint }),
+    hover: (path: number[] | null, fingerprint: LayerFingerprint | null): void =>
+      ipcRenderer.send('layers:hover', path && fingerprint ? { path, fingerprint } : null),
+    setWatch: (on: boolean): void => ipcRenderer.send('layers:set-watch', on),
+    move: (root: string, req: MoveNodeRequest): Promise<MoveNodeResult> =>
+      ipcRenderer.invoke('layers:move', root, req)
+  },
+  controls: {
+    get: (root: string, q: { files: string[]; component?: string }): Promise<ResolvedControlPanel[]> =>
+      ipcRenderer.invoke('controls:get', root, q),
+    list: (root: string): Promise<ControlPanelManifest[]> =>
+      ipcRenderer.invoke('controls:list', root),
+    remove: (root: string, id: string): Promise<void> =>
+      ipcRenderer.invoke('controls:remove', root, id),
+    applyLiteral: (
+      root: string,
+      panelId: string,
+      paramId: string,
+      value: string | number | boolean
+    ): Promise<StyleEditResult> =>
+      ipcRenderer.invoke('controls:apply-literal', root, panelId, paramId, value),
+    onUpdated: (cb: (root: string) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, payload: { root: string }): void => cb(payload.root)
+      ipcRenderer.on('controls:updated', listener)
+      return () => ipcRenderer.removeListener('controls:updated', listener)
+    }
+  },
   source: {
     read: (root: string, source: string): Promise<SourceView | null> =>
       ipcRenderer.invoke('source:read', root, source),
@@ -251,6 +321,13 @@ const api: DsgnApi = {
     popout: (root: string, source: string): Promise<void> =>
       ipcRenderer.invoke('source:popout', root, source),
     closeWindow: (): Promise<void> => ipcRenderer.invoke('source:close-window'),
+    tree: (root: string): Promise<string[]> => ipcRenderer.invoke('source:tree', root),
+    createFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:create-file', root, path),
+    renameFile: (root: string, from: string, to: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:rename-file', root, from, to),
+    deleteFile: (root: string, path: string): Promise<FileOpResult> =>
+      ipcRenderer.invoke('source:delete-file', root, path),
     onNavigate: (cb: (source: string) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, source: string): void => cb(source)
       ipcRenderer.on('editor:navigate', listener)
@@ -261,7 +338,11 @@ const api: DsgnApi = {
     undo: (root: string): Promise<UndoResult> => ipcRenderer.invoke('edit:undo', root),
     redo: (root: string): Promise<UndoResult> => ipcRenderer.invoke('edit:redo', root),
     can: (root: string): Promise<{ undo: boolean; redo: boolean }> =>
-      ipcRenderer.invoke('edit:can', root)
+      ipcRenderer.invoke('edit:can', root),
+    revert: (root: string, group: string): Promise<UndoResult> =>
+      ipcRenderer.invoke('edit:revert', root, group),
+    canRevert: (root: string, group: string): Promise<boolean> =>
+      ipcRenderer.invoke('edit:can-revert', root, group)
   },
   tokens: {
     detect: (root: string): Promise<TokenSet> => ipcRenderer.invoke('tokens:detect', root),
@@ -286,7 +367,13 @@ const api: DsgnApi = {
     ship: (root: string, summary?: string[], mode?: 'merge' | 'pr'): Promise<PublishResult> =>
       ipcRenderer.invoke('publish:ship', root, summary, mode)
   },
+  github: {
+    status: (root: string): Promise<GithubStatus> => ipcRenderer.invoke('github:status', root),
+    connect: (root: string, opts: GithubConnectOptions): Promise<GithubConnectResult> =>
+      ipcRenderer.invoke('github:connect', root, opts)
+  },
   setup: {
+    detect: (root: string): Promise<SetupProbe> => ipcRenderer.invoke('setup:detect', root),
     scaffold: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:scaffold', root),
     uninstall: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:uninstall', root)
   },
@@ -309,18 +396,28 @@ const api: DsgnApi = {
       options?: AgentOptions
     ): Promise<{ ok: boolean; error?: string }> =>
       ipcRenderer.invoke('agent:restart-chat', root, sessionKey, options),
+    clearMainContext: (root: string): Promise<{ ok: boolean; error?: string }> =>
+      ipcRenderer.invoke('agent:clear-main-context', root),
     resumeSession: (
       root: string,
-      recordId: string
+      recordId: string,
+      options?: AgentOptions
     ): Promise<{ ok: boolean; sessionKey?: string; error?: string }> =>
-      ipcRenderer.invoke('agent:resume-session', root, recordId),
+      ipcRenderer.invoke('agent:resume-session', root, recordId, options),
     closeChat: (
       root: string,
       sessionKey: string
     ): Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }> =>
       ipcRenderer.invoke('agent:close-chat', root, sessionKey),
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('agent:rename-chat', sessionKey, title),
     send: (text: string, images?: ImageAttachment[]): Promise<void> =>
       ipcRenderer.invoke('agent:send', text, images),
+    saveAttachment: (image: ImageAttachment, name?: string): Promise<string> =>
+      ipcRenderer.invoke('attachments:save', image, name),
     setModel: (model: string): Promise<void> => ipcRenderer.invoke('agent:set-model', model),
     setPermissionMode: (mode: PermissionMode): Promise<void> =>
       ipcRenderer.invoke('agent:set-permission-mode', mode),
@@ -334,9 +431,10 @@ const api: DsgnApi = {
     spawnComment: (
       root: string,
       text: string,
+      parentSessionKey: string,
       options?: AgentOptions
     ): Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }> =>
-      ipcRenderer.invoke('agent:spawn-comment', root, text, options),
+      ipcRenderer.invoke('agent:spawn-comment', root, text, parentSessionKey, options),
     spawnInterrupt: (spawnId: string): Promise<void> =>
       ipcRenderer.invoke('agent:spawn-interrupt', spawnId),
     spawnApply: (
@@ -353,6 +451,9 @@ const api: DsgnApi = {
       recordId: string
     ): Promise<{ ok: boolean; prUrl?: string; error?: string }> =>
       ipcRenderer.invoke('agent:spawn-pr', root, branch, title, recordId),
+    resolveConflict: (): Promise<{ ok: boolean; conflicted: string[]; prompt?: string; error?: string }> =>
+      ipcRenderer.invoke('agent:resolve-conflict'),
+    discardConflict: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:discard-conflict'),
     onEvent: (cb: (event: AgentEvent) => void): (() => void) => {
       const listener = (_e: IpcRendererEvent, event: AgentEvent): void => cb(event)
       ipcRenderer.on('agent:event', listener)
@@ -361,9 +462,30 @@ const api: DsgnApi = {
     workspaceSnapshot: (): Promise<WorkspaceSnapshot> =>
       ipcRenderer.invoke('agent:workspace-snapshot')
   },
+  projectMemory: {
+    get: (root: string): Promise<ProjectMemory> => ipcRenderer.invoke('project-memory:get', root),
+    set: (root: string, content: string): Promise<ProjectMemory> =>
+      ipcRenderer.invoke('project-memory:set', root, content)
+  },
+  providers: {
+    list: (): Promise<ProviderConnection[]> => ipcRenderer.invoke('providers:list'),
+    save: (
+      input: ProviderConnectionInput
+    ): Promise<{ ok: boolean; connection?: ProviderConnection; error?: string }> =>
+      ipcRenderer.invoke('providers:save', input),
+    remove: (id: string): Promise<void> => ipcRenderer.invoke('providers:remove', id),
+    catalog: (input: ModelCatalogInput): Promise<ModelCatalogResult> =>
+      ipcRenderer.invoke('providers:catalog', input),
+    choices: (): Promise<ModelChoice[]> => ipcRenderer.invoke('providers:choices')
+  },
   sessions: {
     list: (root: string): Promise<SessionRecord[]> => ipcRenderer.invoke('sessions:list', root),
     get: (id: string): Promise<SessionRecord | null> => ipcRenderer.invoke('sessions:get', id),
+    rename: (
+      id: string,
+      title: string
+    ): Promise<{ ok: boolean; title?: string; error?: string }> =>
+      ipcRenderer.invoke('sessions:rename', id, title),
     remove: (id: string): Promise<void> => ipcRenderer.invoke('sessions:remove', id)
   },
   feedback: {

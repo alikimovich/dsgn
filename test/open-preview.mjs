@@ -79,7 +79,7 @@ try {
   }
 
   // Activity console captured the open sequence (detect → server → preview → agent).
-  await win.evaluate(() => window.__dsgnLog.getState().setOpen(true))
+  await win.evaluate(() => window.__praxisLog.getState().setOpen(true))
   await win.waitForSelector('.console__line', { timeout: 5000 })
   const logText = await win.evaluate(() =>
     [...document.querySelectorAll('.console__text')].map((e) => e.textContent).join('\n')

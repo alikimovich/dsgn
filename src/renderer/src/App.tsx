@@ -8,11 +8,18 @@ import PreviewUrl from './components/PreviewUrl'
 import CodeDrawer from './components/CodeDrawer'
 import SessionReview from './components/SessionReview'
 import FeedbackDialog from './components/FeedbackDialog'
+import ConnectDialog from './components/ConnectDialog'
+import SettingsDialog from './components/SettingsDialog'
+import ProjectMemoryDialog from './components/ProjectMemoryDialog'
+import { useProviders } from './providers-store'
 import {
+  agentOptionsFor,
+  chatAgentSettingsFromSession,
   describeSelectionForPrompt,
   chatAgentSettingsFor,
-  useFeedback,
+  chatModelLabel,
   isAuthError,
+  resumeChatSettings,
   messagesFromTranscript,
   oneLine,
   toAgentOptions,
@@ -35,6 +42,7 @@ import {
   usePreviewFreeze,
   openWithPreviewFreeze,
   usePublishMode,
+  useGithub,
   useRecents,
   usePanelInset,
   useCodeDrawer,
@@ -43,8 +51,9 @@ import {
   type ProjectEntry
 } from './store'
 import { projectKey } from '../../shared/projectKey'
+import { controlsPrompt } from './lib/controls-prompt'
 import { restoreWorkspace, type RestoreDeps } from './restore'
-import { MonitorSmartphone, PanelLeft } from 'lucide-react'
+import { Code2, Maximize2, Minimize2, MonitorSmartphone, PanelLeft } from 'lucide-react'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -61,11 +70,16 @@ import type {
   Framework,
   PreviewComment,
   PreviewKind,
+  ResolvedControlPanel,
   SessionRecord
 } from '../../shared/api'
 
 const MIN_CHAT_WIDTH = 320
 const MAX_CHAT_WIDTH = 760
+
+/** A `data-praxis-source` stamp's repo-relative file ("path/File.tsx:12:3" →
+ *  "path/File.tsx") — control-panel manifests are keyed by file, not line. */
+const fileOf = (stamp: string): string => stamp.replace(/:\d+(?::\d+)?$/, '')
 
 type Status =
   | { kind: 'idle' }
@@ -94,6 +108,7 @@ export default function App(): React.JSX.Element {
   const [publishing, setPublishing] = useState(false)
   const viewport = useViewport((s) => s.viewport)
   const publishMode = usePublishMode((s) => s.mode)
+  const githubStatus = useGithub((s) => s.status)
   const recents = useRecents((s) => s.recents)
   // Boot restore deps (App closures), kept current for the once-on-mount effect.
   const restoreDepsRef = useRef<RestoreDeps | null>(null)
@@ -124,8 +139,61 @@ export default function App(): React.JSX.Element {
   const propsIslandOpen = usePropsIsland((s) => s.open)
   const projectRoot = useSession((s) => s.projectRoot)
   const drawerSource = useCodeDrawer((s) => s.source)
+
+  // Custom Controls (v10): the selection's AI-surfaced panels, fetched here
+  // (the island is stateless — PanelHost pushes these inside panel:state).
+  // Re-fetched on selection/component/project change, on controls:updated
+  // (the agent's define_controls tool saved a manifest), and on agent `done`
+  // (a turn's worktree auto-merge may have landed the instrumented source).
+  const [islandControls, setIslandControls] = useState<ResolvedControlPanel[] | null>(null)
+  // Latest fetch wins — a slow response for a previous selection must not
+  // overwrite the current one's panels.
+  const controlsSeqRef = useRef(0)
+  const islandControlsRef = useRef<ResolvedControlPanel[] | null>(null)
+  islandControlsRef.current = islandControls
+  const fetchControls = async (): Promise<void> => {
+    const root = useSession.getState().projectRoot
+    const sel = useSelection.getState()
+    const el = sel.selected
+    const seq = ++controlsSeqRef.current
+    // Two-stamp file match: the element's own source file OR its component
+    // call site's — panels surface whether the user picked the instance or a
+    // plain DOM element inside it.
+    const files = el
+      ? [...new Set([el.source, el.componentSource].filter((s): s is string => !!s).map(fileOf))]
+      : []
+    if (!root || files.length === 0) {
+      setIslandControls(null)
+      return
+    }
+    try {
+      const res = await window.api.controls.get(root, {
+        files,
+        component: sel.inspection?.component
+      })
+      if (seq === controlsSeqRef.current) setIslandControls(res)
+    } catch {
+      if (seq === controlsSeqRef.current) setIslandControls(null)
+    }
+  }
+  // Once-mounted subscriptions (onUpdated, agent onEvent) call through the ref
+  // so they see the current closure — the actionsRef pattern.
+  const fetchControlsRef = useRef(fetchControls)
+  fetchControlsRef.current = fetchControls
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-fetch keys on the selection, the inspected component, and the project — nothing else.
+  useEffect(() => {
+    void fetchControlsRef.current()
+  }, [selected, inspection?.component, projectRoot])
+  useEffect(
+    () =>
+      window.api.controls.onUpdated((root) => {
+        if (root === useSession.getState().projectRoot) void fetchControlsRef.current()
+      }),
+    []
+  )
   const openCount = useWorkspace((s) => s.projects.length)
   const railCollapsed = useWorkspace((s) => s.collapsed)
+  const chatHidden = useWorkspace((s) => s.chatHidden)
   const branch = useSession((s) => s.branch)
   const [editingBranch, setEditingBranch] = useState(false)
   const [branches, setBranches] = useState<string[]>([])
@@ -142,6 +210,7 @@ export default function App(): React.JSX.Element {
   }
   // v5-D: the past session open for review (rendered as a modal over the panes).
   const [reviewing, setReviewing] = useState<SessionRecord | null>(null)
+  const [memoryTarget, setMemoryTarget] = useState<{ root: string; name: string } | null>(null)
   // The review modal is renderer DOM; the native preview WebContentsView paints
   // ABOVE it (same reason PropPanel reserves an inset strip). Freeze-frame the
   // preview while the modal is open — the snapshot <img> keeps it visually in
@@ -164,7 +233,7 @@ export default function App(): React.JSX.Element {
   const setAuthNeeded = useSession((s) => s.setAuthNeeded)
   const logOpen = useLog((s) => s.open)
 
-  // Rename / switch the working branch (name is coerced to dsgn/<…> in main).
+  // Rename / switch the working branch (name is coerced to praxis/<…> in main).
   const changeBranch = async (name: string): Promise<void> => {
     setEditingBranch(false)
     const root = useSession.getState().projectRoot
@@ -188,7 +257,7 @@ export default function App(): React.JSX.Element {
     const root = useSession.getState().projectRoot
     if (root) void window.api.git.list(root).then((r) => setBranches(r.branches))
   }
-  // Check out an EXISTING branch by exact name (the dropdown) — no dsgn/ coercion.
+  // Check out an EXISTING branch by exact name (the dropdown) — no praxis/ coercion.
   const switchToBranch = async (b: string): Promise<void> => {
     const root = useSession.getState().projectRoot
     if (!root || b === branch) return
@@ -242,13 +311,31 @@ export default function App(): React.JSX.Element {
         const session = useSession.getState()
         if (event.type === 'commands') {
           session.setSlashCommands(event.commands)
-        } else if (event.type === 'error' && isAuthError(event.message)) {
-          // The onboarding banner is Claude-specific (setup-token / claude login);
-          // Codex gets its own inline `codex login` hint. Raise whichever matches
-          // the active backend — never the Claude banner for a Codex failure. (v7)
-          if ((session.provider ?? 'claude') === 'claude') session.setAuthNeeded(true)
-          else if (session.provider === 'codex') session.setCodexAuthNeeded(true)
+        } else if (event.type === 'error') {
+          // The worktree merges back on error too ("salvage interrupted edits",
+          // agent.ts), so an errored turn can still have landed instrumented
+          // source + a manifest on the live tree. Re-resolve like `done` does.
+          void fetchControlsRef.current()
+          if (isAuthError(event.message)) {
+            // The onboarding banner is Claude-specific (setup-token / claude login);
+            // Codex gets its own inline `codex login` hint. Raise whichever matches
+            // the active backend — never the Claude banner for a Codex failure. (v7)
+            // v10: a connection-backed chat carries provider 'codex' because it runs
+            // on that harness, but it authenticates with its own stored API key, not
+            // a ChatGPT sign-in. Its 401 says nothing about the built-in Codex seat,
+            // so it must not raise the global (and sticky) `codexAuthNeeded` — that
+            // would outlive the chat and tell the user to `codex login` for a seat
+            // that's perfectly healthy. ChatPanel already guards the render; the
+            // flag itself needs the same guard or it just goes stale instead.
+            if ((session.provider ?? 'claude') === 'claude') session.setAuthNeeded(true)
+            else if (session.provider === 'codex' && !session.connectionId)
+              session.setCodexAuthNeeded(true)
+          }
         } else if (event.type === 'delta' || event.type === 'done') {
+          // A finished turn may have merged instrumented source + a fresh
+          // control-panel manifest back to the live tree — re-resolve the
+          // island's Custom tab against it. (Custom Controls, v10)
+          if (event.type === 'done') void fetchControlsRef.current()
           // A turn that streamed/finished proves we're connected — clear the
           // Claude banner (its backend only emits `done` on success).
           if (session.authNeeded) session.setAuthNeeded(false)
@@ -319,17 +406,30 @@ export default function App(): React.JSX.Element {
         // several and keep working. A non-repo project can't worktree → fall back
         // to seeding the composer (the prior behavior).
         if (root) {
+          const parentSessionKey = useChat.getState().activeKey || projectKey(root)
+          const agentSettings = useSession.getState()
           void window.api.agent
-            .spawnComment(root, prompt, toAgentOptions(useSession.getState()))
+            .spawnComment(root, prompt, parentSessionKey, toAgentOptions(agentSettings))
             .then((r) => {
               if (r.ok && r.spawnId) {
-                useSpawns.getState().add(projectKey(root), {
+                useSpawns.getState().add(parentSessionKey, {
                   id: r.spawnId,
                   branch: r.branch ?? null,
                   label: oneLine(c.text, 60),
+                  modelLabel: chatModelLabel({
+                    model: agentSettings.model,
+                    modelId: agentSettings.modelId,
+                    provider: agentSettings.provider,
+                    connectionId: agentSettings.connectionId
+                  }),
                   status: r.queued ? 'queued' : 'running'
                 })
               } else {
+                if (r.reason === 'unsupported-backend') {
+                  useLog.getState().append(
+                    'This model cannot run a detached background agent yet; the comment was sent to its chat.'
+                  )
+                }
                 useComposer.getState().setSubmit(prompt)
               }
             })
@@ -409,6 +509,10 @@ export default function App(): React.JSX.Element {
         else if (action === 'publish') actionsRef.current.publish()
         else if (action === 'viewport:desktop') useViewport.getState().setViewport('desktop')
         else if (action === 'viewport:mobile') useViewport.getState().setViewport('mobile')
+        else if (action === 'toggle-chat') useWorkspace.getState().toggleChatHidden()
+        // Cmd+, HAS to arrive this way: a native accelerator swallows the physical
+        // keystroke before any renderer keydown fires (see CLAUDE.md's gotchas).
+        else if (action === 'settings') useProviders.getState().setSettingsOpen(true)
       }),
     []
   )
@@ -424,11 +528,17 @@ export default function App(): React.JSX.Element {
     window.api.menu.setRecents(recents.slice(0, 8).map((r) => ({ root: r.root, name: r.name })))
   }, [recents])
 
-  // v8 F3b: Cmd+Z / Cmd+Shift+Z (or Cmd+Y) undo/redo over ALL direct dsgn source
-  // edits (props, text, token swaps). Skipped while typing in the composer or any
-  // field — there the OS/browser native undo for that input should win. After a
-  // revert we re-inspect the selected element so the panel reflects the new source,
-  // and surface a conflict (the file changed under us) instead of silently failing.
+  // v8 F3b: Cmd+Z / Cmd+Shift+Z (or Cmd+Y) undo/redo over ALL direct praxis source
+  // edits (props, text, token swaps, layer moves). A REAL keystroke arrives via
+  // the Edit menu's accelerator (`menu:action` 'undo'/'redo' — native menu
+  // accelerators intercept the key in main before any renderer keydown fires);
+  // the keydown listener below only ever sees synthetic events (tests) and the
+  // menu-less Cmd+Y redo, and is kept as a harmless backup. Either way: a
+  // focused text field keeps its native undo (the menu path has to ask main to
+  // replay it, since the accelerator swallowed the field's default); anything
+  // else runs the source-edit stack. After a revert we re-inspect the selected
+  // element so the panel reflects the new source, and surface a conflict (the
+  // file changed under us) instead of silently failing.
   useEffect(() => {
     const reinspect = (): void => {
       const sel = useSelection.getState()
@@ -439,18 +549,13 @@ export default function App(): React.JSX.Element {
         if (useSelection.getState().selected?.source === src) sel.setInspection(res)
       })
     }
-    const onKey = (e: KeyboardEvent): void => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
-      const k = e.key.toLowerCase()
-      const isUndo = k === 'z' && !e.shiftKey
-      const isRedo = (k === 'z' && e.shiftKey) || k === 'y'
-      if (!isUndo && !isRedo) return
-      const t = e.target as HTMLElement | null
+    const isTextTarget = (t: HTMLElement | null): boolean => {
       const tag = t?.tagName?.toLowerCase()
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || t?.isContentEditable) return
+      return tag === 'input' || tag === 'textarea' || tag === 'select' || !!t?.isContentEditable
+    }
+    const runSourceEdit = (isUndo: boolean): void => {
       const root = useSession.getState().projectRoot
       if (!root) return
-      e.preventDefault()
       void (isUndo ? window.api.edits.undo(root) : window.api.edits.redo(root)).then((r) => {
         if (r.empty) return
         if (r.conflict) {
@@ -463,8 +568,31 @@ export default function App(): React.JSX.Element {
         reinspect()
       })
     }
+    const onKey = (e: KeyboardEvent): void => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      const k = e.key.toLowerCase()
+      const isUndo = k === 'z' && !e.shiftKey
+      const isRedo = (k === 'z' && e.shiftKey) || k === 'y'
+      if (!isUndo && !isRedo) return
+      if (isTextTarget(e.target as HTMLElement | null)) return // native undo wins
+      e.preventDefault()
+      runSourceEdit(isUndo)
+    }
     window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+    const offMenu = window.api.onMenuAction((action) => {
+      if (action !== 'undo' && action !== 'redo') return
+      if (isTextTarget(document.activeElement as HTMLElement | null)) {
+        // The accelerator swallowed the keystroke the field would have gotten —
+        // ask main to run the native text-editing command in this window.
+        window.api.menu.nativeEdit(action)
+        return
+      }
+      runSourceEdit(action === 'undo')
+    })
+    return () => {
+      window.removeEventListener('keydown', onKey)
+      offMenu()
+    }
   }, [])
 
   // Inspect the selected element's props (decides panel vs prompt-only). Guarded
@@ -523,14 +651,46 @@ export default function App(): React.JSX.Element {
           s.setVerifying(false)
           return
         }
-        if (stamps === 0 && !s.dismissed && !s.busy) s.setNeeded(true)
-        else if (stamps > 0) s.setNeeded(false)
+        if (stamps > 0) {
+          s.setNeeded(false)
+          return
+        }
+        // stamps === 0: only offer setup when instrumentation is actually
+        // possible — a static/vanilla project has no supported framework, so
+        // "Set it up" would dead-end. Gate on `canInstrument`; if the probe
+        // hasn't resolved yet (readiness beat it), run it now and re-decide.
+        if (s.dismissed || s.busy) return
+        const offerIf = (can: boolean | null): void => {
+          const cur = useSetup.getState()
+          if (can && !cur.dismissed && !cur.busy) cur.setNeeded(true)
+        }
+        if (s.canInstrument !== null) {
+          offerIf(s.canInstrument)
+          return
+        }
+        const root = useSession.getState().projectRoot
+        if (!root) return
+        void window.api.setup
+          .detect(root)
+          .then((probe) => {
+            if (useSession.getState().projectRoot !== root) return
+            useSetup.getState().setCanInstrument(probe.canInstrument)
+            offerIf(probe.canInstrument)
+          })
+          .catch(() => {})
       }),
     []
   )
 
+  // Subscribed (not getState()) on purpose: detection resolves asynchronously
+  // after a project opens, and the island's Styles tab needs the result pushed
+  // to it — a getState() read here would never re-render, so the tokens would
+  // silently never arrive.
+  const tokenSet = useTokens((s) => s.set)
+
   // The setup turn finished → restart the dev server + reload the preview so the
   // freshly-wired config applies (one-shot: consume the signal, then restart).
+  const canInstrument = useSetup((s) => s.canInstrument)
   const restartRequested = useSetup((s) => s.restartRequested)
   useEffect(() => {
     if (!restartRequested) return
@@ -593,9 +753,9 @@ export default function App(): React.JSX.Element {
       const left = document.querySelector('.pane--chat')?.getBoundingClientRect().left ?? 0
       // Also clamp against the window so the preview card keeps ~400px — its
       // header now holds the controls (Publish/tabs/icons), which must never be
-      // clipped out of reach by dragging the chat wide (rail 168 + divider 0 +
-      // card gutters ≈ 184 → 584 with the 400px floor).
-      const maxChat = Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, window.innerWidth - 584))
+      // clipped out of reach by dragging the chat wide (rail 208 + divider 0 +
+      // card gutters ≈ 224 → 624 with the 400px floor).
+      const maxChat = Math.max(MIN_CHAT_WIDTH, Math.min(MAX_CHAT_WIDTH, window.innerWidth - 624))
       setChatWidth(Math.min(maxChat, Math.max(MIN_CHAT_WIDTH, e.clientX - left)))
     }
     const endDrag = (): void => {
@@ -719,7 +879,7 @@ export default function App(): React.JSX.Element {
         for (const sk of prevSessionKeys ?? [projectKey(prevRoot)]) useChat.getState().clearChat(sk)
       }
 
-      // Do dsgn's work on a dsgn/* branch so the user's main branch stays clean.
+      // Do praxis's work on a praxis/* branch so the user's main branch stays clean.
       try {
         const b = await window.api.git.ensure(root)
         useSession.getState().setBranch(b.branch)
@@ -730,6 +890,9 @@ export default function App(): React.JSX.Element {
           log.append('Not a git repo — branch management off.')
         }
         if (b.error) log.append(`Couldn't switch branch: ${b.error}`, 'error')
+        // GitHub link state drives the header's Connect-vs-Publish control. Only a
+        // git repo can be connected; leave it null otherwise (header keeps Publish).
+        useGithub.getState().setStatus(b.isRepo ? await window.api.github.status(root) : null)
       } catch {
         /* non-fatal — keep opening */
       }
@@ -769,10 +932,10 @@ export default function App(): React.JSX.Element {
       }
       await window.api.preview.load(url)
       log.append('Preview loaded')
-      await window.api.agent.openProject(root, {
-        ...toAgentOptions(useSession.getState()),
-        permissionMode: usePermissions.getState().mode
-      })
+      // The choices on screen when the project was opened become this chat's own
+      // (persisted below, so a later switch back restores what main actually runs).
+      const chatSettings = chatAgentSettingsFromSession(useSession.getState())
+      await window.api.agent.openProject(root, agentOptionsFor(chatSettings))
       log.append(`Agent session started (cwd ${root})`)
       useSession.getState().setProjectRoot(root)
       // v5: track the open project in the workspace + show its (per-project) chat,
@@ -794,12 +957,18 @@ export default function App(): React.JSX.Element {
       // Detect this repo's design tokens (manifest → tailwind → CSS vars).
       // Guard against a project switch racing a slow scan — only apply if `root`
       // is still the open project when it resolves. When the repo exposes no
-      // tokens at all, offer to scaffold a starter `.dsgn/tokens.json`.
+      // tokens at all, offer to scaffold a starter `.praxis/tokens.json`.
       void window.api.tokens.detect(root).then((t) => {
         if (useSession.getState().projectRoot !== root) return
         const tk = useTokens.getState()
         tk.setSet(t)
         if (t.source === 'none' && !tk.offerDismissed) tk.setOfferNeeded(true)
+      })
+      // Can this project be instrumented for visual editing? Populates the setup
+      // gate + the Styles tab's read-only guidance up front (same switch guard).
+      void window.api.setup.detect(root).then((probe) => {
+        if (useSession.getState().projectRoot !== root) return
+        useSetup.getState().setCanInstrument(probe.canInstrument)
       })
       // Load this repo's existing handoff notes (renders pins via the effect above).
       useAnnotations.getState().setList(await window.api.annotations.list(root))
@@ -815,7 +984,16 @@ export default function App(): React.JSX.Element {
         url,
         previewKind: kind,
         branch: useSession.getState().branch,
-        launchSpec: launchSpec.current
+        launchSpec: launchSpec.current,
+        // Record the posture this session was started with, keyed by its sessionKey
+        // (the project key — openProject creates the default chat). Without it a
+        // switch away and back re-seeded the toolbar from the DEFAULTS, which is how
+        // the picker could read "Auto" for a session main was asking on.
+        chatSettings: {
+          ...useWorkspace.getState().projects.find((p) => p.key === projectKey(root))
+            ?.chatSettings,
+          [projectKey(root)]: chatSettings
+        }
       })
       // Bound warm dev servers (LRU-suspend beyond the cap).
       void evictWarm()
@@ -881,11 +1059,35 @@ export default function App(): React.JSX.Element {
       setStatus({ kind: 'error', message })
       return
     }
+    // A git step that didn't work is reported HERE, not swallowed. Without it the
+    // project looks fine until Publish, which then complains that the folder isn't
+    // a repository root — a message that never mentions git and reads as a bug.
+    if (res.warning) log.append(res.warning, 'error')
     log.append('Project created — starting its dev server…', 'success')
     await attempt(res.root, undefined, !!useSession.getState().projectRoot)
   }
 
-  // Publish: commit everything on the current dsgn/* branch, push, open a PR,
+  // Open (or close) the code editor without needing a selected element. The
+  // element toolbar's "code" action only appears on source-stamped elements, so
+  // an un-instrumented project (vanilla HTML/JS, no build-time stamp) otherwise
+  // has no way into the drawer at all. Pick a sensible starting file — the HTML
+  // entry when there is one — and let the drawer's file tree take it from there.
+  const toggleCodeDrawer = async (): Promise<void> => {
+    if (useCodeDrawer.getState().source) {
+      useCodeDrawer.getState().close()
+      return
+    }
+    const root = useSession.getState().projectRoot
+    if (!root) return
+    const files = await window.api.source.tree(root).catch(() => [] as string[])
+    const pick =
+      files.find((f) => f === 'index.html') ??
+      files.find((f) => f.endsWith('.html')) ??
+      files[0]
+    if (pick) useCodeDrawer.getState().open(`${pick}:1`)
+  }
+
+  // Publish: commit everything on the current praxis/* branch, push, open a PR,
   // squash-merge it to main, pull main, delete the merged branch, and start a
   // fresh same-named branch to keep working on. Progress + result go to the log.
   // The commit/PR/merge messages summarize the user asks since the LAST publish
@@ -967,9 +1169,8 @@ export default function App(): React.JSX.Element {
     // v9 multi-chat: restore whichever of THIS project's own sessionKeys (default,
     // or an additional/resumed chat) was last active, not always the plain default.
     useChat.getState().setActiveChat(target.activeSessionKey ?? target.key)
-    useSession
-      .getState()
-      .setChatAgentSettings(chatAgentSettingsFor(target, target.activeSessionKey ?? target.key))
+    const chatSettings = chatAgentSettingsFor(target, target.activeSessionKey ?? target.key)
+    useSession.getState().setChatAgentSettings(chatSettings)
     useSession.getState().setProjectRoot(target.root)
     useSession.getState().setBranch(target.branch)
     // Each project keeps its own viewport — restore it (after activate, so the
@@ -996,9 +1197,13 @@ export default function App(): React.JSX.Element {
       void window.api.agent.setActive(target.root, target.activeSessionKey ?? target.key)
     } else {
       try {
-        await window.api.agent.openProject(target.root, {
-          ...toAgentOptions(useSession.getState()),
-          permissionMode: usePermissions.getState().mode
+        // Reopen under THIS chat's own settings (just restored into the toolbar
+        // above), not whatever the outgoing project happened to be running.
+        await window.api.agent.openProject(target.root, agentOptionsFor(chatSettings))
+        // The reopened session is the project's default chat — record its posture
+        // under that key so the toolbar and main stay in step.
+        useWorkspace.getState().patchEntry(target.key, {
+          chatSettings: { ...target.chatSettings, [target.key]: chatSettings }
         })
         useLog
           .getState()
@@ -1070,13 +1275,21 @@ export default function App(): React.JSX.Element {
   const newChatForProject = async (key: string): Promise<void> => {
     const entry = useWorkspace.getState().projects.find((p) => p.key === key)
     if (!entry) return
+    // An empty secondary chat already IS a "new chat" — switch to it instead of
+    // stacking another session, so mashing "+" can't mint unlimited empty chats.
+    // Main is a permanent role, not a reusable secondary slot.
+    const chats = useChat.getState().byKey
+    const empty = (entry.sessionKeys ?? [key]).filter((sk) => sk !== key).find(
+      (sk) => (chats[sk]?.messages.length ?? 0) === 0
+    )
+    if (empty) {
+      await switchSession(key, empty)
+      return
+    }
     // A new chat starts with the choices visible on the chat it was created
     // from. Later picker changes stay isolated to the new sessionKey.
     const chatSettings = chatAgentSettingsFor(entry, entry.activeSessionKey ?? entry.key)
-    const res = await window.api.agent.newChat(entry.root, {
-      ...toAgentOptions(chatSettings),
-      permissionMode: usePermissions.getState().mode
-    })
+    const res = await window.api.agent.newChat(entry.root, agentOptionsFor(chatSettings))
     if (!res.ok || !res.sessionKey) {
       useLog.getState().append(res.error ?? 'Could not start another chat.', 'error')
       return
@@ -1096,25 +1309,43 @@ export default function App(): React.JSX.Element {
 
   // v9 multi-chat switcher (Rail): activate one of a project's already-live
   // sessionKeys — both the renderer's chat store and main's per-project "which
-  // session is active" bookkeeping need to move together.
+  // session is active" bookkeeping need to move together. The rail lists the
+  // chats of every EXPANDED project, not just the active one, so a click on a
+  // backgrounded project's chat brings that project forward too (record the
+  // choice on the entry first — applyProject opens whichever chat it names).
   const switchSession = async (key: string, sessionKey: string): Promise<void> => {
-    const entry = useWorkspace.getState().projects.find((p) => p.key === key)
-    if (!entry || sessionKey === entry.activeSessionKey) return
-    useWorkspace.getState().patchEntry(key, { activeSessionKey: sessionKey })
-    if (useSession.getState().projectRoot === entry.root) {
-      useChat.getState().setActiveChat(sessionKey)
-      useSession.getState().setChatAgentSettings(chatAgentSettingsFor(entry, sessionKey))
-      void window.api.agent.setActive(entry.root, sessionKey)
+    const ws = useWorkspace.getState()
+    const entry = ws.projects.find((p) => p.key === key)
+    if (!entry) return
+    const onScreen = ws.activeKey === key
+    if (onScreen && sessionKey === entry.activeSessionKey) return
+    ws.patchEntry(key, { activeSessionKey: sessionKey })
+    if (!onScreen) {
+      await switchTo(key)
+      return
     }
+    useChat.getState().setActiveChat(sessionKey)
+    useSession.getState().setChatAgentSettings(chatAgentSettingsFor(entry, sessionKey))
+    void window.api.agent.setActive(entry.root, sessionKey)
   }
 
   // v9 resume — hand a past ("previous agent") session back to a live SDK query
   // (SessionReview's Resume button), then switch the active chat to it and close
-  // the review panel. Only reachable for the currently-active project (the rail's
-  // history list only shows the active project's past sessions).
+  // the review panel. The rail lists the past chats of every expanded project, so
+  // the record may belong to a backgrounded one — resuming then brings its project
+  // forward too, rather than reviving a chat nothing on screen can show.
   const resumeRecord = async (record: SessionRecord): Promise<void> => {
     const key = projectKey(record.projectRoot)
-    const res = await window.api.agent.resumeSession(record.projectRoot, record.id)
+    // A resumed chat runs with the choices on screen (forced back to Claude — see
+    // resumeChatSettings). Hand them to main so the session's real posture is the
+    // one the toolbar shows: resuming used to start on main's defaults, so every
+    // boot-restored chat asked for each edit while its picker read "Auto".
+    const settings = resumeChatSettings(chatAgentSettingsFromSession(useSession.getState()))
+    const res = await window.api.agent.resumeSession(
+      record.projectRoot,
+      record.id,
+      agentOptionsFor(settings)
+    )
     if (!res.ok || !res.sessionKey) {
       useLog.getState().append(res.error ?? 'Could not resume that session.', 'error')
       return
@@ -1124,7 +1355,8 @@ export default function App(): React.JSX.Element {
     const existing = entry?.sessionKeys ?? [key]
     useWorkspace.getState().patchEntry(key, {
       sessionKeys: existing.includes(sessionKey) ? existing : [...existing, sessionKey],
-      activeSessionKey: sessionKey
+      activeSessionKey: sessionKey,
+      chatSettings: { ...entry?.chatSettings, [sessionKey]: settings }
     })
     // Seed the (fresh) chat slice with the record's past turns so the resumed
     // thread shows its history instead of an empty tree — the agent already has
@@ -1133,6 +1365,13 @@ export default function App(): React.JSX.Element {
     useChat.getState().hydrate(sessionKey, messagesFromTranscript(record.transcript))
     if (useSession.getState().projectRoot === record.projectRoot) {
       useChat.getState().setActiveChat(sessionKey)
+      // Repoint the toolbar at what the resumed session actually got (the backend
+      // is pinned to Claude even if the picker was on another one).
+      useSession.getState().setChatAgentSettings(settings)
+    } else {
+      // Another project's chat — switchTo picks up the entry patched above, so it
+      // lands on the resumed session rather than that project's previous one.
+      await switchTo(key)
     }
     setReviewing(null)
   }
@@ -1262,7 +1501,7 @@ export default function App(): React.JSX.Element {
       useSetup
         .getState()
         .setStatus(
-          'Setup wired the config, but dsgn is attached to your own dev server — restart it to apply the change.'
+          'Setup wired the config, but Praxis is attached to your own dev server — restart it to apply the change.'
         )
       return
     }
@@ -1449,6 +1688,37 @@ export default function App(): React.JSX.Element {
           }
         } else if (a.kind === 'inspection') {
           sel.setInspection(a.inspection)
+        } else if (a.kind === 'controls') {
+          // Custom Controls (v10): build the trigger prompt from the live
+          // selection + the chat's backend, and send it as a REAL agent turn
+          // (setSubmit auto-sends; it downgrades to a prefill mid-turn).
+          if (sel.selected) {
+            // The island's Regenerate button sends the 'regenerate' sentinel
+            // plus the id of the panel whose row was clicked — a selection can
+            // resolve several panels (the two-stamp file match stacks them), so
+            // the id, not list order, decides which manifest is embedded. Its
+            // broken param ids go along so the agent corrects it in place
+            // (saveManifest upserts by file+component — never duplicates).
+            const resolved = islandControlsRef.current
+            const existing = a.panelId
+              ? resolved?.find((p) => p.manifest.id === a.panelId)
+              : resolved?.[0]
+            const regen =
+              a.hint === 'regenerate' && existing
+                ? {
+                    json: JSON.stringify(existing.manifest, null, 2),
+                    brokenIds: existing.params.filter((p) => !p.valid).map((p) => p.id)
+                  }
+                : undefined
+            const prompt = controlsPrompt(
+              sel.selected,
+              sel.inspection,
+              regen ? undefined : a.hint,
+              useSession.getState().provider,
+              regen
+            )
+            useComposer.getState().setSubmit(prompt)
+          }
         }
       }),
     []
@@ -1473,7 +1743,7 @@ export default function App(): React.JSX.Element {
       {authNeeded && (
         <div className="banner banner--auth">
           <span className="banner__text">
-            dsgn couldn’t reach Claude. Each teammate authenticates with their own
+            Praxis couldn’t reach Claude. Each teammate authenticates with their own
             subscription — run <code>claude setup-token</code> (or <code>claude login</code>) in a
             terminal, then reopen the project.
           </span>
@@ -1524,12 +1794,6 @@ export default function App(): React.JSX.Element {
               >
                 New project
               </button>
-              <button
-                className="btn empty__feedback"
-                onClick={() => useFeedback.getState().setOpen(true)}
-              >
-                Send feedback
-              </button>
             </div>
           </div>
           <div className="empty__cat">
@@ -1543,7 +1807,7 @@ export default function App(): React.JSX.Element {
           </div>
         </div>
       ) : (
-        <div className="panes">
+        <div className={`panes ${chatHidden ? 'panes--chat-hidden' : ''}`}>
           <Rail
             onSwitch={(key) => void switchTo(key)}
             onClose={(key) => void closeProjectFromRail(key)}
@@ -1553,8 +1817,16 @@ export default function App(): React.JSX.Element {
             onNewChat={(key) => void newChatForProject(key)}
             onSwitchSession={(key, sessionKey) => void switchSession(key, sessionKey)}
             onCloseChat={(key, sessionKey) => void closeChatForProject(key, sessionKey)}
+            onOpenMemory={(root, name) => setMemoryTarget({ root, name })}
           />
-          <section className="pane pane--chat" style={{ width: chatWidth }}>
+          {/* Hidden = width 0, still MOUNTED: a running turn keeps streaming into
+              the live ChatPanel and nothing re-mounts on unhide. The native
+              preview follows the freed space via PreviewPane's ResizeObserver. */}
+          <section
+            className={`pane pane--chat ${chatHidden ? 'pane--chat-hidden' : ''}`}
+            style={{ width: chatHidden ? 0 : chatWidth }}
+            aria-hidden={chatHidden}
+          >
             {/* Window-drag strip across the chat's top edge — the one top-of-window
                 region that isn't already a drag surface (the rail head and the
                 previewbar are). Absolute + low z-index so it adds no layout and
@@ -1562,12 +1834,14 @@ export default function App(): React.JSX.Element {
             <div className="chat-drag" aria-hidden="true" />
             <ChatPanel />
           </section>
-          <div
-            className="divider"
-            onMouseDown={startResize}
-            role="separator"
-            aria-orientation="vertical"
-          />
+          {!chatHidden && (
+            <div
+              className="divider"
+              onMouseDown={startResize}
+              role="separator"
+              aria-orientation="vertical"
+            />
+          )}
           <section className="pane pane--preview">
             {/* Window-drag strip over the pane's own top padding — the only
                 top-of-window gap left once the rail and chat strips drag
@@ -1641,6 +1915,35 @@ export default function App(): React.JSX.Element {
                       {/* Element-select moved to the chat composer (Figma Make-style);
                           comment/annotate are element-scoped actions on the selection
                           pill now. Keyboard: S select, C comment, Y annotate. */}
+                      {/* Code editor: a stamp-independent way into the drawer + file
+                          tree, so vanilla/un-instrumented projects can still edit code. */}
+                      {/* Figma-style hide UI: chat + sidebar collapse, only the
+                          preview stays (also Actions menu, ⌘.). Diagonal expand
+                          arrows — outward to go full-preview, inward to bring
+                          the UI back; the direction carries the state, so no
+                          is-active accent. */}
+                      <button
+                        className="iconbtn"
+                        onClick={() => useWorkspace.getState().toggleChatHidden()}
+                        aria-pressed={chatHidden}
+                        aria-label={chatHidden ? 'Show UI' : 'Hide UI'}
+                        title={chatHidden ? 'Show UI (⌘.)' : 'Hide UI (⌘.)'}
+                      >
+                        {chatHidden ? (
+                          <Minimize2 className="size-4" aria-hidden="true" />
+                        ) : (
+                          <Maximize2 className="size-4" aria-hidden="true" />
+                        )}
+                      </button>
+                      <button
+                        className={`iconbtn ${drawerSource ? 'is-active' : ''}`}
+                        onClick={() => void toggleCodeDrawer()}
+                        aria-pressed={!!drawerSource}
+                        aria-label="Open code editor"
+                        title="Open code editor"
+                      >
+                        <Code2 className="size-4" aria-hidden="true" />
+                      </button>
                       {/* Viewport toggle (Figma-style device icon; also Actions
                           menu ⌘1 / ⌘2). Active = mobile. */}
                       {previewKind !== 'simulator' && (
@@ -1658,6 +1961,19 @@ export default function App(): React.JSX.Element {
                           <MonitorSmartphone className="size-4" aria-hidden="true" />
                         </button>
                       )}
+                      {/* Before the project has a GitHub home, Publish would only
+                          dead-end on "no origin" — so swap in Connect until a repo
+                          exists (main/github.ts). Once connected, Publish returns. */}
+                      {githubStatus && !githubStatus.connected ? (
+                        <button
+                          className="btn btn--primary"
+                          onClick={() => useGithub.getState().setConnectOpen(true)}
+                          title="Create a GitHub repo for this project and push it"
+                        >
+                          Connect to GitHub
+                        </button>
+                      ) : (
+                      <>
                       {/* Publish split button: the main segment runs the selected
                           mode (full publish vs PR-only); the caret picks it. */}
                       <div className="pubgroup">
@@ -1710,6 +2026,8 @@ export default function App(): React.JSX.Element {
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </div>
+                      </>
+                      )}
                     </>
                   )}
                 </div>
@@ -1759,15 +2077,19 @@ export default function App(): React.JSX.Element {
               .panes so its no-drag region is applied after the chat pane's drag
               strip (.chat-drag); otherwise, with the rail collapsed, that strip
               would win the overlap and swallow clicks on this button. */}
-          <button
-            className="sidebar-toggle"
-            onClick={() => useWorkspace.getState().toggleCollapsed()}
-            aria-label={railCollapsed ? 'Show projects sidebar' : 'Hide projects sidebar'}
-            aria-pressed={!railCollapsed}
-            title={railCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          >
-            <PanelLeft className="size-3.5" aria-hidden="true" />
-          </button>
+          {/* Gone entirely while the chat is hidden — full-preview mode should be
+              chrome-free; unhiding the UI (⌘. / previewbar) brings it back. */}
+          {!chatHidden && (
+            <button
+              className="sidebar-toggle"
+              onClick={() => useWorkspace.getState().toggleCollapsed()}
+              aria-label={railCollapsed ? 'Show projects sidebar' : 'Hide projects sidebar'}
+              aria-pressed={!railCollapsed}
+              title={railCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+            >
+              <PanelLeft className="size-3.5" aria-hidden="true" />
+            </button>
+          )}
         </div>
       )}
 
@@ -1784,6 +2106,9 @@ export default function App(): React.JSX.Element {
           element={selected}
           inspection={inspection}
           inspecting={inspecting}
+          controls={islandControls}
+          canInstrument={canInstrument}
+          tokens={tokenSet}
         />
       )}
 
@@ -1798,6 +2123,25 @@ export default function App(): React.JSX.Element {
 
       {/* LKM-27: in-app feedback → a GitHub issue on the Praxis repo. */}
       <FeedbackDialog />
+      <ConnectDialog />
+      {/* v10: app settings (Cmd+, / the model picker's "Manage providers…"). */}
+      <SettingsDialog />
+      <ProjectMemoryDialog
+        root={memoryTarget?.root ?? null}
+        name={memoryTarget?.name ?? 'Project'}
+        open={!!memoryTarget}
+        onOpenChange={(open) => {
+          if (!open) setMemoryTarget(null)
+        }}
+        onMainCleared={(root) => {
+          const key = projectKey(root)
+          const chat = useChat.getState()
+          chat.clearChat(key)
+          if (chat.activeKey === key) chat.setActiveChat(key)
+          useWorkspace.getState().patchEntry(key, { publishedMsgCount: 0 })
+          void useHistory.getState().load(root)
+        }}
+      />
     </div>
   )
 }

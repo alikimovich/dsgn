@@ -57,7 +57,7 @@ async function aiDiagnose(
     return null
   }
   const prompt =
-    `You are diagnosing a failure that happened while opening or running a project in dsgn ` +
+    `You are diagnosing a failure that happened while opening or running a project in Praxis ` +
     `(a local dev tool that runs the project's dev server / iOS simulator). Diagnose the ROOT ` +
     `CAUSE and give concrete fix steps. Do NOT modify anything — only diagnose.\n\n` +
     `Project root: ${root}\nContext: ${context || '(none)'}\n\nError / output:\n"""\n${error.slice(0, 4000)}\n"""\n\n` +

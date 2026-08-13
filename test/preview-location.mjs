@@ -28,7 +28,7 @@ try {
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
   const key = await win.evaluate(() =>
-    window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project')
+    window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project')
   )
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
@@ -39,20 +39,20 @@ try {
   // Give the project a dev-server base (unused by the composer now, but keeps
   // the workspace state realistic).
   await win.evaluate((k) => {
-    window.__dsgnWorkspace.getState().patchEntry(k, { url: 'http://localhost:5173' })
+    window.__praxisWorkspace.getState().patchEntry(k, { url: 'http://localhost:5173' })
   }, key)
 
   // Nothing shown yet — no navigation reported.
-  const before = await win.evaluate(() => window.__dsgnPreviewLocation.getState().url)
+  const before = await win.evaluate(() => window.__praxisPreviewLocation.getState().url)
   assert(before === null, `expected no preview location yet, got ${before}`)
 
   // Main reports a navigation (mirrors did-navigate / did-navigate-in-page).
   await app.evaluate(({ BrowserWindow }, url) => {
     BrowserWindow.getAllWindows()[0].webContents.send('preview:url-changed', url)
   }, 'http://localhost:5173/about?tab=team')
-  await win.waitForFunction(() => window.__dsgnPreviewLocation.getState().url !== null)
+  await win.waitForFunction(() => window.__praxisPreviewLocation.getState().url !== null)
 
-  const url = await win.evaluate(() => window.__dsgnPreviewLocation.getState().url)
+  const url = await win.evaluate(() => window.__praxisPreviewLocation.getState().url)
   assert(url === 'http://localhost:5173/about?tab=team', `store should mirror the reported url, got ${url}`)
 
   // The composer must send the user's typed words verbatim — no hidden
@@ -63,7 +63,7 @@ try {
   await app.evaluate(({ ipcMain }) => {
     ipcMain.removeHandler('agent:send')
     ipcMain.handle('agent:send', (_e, text) => {
-      globalThis.__dsgnSentTexts = [...(globalThis.__dsgnSentTexts ?? []), text]
+      globalThis.__praxisSentTexts = [...(globalThis.__praxisSentTexts ?? []), text]
     })
   })
   await win.fill('.composer__input', 'make the heading bigger')
@@ -71,11 +71,11 @@ try {
   // The renderer appends the visible user message synchronously; the spied IPC
   // lands async in main — poll for it.
   await win.waitForFunction(() =>
-    window.__dsgnStore.getState().messages.some((m) => m.role === 'user')
+    window.__praxisStore.getState().messages.some((m) => m.role === 'user')
   )
   let sent = null
   for (let i = 0; i < 50 && !sent; i++) {
-    sent = await app.evaluate(() => globalThis.__dsgnSentTexts?.[0] ?? null)
+    sent = await app.evaluate(() => globalThis.__praxisSentTexts?.[0] ?? null)
     if (!sent) await new Promise((r) => setTimeout(r, 100))
   }
   assert(
@@ -85,7 +85,7 @@ try {
   // The visible transcript matches what was sent — nothing hidden either way.
   const shown = await win.evaluate(
     () =>
-      window.__dsgnStore
+      window.__praxisStore
         .getState()
         .messages.filter((m) => m.role === 'user')
         .at(-1).text

@@ -1,39 +1,44 @@
-import { useEffect, useRef, useState } from 'react'
-import { EditorState, StateEffect, StateField, type Extension } from '@codemirror/state'
-import { EditorView, Decoration, keymap, type DecorationSet } from '@codemirror/view'
-import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
-import { tags as t } from '@lezer/highlight'
-import { basicSetup } from 'codemirror'
-import { javascript } from '@codemirror/lang-javascript'
-import { html } from '@codemirror/lang-html'
 import { css } from '@codemirror/lang-css'
+import { html } from '@codemirror/lang-html'
+import { javascript } from '@codemirror/lang-javascript'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { EditorState, type Extension, StateEffect, StateField } from '@codemirror/state'
+import { Decoration, type DecorationSet, EditorView, keymap } from '@codemirror/view'
+import { tags as t } from '@lezer/highlight'
 import { svelte } from '@replit/codemirror-lang-svelte'
-import {
-  X,
-  Save,
-  ExternalLink,
-  Maximize2,
-  Minimize2,
-  ChevronLeft,
-  ChevronRight,
-  SquareArrowOutUpRight
-} from 'lucide-react'
+import { basicSetup } from 'codemirror'
+import { ChevronLeft, ChevronRight, Save, SquareArrowOutUpRight, X } from 'lucide-react'
+import { useEffect, useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
 import type { SourceView } from '../../../shared/api'
 import { useCodeDrawer, usePanelInset } from '../store'
-import { Button } from '@/components/ui/button'
+import { zedSearch } from './editor-search'
+import FileTreePanel from './FileTreePanel'
+import MediaPreview from './MediaPreview'
 
 /** Default (collapsed) height of the drawer + the native-preview strip it reserves. */
 const DRAWER_H = 300
 /** Smallest the drawer can be dragged down to (still shows a couple of lines + chrome). */
 const MIN_DRAWER_H = 120
-/** Slice of preview kept visible when the drawer is expanded (so it isn't hidden). */
+/** Slice of preview kept visible when the drawer is dragged tall (so it isn't hidden). */
 const MIN_PREVIEW = 160
 /** Hard ceiling on the drawer: it may never grow past this share of the window height. */
 const MAX_VIEWPORT_FRACTION = 0.8
 
+/** Pop-out file-tree sidebar: default/min/max width (drag its right edge) + persistence key. */
+const TREE_W_DEFAULT = 224
+const TREE_W_MIN = 160
+const TREE_W_MAX = 520
+const TREE_W_KEY = 'praxis.editorTreeWidth'
+
 /** Clamp the drawer height to [MIN_DRAWER_H, cap]. */
 function clampHeight(h: number, cap: number): number {
   return Math.max(MIN_DRAWER_H, Math.min(h, cap))
+}
+
+/** Clamp the sidebar width to [TREE_W_MIN, TREE_W_MAX]. */
+function clampTreeW(w: number): number {
+  return Math.max(TREE_W_MIN, Math.min(w, TREE_W_MAX))
 }
 
 /** CodeMirror language extension for a file, by extension (empty = plain text). */
@@ -54,7 +59,7 @@ function langFor(file: string): Extension[] {
 // Editor chrome painted from the app's own design tokens (via CSS custom
 // properties), so the drawer matches the surrounding surfaces and flips with the
 // light/dark theme automatically — no separate CodeMirror dark theme to drift.
-const dsgnTheme = EditorView.theme({
+const praxisTheme = EditorView.theme({
   '&': {
     height: '100%',
     fontSize: '12px',
@@ -83,10 +88,22 @@ const dsgnTheme = EditorView.theme({
 // Syntax palette matched 1:1 to the highlight.js theme in styles.css (the same
 // colors the chat's markdown code blocks use), so every code surface in the app
 // reads the same. Tags left unmapped fall back to the plain foreground color.
-const dsgnHighlight = HighlightStyle.define([
-  { tag: [t.comment, t.lineComment, t.blockComment, t.docComment], color: '#8a8a8a', fontStyle: 'italic' },
+const praxisHighlight = HighlightStyle.define([
   {
-    tag: [t.keyword, t.moduleKeyword, t.controlKeyword, t.operatorKeyword, t.definitionKeyword, t.modifier, t.self],
+    tag: [t.comment, t.lineComment, t.blockComment, t.docComment],
+    color: '#8a8a8a',
+    fontStyle: 'italic'
+  },
+  {
+    tag: [
+      t.keyword,
+      t.moduleKeyword,
+      t.controlKeyword,
+      t.operatorKeyword,
+      t.definitionKeyword,
+      t.modifier,
+      t.self
+    ],
     color: '#a626a4'
   },
   // Quoted literals only — strings, regexes, and the *values* of HTML attributes.
@@ -96,7 +113,11 @@ const dsgnHighlight = HighlightStyle.define([
   { tag: [t.attributeName], color: '#986801' },
   { tag: [t.number, t.bool, t.atom, t.null], color: '#b76b01' },
   {
-    tag: [t.function(t.variableName), t.function(t.propertyName), t.definition(t.function(t.variableName))],
+    tag: [
+      t.function(t.variableName),
+      t.function(t.propertyName),
+      t.definition(t.function(t.variableName))
+    ],
     color: '#4078f2'
   },
   { tag: [t.typeName, t.className], color: '#c18401' },
@@ -123,8 +144,8 @@ function stampDeco(doc: EditorState['doc'], start: number, end: number): Decorat
  * drawer fills the freed strip). The whole file is loaded, scrolled to the stamped
  * element with its line span highlighted; Cmd+S saves through source.write →
  * commitEdit, so undo/redo, on-disk conflict detection, and HMR all come for free.
- * An expand toggle grows the drawer (leaving a MIN_PREVIEW strip of live preview),
- * and "open in editor" jumps to the file in the user's own editor.
+ * Drag the top edge to resize (up to a MIN_PREVIEW strip of live preview), and
+ * "open in editor" jumps to the file in the user's own editor.
  */
 export default function CodeDrawer({
   root,
@@ -139,8 +160,8 @@ export default function CodeDrawer({
   variant?: 'drawer' | 'window'
 }): React.JSX.Element {
   // In 'window' mode the editor owns a whole native window: it fills the viewport,
-  // reserves no preview inset, and drops the drawer-only chrome (resize handle,
-  // expand toggle). The native title bar handles resizing and dragging.
+  // reserves no preview inset, and drops the drawer-only resize handle. The native
+  // title bar handles resizing and dragging.
   const isWindow = variant === 'window'
   const rootRef = useRef<HTMLDivElement>(null)
   const hostRef = useRef<HTMLDivElement>(null)
@@ -151,11 +172,19 @@ export default function CodeDrawer({
   // the dirty comparison. A ref so the save keybinding always sees the latest.
   const baselineRef = useRef<string>('')
   const [meta, setMeta] = useState<{ file: string; line: number } | null>(null)
+  // Set when the opened file isn't text (image/video/audio, or another binary):
+  // the media preview replaces CodeMirror entirely for as long as it's showing.
+  const [preview, setPreview] = useState<SourceView | null>(null)
   const [dirty, setDirty] = useState(false)
   const [status, setStatus] = useState<'idle' | 'saving' | 'conflict' | 'error'>('idle')
   const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const [openError, setOpenError] = useState<string | null>(null)
-  const [expanded, setExpanded] = useState(false)
+  // Pop-out only: the file-tree sidebar width, drag-adjustable and persisted.
+  const [treeWidth, setTreeWidth] = useState(() => {
+    if (typeof window === 'undefined') return TREE_W_DEFAULT
+    const saved = Number(window.localStorage.getItem(TREE_W_KEY))
+    return Number.isFinite(saved) && saved > 0 ? clampTreeW(saved) : TREE_W_DEFAULT
+  })
   // Explicit height set by dragging the top edge. null = follow expand/collapse.
   // Stored unclamped; the render-time clamp keeps it inside the live bounds so a
   // window/container resize can't strand it out of range.
@@ -203,15 +232,11 @@ export default function CodeDrawer({
     )
   )
   const height =
-    dragHeight != null
-      ? clampHeight(dragHeight, maxHeight)
-      : expanded
-        ? maxHeight
-        : Math.min(DRAWER_H, maxHeight)
+    dragHeight != null ? clampHeight(dragHeight, maxHeight) : Math.min(DRAWER_H, maxHeight)
 
   // Reserve the bottom strip of the native preview for as long as the drawer is
-  // open, tracking the current (expanded/collapsed) height. A pop-out window owns
-  // its own native surface, so it reserves nothing.
+  // open, tracking its current (drag-adjusted) height. A pop-out window owns its
+  // own native surface, so it reserves nothing.
   useEffect(() => {
     if (isWindow) return undefined
     usePanelInset.getState().setBottom(height)
@@ -260,6 +285,7 @@ export default function CodeDrawer({
   useEffect(() => {
     let disposed = false
     setMeta(null)
+    setPreview(null)
     setDirty(false)
     setStatus('idle')
     setErrorMsg(null)
@@ -270,12 +296,20 @@ export default function CodeDrawer({
     viewRef.current = null
 
     window.api.source.read(root, source).then((view: SourceView | null) => {
-      if (disposed || !hostRef.current) return
+      if (disposed) return
       if (!view) {
         setStatus('error')
         setErrorMsg('Could not read the source file.')
         return
       }
+      // Not text: hand it to the media preview instead of building an editor.
+      // Checked before the host ref, since that div unmounts once we do.
+      if (view.media || view.binary) {
+        setMeta({ file: view.file, line: view.line })
+        setPreview(view)
+        return
+      }
+      if (!hostRef.current) return
       baselineRef.current = view.code
       setMeta({ file: view.file, line: view.line })
 
@@ -298,7 +332,9 @@ export default function CodeDrawer({
         update: (deco, tr) => {
           for (const e of tr.effects) {
             if (e.is(setLink)) {
-              return e.value ? Decoration.set([linkMark.range(e.value.from, e.value.to)]) : Decoration.none
+              return e.value
+                ? Decoration.set([linkMark.range(e.value.from, e.value.to)])
+                : Decoration.none
             }
           }
           return tr.docChanged ? Decoration.none : deco
@@ -336,6 +372,9 @@ export default function CodeDrawer({
       const state = EditorState.create({
         doc: view.code,
         extensions: [
+          // Zed-style search panel — must come with basicSetup, which brings the
+          // searchKeymap (⌘F) but leaves the panel to the facet default.
+          zedSearch(),
           basicSetup,
           ...langFor(view.file),
           stampField,
@@ -381,8 +420,8 @@ export default function CodeDrawer({
           EditorView.updateListener.of((u) => {
             if (u.docChanged) setDirty(u.state.doc.toString() !== baselineRef.current)
           }),
-          dsgnTheme,
-          syntaxHighlighting(dsgnHighlight)
+          praxisTheme,
+          syntaxHighlighting(praxisHighlight)
         ]
       })
       const editor = new EditorView({ state, parent: hostRef.current })
@@ -401,7 +440,10 @@ export default function CodeDrawer({
 
       // Park the stamped element a third of the way down the viewport.
       const pos = editor.state.doc.line(Math.min(start, editor.state.doc.lines)).from
-      editor.dispatch({ selection: { anchor: pos }, effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 60 }) })
+      editor.dispatch({
+        selection: { anchor: pos },
+        effects: EditorView.scrollIntoView(pos, { y: 'start', yMargin: 60 })
+      })
       editor.focus()
     })
 
@@ -435,7 +477,6 @@ export default function CodeDrawer({
     e.preventDefault()
     const startY = e.clientY
     const startH = height
-    setExpanded(false)
     const onMove = (ev: PointerEvent): void => setDragHeight(startH + (startY - ev.clientY))
     const onUp = (): void => {
       window.removeEventListener('pointermove', onMove)
@@ -450,8 +491,39 @@ export default function CodeDrawer({
   }
   // Keyboard resize for the handle (Up/Down grow/shrink; browser convention).
   const nudge = (delta: number): void => {
-    setExpanded(false)
     setDragHeight(clampHeight((dragHeight ?? height) + delta, maxHeight))
+  }
+
+  // Pop-out: drag the divider to resize the file tree. Width is captured at drag
+  // start, updated by the pointer's horizontal delta, and persisted on release.
+  const startTreeDrag = (e: React.PointerEvent): void => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = treeWidth
+    let last = startW
+    const onMove = (ev: PointerEvent): void => {
+      last = clampTreeW(startW + (ev.clientX - startX))
+      setTreeWidth(last)
+    }
+    const onUp = (): void => {
+      window.removeEventListener('pointermove', onMove)
+      window.removeEventListener('pointerup', onUp)
+      document.body.style.cursor = ''
+      document.body.style.userSelect = ''
+      window.localStorage.setItem(TREE_W_KEY, String(last))
+    }
+    document.body.style.cursor = 'col-resize'
+    document.body.style.userSelect = 'none'
+    window.addEventListener('pointermove', onMove)
+    window.addEventListener('pointerup', onUp)
+  }
+  // Keyboard resize for the tree divider (Left/Right shrink/grow); persist after.
+  const nudgeTree = (delta: number): void => {
+    setTreeWidth((w) => {
+      const next = clampTreeW(w + delta)
+      window.localStorage.setItem(TREE_W_KEY, String(next))
+      return next
+    })
   }
 
   const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac')
@@ -460,8 +532,8 @@ export default function CodeDrawer({
       ref={rootRef}
       className={
         isWindow
-          ? 'codedrawer codedrawer--window flex h-screen flex-col bg-background'
-          : 'codedrawer absolute inset-x-0 bottom-0 z-50 flex flex-col border-t bg-background shadow-[0_-4px_18px_rgba(0,0,0,0.08)]'
+          ? 'codedrawer codedrawer--window flex h-screen bg-background'
+          : 'codedrawer absolute inset-x-0 bottom-0 z-50 flex flex-col rounded-t-2xl border-t bg-background shadow-[0_-4px_18px_rgba(0,0,0,0.08)]'
       }
       style={isWindow ? undefined : { height }}
       aria-label="Code editor"
@@ -472,8 +544,8 @@ export default function CodeDrawer({
           className="codedrawer__resize absolute inset-x-0 -top-1 z-10 h-2 cursor-ns-resize"
           onPointerDown={startDrag}
           onKeyDown={(e) => {
-            if (e.key === 'ArrowUp') (e.preventDefault(), nudge(24))
-            else if (e.key === 'ArrowDown') (e.preventDefault(), nudge(-24))
+            if (e.key === 'ArrowUp') e.preventDefault(), nudge(24)
+            else if (e.key === 'ArrowDown') e.preventDefault(), nudge(-24)
           }}
           role="separator"
           aria-orientation="horizontal"
@@ -481,78 +553,120 @@ export default function CodeDrawer({
           tabIndex={0}
         />
       )}
-      <div
-        className={`codedrawer__head flex items-center gap-2 border-b py-1.5 pr-3 ${
-          // Pop-out window: the header doubles as the title bar (macOS hiddenInset),
-          // so clear the traffic lights. The draggable region is the file span
-          // (below), which keeps the buttons clickable without per-button no-drag.
-          isWindow && isMac ? 'pl-20' : 'pl-3'
-        }`}>
-        {/* Cmd+click jumps build history — navigate it like a browser. */}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="codedrawer__back size-6 text-muted-foreground"
-          onClick={() => useCodeDrawer.getState().back()}
-          disabled={navIndex <= 0}
-          aria-label="Back"
-          title="Back"
-        >
-          <ChevronLeft className="size-3.5" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="codedrawer__fwd -ml-1.5 size-6 text-muted-foreground"
-          onClick={() => useCodeDrawer.getState().forward()}
-          disabled={navIndex >= navLen - 1}
-          aria-label="Forward"
-          title="Forward"
-        >
-          <ChevronRight className="size-3.5" />
-        </Button>
-        <span
-          className="codedrawer__file min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11.5px] text-muted-foreground"
-          style={isWindow ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
-        >
-          {meta ? `${meta.file}:${meta.line}` : 'Loading…'}
-          {dirty && <span className="codedrawer__dirty ml-1.5 text-amber-600" title="Unsaved changes">●</span>}
-        </span>
-        {status === 'conflict' && (
-          <span className="codedrawer__conflict flex items-center gap-1.5 text-[11px] text-amber-700">
-            File changed on disk.
-            <button className="underline underline-offset-2" onClick={() => void reload()}>
-              Reload
-            </button>
+      {/* Pop-out only: the file-tree sidebar. On macOS the traffic lights float
+          over its top-left, so a draggable spacer clears them (the header no
+          longer needs to reserve room for them). */}
+      {isWindow && (
+        <>
+          <aside
+            className="codedrawer__tree flex shrink-0 flex-col bg-background"
+            style={{ width: treeWidth }}
+          >
+            {isMac && (
+              <div
+                className="h-9 shrink-0"
+                style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
+              />
+            )}
+            <FileTreePanel root={root} />
+          </aside>
+          {/* Drag the divider to resize the tree; the 1px line is the seam and the
+              wider hit area (with hover tint) makes it easy to grab. */}
+          <div
+            className="codedrawer__treeresize group relative w-1 shrink-0 cursor-col-resize border-r"
+            onPointerDown={startTreeDrag}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft') e.preventDefault(), nudgeTree(-24)
+              else if (e.key === 'ArrowRight') e.preventDefault(), nudgeTree(24)
+            }}
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="Resize file tree"
+            aria-valuenow={Math.round(treeWidth)}
+            aria-valuemin={TREE_W_MIN}
+            aria-valuemax={TREE_W_MAX}
+            tabIndex={0}
+            style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          >
+            <span className="absolute inset-y-0 -left-1 -right-1 group-hover:bg-accent/40" />
+          </div>
+        </>
+      )}
+      <div className="codedrawer__main flex min-h-0 min-w-0 flex-1 flex-col">
+        <div className="codedrawer__head flex items-center gap-2 border-b py-1.5 pl-3 pr-3">
+          {/* Cmd+click jumps build history — navigate it like a browser. */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="codedrawer__back size-6 text-muted-foreground"
+            onClick={() => useCodeDrawer.getState().back()}
+            disabled={navIndex <= 0}
+            aria-label="Back"
+            title="Back"
+          >
+            <ChevronLeft className="size-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="codedrawer__fwd -ml-1.5 size-6 text-muted-foreground"
+            onClick={() => useCodeDrawer.getState().forward()}
+            disabled={navIndex >= navLen - 1}
+            aria-label="Forward"
+            title="Forward"
+          >
+            <ChevronRight className="size-3.5" />
+          </Button>
+          <span
+            className="codedrawer__file min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11.5px] text-muted-foreground"
+            style={isWindow ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
+          >
+            {/* A line number is meaningless for a picture — show the path alone. */}
+            {meta ? (preview ? meta.file : `${meta.file}:${meta.line}`) : 'Loading…'}
+            {dirty && (
+              <span className="codedrawer__dirty ml-1.5 text-amber-600" title="Unsaved changes">
+                ●
+              </span>
+            )}
           </span>
-        )}
-        {status === 'error' && errorMsg && (
-          <span className="codedrawer__error text-[11px] text-red-700">{errorMsg}</span>
-        )}
-        {openError && <span className="codedrawer__openerror text-[11px] text-amber-700">{openError}</span>}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="codedrawer__open h-6 gap-1 px-2 text-[11.5px] text-muted-foreground"
-          onClick={() => void openEditor()}
-          title="Open this file in your code editor"
-        >
-          <ExternalLink className="size-3.5" />
-          Editor
-        </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="codedrawer__save h-6 gap-1 px-2 text-[11.5px]"
-          onClick={() => void save()}
-          disabled={!dirty || status === 'saving'}
-          title="Save (⌘S)"
-        >
-          <Save className="size-3.5" />
-          {status === 'saving' ? 'Saving…' : 'Save'}
-        </Button>
-        {!isWindow && (
-          <>
+          {status === 'conflict' && (
+            <span className="codedrawer__conflict flex items-center gap-1.5 text-[11px] text-amber-700">
+              File changed on disk.
+              <button className="underline underline-offset-2" onClick={() => void reload()}>
+                Reload
+              </button>
+            </span>
+          )}
+          {status === 'error' && errorMsg && (
+            <span className="codedrawer__error text-[11px] text-red-700">{errorMsg}</span>
+          )}
+          {openError && (
+            <span className="codedrawer__openerror text-[11px] text-amber-700">{openError}</span>
+          )}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="codedrawer__open h-6 px-2 text-[11.5px] text-muted-foreground"
+            onClick={() => void openEditor()}
+            title="Open this file in your IDE"
+          >
+            IDE
+          </Button>
+          {/* Nothing to save from a preview — the file isn't editable as text. */}
+          {!preview && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="codedrawer__save size-6"
+              onClick={() => void save()}
+              disabled={!dirty || status === 'saving'}
+              aria-label={status === 'saving' ? 'Saving…' : 'Save'}
+              title={status === 'saving' ? 'Saving…' : 'Save (⌘S)'}
+            >
+              <Save className="size-3.5" />
+            </Button>
+          )}
+          {!isWindow && (
             <Button
               variant="ghost"
               size="icon"
@@ -563,30 +677,30 @@ export default function CodeDrawer({
             >
               <SquareArrowOutUpRight className="size-3.5" />
             </Button>
+          )}
+          {/* Pop-out window closes via its native traffic lights, so only the
+            docked drawer needs an explicit close button. */}
+          {!isWindow && (
             <Button
               variant="ghost"
               size="icon"
-              className="codedrawer__expand size-6"
-              onClick={() => (setDragHeight(null), setExpanded((e) => !e))}
-              aria-label={expanded ? 'Collapse code editor' : 'Expand code editor'}
-              aria-pressed={expanded}
-              title={expanded ? 'Collapse' : 'Expand'}
+              className="codedrawer__close size-6"
+              onClick={onClose}
+              aria-label="Close code editor"
             >
-              {expanded ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+              <X className="size-3.5" />
             </Button>
-          </>
+          )}
+        </div>
+        {preview ? (
+          <MediaPreview view={preview} />
+        ) : (
+          <div
+            ref={hostRef}
+            className="codedrawer__editor min-h-0 flex-1 overflow-hidden text-[12px]"
+          />
         )}
-        <Button
-          variant="ghost"
-          size="icon"
-          className="codedrawer__close size-6"
-          onClick={onClose}
-          aria-label="Close code editor"
-        >
-          <X className="size-3.5" />
-        </Button>
       </div>
-      <div ref={hostRef} className="codedrawer__editor min-h-0 flex-1 overflow-hidden text-[12px]" />
     </div>
   )
 }

@@ -15,21 +15,21 @@ import {
   switchBranch
 } from '../src/main/git.ts'
 
-// --- pure name coercion: always a git-ref-safe dsgn/<…> ---
-assert.equal(normalizeBranchName('feature x'), 'dsgn/feature-x')
-assert.equal(normalizeBranchName('dsgn/foo'), 'dsgn/foo')
-assert.equal(normalizeBranchName('  weird~^:?*name  '), 'dsgn/weird-name')
-assert.equal(normalizeBranchName('dsgn/'), 'dsgn/work')
-assert.equal(normalizeBranchName('/a/b/'), 'dsgn/a/b')
+// --- pure name coercion: always a git-ref-safe praxis/<…> ---
+assert.equal(normalizeBranchName('feature x'), 'praxis/feature-x')
+assert.equal(normalizeBranchName('praxis/foo'), 'praxis/foo')
+assert.equal(normalizeBranchName('  weird~^:?*name  '), 'praxis/weird-name')
+assert.equal(normalizeBranchName('praxis/'), 'praxis/work')
+assert.equal(normalizeBranchName('/a/b/'), 'praxis/a/b')
 
 // --- not a git repo: a clean no-op ---
-const nonRepo = mkdtempSync(join(tmpdir(), 'dsgn-nonrepo-'))
+const nonRepo = mkdtempSync(join(tmpdir(), 'praxis-nonrepo-'))
 assert.equal(await isGitRepo(nonRepo), false)
 assert.deepEqual(await ensureBranch(nonRepo), { isRepo: false, branch: null, created: false })
 rmSync(nonRepo, { recursive: true, force: true })
 
 // --- a real repo on `main` ---
-const dir = mkdtempSync(join(tmpdir(), 'dsgn-repo-'))
+const dir = mkdtempSync(join(tmpdir(), 'praxis-repo-'))
 const g = (...a) => execFileSync('git', a, { cwd: dir, stdio: 'pipe' })
 g('init', '-b', 'main')
 g('config', 'user.email', 't@example.com')
@@ -39,25 +39,31 @@ g('add', '.')
 g('commit', '-m', 'init')
 assert.equal(await getCurrentBranch(dir), 'main')
 
-// ensureBranch from main → creates dsgn/main and checks it out
-assert.deepEqual(await ensureBranch(dir), { isRepo: true, branch: 'dsgn/main', created: true })
-assert.equal(await getCurrentBranch(dir), 'dsgn/main')
+// ensureBranch from main → creates praxis/main and checks it out
+assert.deepEqual(await ensureBranch(dir), { isRepo: true, branch: 'praxis/main', created: true })
+assert.equal(await getCurrentBranch(dir), 'praxis/main')
 
-// ensureBranch when already on a dsgn/* branch → keep it, don't recreate
-assert.deepEqual(await ensureBranch(dir), { isRepo: true, branch: 'dsgn/main', created: false })
+// ensureBranch when already on a praxis/* branch → keep it, don't recreate
+assert.deepEqual(await ensureBranch(dir), { isRepo: true, branch: 'praxis/main', created: false })
+
+// ensureBranch on a legacy pre-rename dsgn/* branch → keep it too (never nest
+// a praxis/dsgn/… branch on top of old work)
+g('checkout', '-b', 'dsgn/old-work')
+assert.deepEqual(await ensureBranch(dir), { isRepo: true, branch: 'dsgn/old-work', created: false })
+g('checkout', 'praxis/main')
 
 // switch to a new named branch (coerced + created)
 assert.deepEqual(await switchBranch(dir, 'feature-y'), {
   isRepo: true,
-  branch: 'dsgn/feature-y',
+  branch: 'praxis/feature-y',
   created: true
 })
-assert.equal(await getCurrentBranch(dir), 'dsgn/feature-y')
+assert.equal(await getCurrentBranch(dir), 'praxis/feature-y')
 
 // switch back to an existing branch → not created
-assert.deepEqual(await switchBranch(dir, 'dsgn/main'), {
+assert.deepEqual(await switchBranch(dir, 'praxis/main'), {
   isRepo: true,
-  branch: 'dsgn/main',
+  branch: 'praxis/main',
   created: false
 })
 

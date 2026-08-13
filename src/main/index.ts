@@ -1,31 +1,45 @@
 import {
   app,
   BrowserWindow,
-  WebContentsView,
-  Menu,
-  ipcMain,
   dialog,
-  shell,
+  ipcMain,
+  Menu,
+  type MenuItemConstructorOptions,
   nativeImage,
   nativeTheme,
   powerMonitor,
-  type MenuItemConstructorOptions
+  shell,
+  WebContentsView,
+  webContents
 } from 'electron'
 import { join } from 'path'
-import type { RecentMenuEntry, SelectedElement } from '../shared/api'
-import { registerDevServerIpc } from './devserver'
-import { registerSimulatorIpc } from './simulator'
+import type {
+  MoveNodeRequest,
+  RecentMenuEntry,
+  SelectedElement,
+  StyleReadResult
+} from '../shared/api'
 import { registerAgentIpc } from './agent'
-import { registerPropsIpc } from './props'
 import { registerAnnotationsIpc } from './annotations'
-import { registerTokensIpc } from './tokens'
-import { registerSetupIpc } from './setup'
-import { ensureBranch, switchBranch, listBranches, checkoutBranch } from './git'
-import { createProject } from './scaffold'
+import { registerControlsIpc } from './control-panels'
+import { registerDevServerIpc } from './devserver'
 import { registerDiagnoseIpc } from './diagnose'
-import { registerUpdateIpc } from './update-ipc'
 import { registerFeedbackIpc } from './feedback'
+import { createProjectFile, deleteProjectFile, renameProjectFile } from './file-ops'
+import { listProjectFiles } from './file-tree'
+import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
+import { registerGithubIpc } from './github'
+import { registerMediaProtocol, registerMediaScheme } from './media'
+import { applyMoveNode } from './move-node'
 import { registerPreviewSource } from './preview-state'
+import { readProjectIcon } from './project-icon'
+import { registerPropsIpc } from './props'
+import { createProject } from './scaffold'
+import { registerSetupIpc } from './setup'
+import { registerSimulatorIpc } from './simulator'
+import { registerStylesIpc } from './styles'
+import { registerTokensIpc } from './tokens'
+import { registerUpdateIpc } from './update-ipc'
 
 // Product name — drives the macOS app menu label and the About panel. Set at
 // module load (before app is ready) so the menu bar reads "Praxis", not "Electron".
@@ -36,6 +50,31 @@ app.setAboutPanelOptions({
   applicationVersion: app.getVersion()
 })
 
+// Backstop for the post-teardown race. Around a sleep/wake cycle — especially
+// after the window was closed but the app kept running (macOS) — a stray
+// Electron event can still fire into an object destroyed with the window before
+// its listener is torn down, throwing "Object has been destroyed". The specific
+// handlers are guarded (sendToMain, powerMonitor, the closed→null cleanup), but
+// this catches anything they miss (incl. Electron-internal emitters) so a benign
+// teardown race can't pop the modal "A JavaScript error occurred" dialog. Real
+// errors keep the default surfacing (an error box), so nothing is silently lost.
+process.on('uncaughtException', (err) => {
+  const msg = err instanceof Error ? err.message : String(err)
+  if (err instanceof TypeError && /Object has been destroyed/.test(msg)) {
+    console.error('Ignoring post-teardown "Object has been destroyed":', msg)
+    return
+  }
+  console.error('Uncaught exception in main process:', err)
+  try {
+    dialog.showErrorBox(
+      'A JavaScript error occurred in the main process',
+      err instanceof Error ? (err.stack ?? err.message) : String(err)
+    )
+  } catch {
+    /* dialog unavailable this early — already logged above */
+  }
+})
+
 // App icon (dev dock icon + Win/Linux window icon). Lives at build/icon.png,
 // resolved relative to the compiled main (out/main → ../../build). Loaded up front
 // so a missing file degrades to an empty image (guarded at use) instead of throwing.
@@ -43,13 +82,29 @@ const appIcon = nativeImage.createFromPath(join(__dirname, '../../build/icon.png
 
 let mainWindow: BrowserWindow | null = null
 
+/**
+ * Send an IPC message to the main renderer, defensively.
+ *
+ * A bare `mainWindow?.webContents.send(...)` only guards `mainWindow` being null
+ * — but the window can outlive its `webContents` (the OS kills the renderer process on
+ * display sleep / GPU loss). Async event sources — preview navigation events,
+ * dev-server socket data — keep firing during that window and throw an uncaught
+ * "Object has been destroyed" from `.send()`, surfacing the crash dialog the
+ * user sees on wake. Checking `isDestroyed()` makes every send a safe no-op once
+ * the renderer is gone.
+ */
+function sendToMain(channel: string, ...args: unknown[]): void {
+  const wc = mainWindow?.webContents
+  if (wc && !wc.isDestroyed()) wc.send(channel, ...args)
+}
+
 // Test isolation: the electron test tier (test/run.mjs) points each test at its
 // own throwaway userData dir so persisted state (localStorage: workspace/recents)
 // can't leak between tests — and each gets its own single-instance lock, so a
 // stale app from a killed run can't block the next launch. Never set in
 // production; must run before the lock request below.
-if (process.env.DSGN_USER_DATA) {
-  app.setPath('userData', process.env.DSGN_USER_DATA)
+if (process.env.PRAXIS_USER_DATA) {
+  app.setPath('userData', process.env.PRAXIS_USER_DATA)
 }
 
 // Single-instance: re-running `praxis` (or relaunching after an update) focuses
@@ -74,22 +129,32 @@ let commentModeActive: 'comment' | 'annotate' | null = null
 // Mobile viewport: draw the iPhone bezel INSIDE the preview page (pointer-events
 // none) so it overlays the app's screen corners yet passes clicks/selection through.
 let frameModeActive = false
+// Layers panel: whether the renderer wants the preload's MutationObserver armed.
+// Same lifecycle as the flags above — preload-local state that dies on every
+// fresh injection, re-armed on did-finish-load below.
+let layersWatchActive = false
 // Channels mirrored in src/preview/preload.ts (the injected preview preload).
-const PREVIEW_SET_MODE = 'dsgn:preview:set-select-mode'
-const PREVIEW_PICKED = 'dsgn:preview:element-picked'
-const PREVIEW_CANCELLED = 'dsgn:preview:select-cancelled'
-const PREVIEW_SET_PINS = 'dsgn:preview:set-annotations'
-const PREVIEW_PIN_CLICK = 'dsgn:preview:pin-click'
-const PREVIEW_READINESS = 'dsgn:preview:readiness'
-const PREVIEW_TEXT_EDIT = 'dsgn:preview:text-edit'
-const PREVIEW_SET_COMMENT_MODE = 'dsgn:preview:set-comment-mode'
-const PREVIEW_COMMENT_MODE = 'dsgn:preview:comment-mode'
-const PREVIEW_COMMENT = 'dsgn:preview:comment'
-const PREVIEW_SET_FRAME = 'dsgn:preview:set-frame'
-const PREVIEW_TOOLBAR_ACTION = 'dsgn:preview:toolbar-action'
-const PREVIEW_CLEAR_SELECTED = 'dsgn:preview:clear-selected'
-const PREVIEW_SET_STATUS = 'dsgn:preview:set-status'
-const PREVIEW_TOGGLE_SELECT = 'dsgn:preview:toggle-select'
+const PREVIEW_SET_MODE = 'praxis:preview:set-select-mode'
+const PREVIEW_PICKED = 'praxis:preview:element-picked'
+const PREVIEW_CANCELLED = 'praxis:preview:select-cancelled'
+const PREVIEW_SET_PINS = 'praxis:preview:set-annotations'
+const PREVIEW_PIN_CLICK = 'praxis:preview:pin-click'
+const PREVIEW_READINESS = 'praxis:preview:readiness'
+const PREVIEW_TEXT_EDIT = 'praxis:preview:text-edit'
+const PREVIEW_SET_COMMENT_MODE = 'praxis:preview:set-comment-mode'
+const PREVIEW_COMMENT_MODE = 'praxis:preview:comment-mode'
+const PREVIEW_COMMENT = 'praxis:preview:comment'
+const PREVIEW_SET_FRAME = 'praxis:preview:set-frame'
+const PREVIEW_TOOLBAR_ACTION = 'praxis:preview:toolbar-action'
+const PREVIEW_CLEAR_SELECTED = 'praxis:preview:clear-selected'
+const PREVIEW_SET_STATUS = 'praxis:preview:set-status'
+const PREVIEW_TOGGLE_SELECT = 'praxis:preview:toggle-select'
+const LAYERS_READ = 'layers:read'
+const LAYERS_READ_REPLY = 'layers:read-reply'
+const LAYERS_CHANGED = 'layers:changed'
+const LAYERS_SELECT = 'layers:select'
+const LAYERS_HOVER = 'layers:hover'
+const LAYERS_SET_WATCH = 'layers:set-watch'
 
 // Launch-status pill text (shown inside the preview); re-pushed after loads.
 let previewStatusText: string | null = null
@@ -189,7 +254,7 @@ function sameUrl(a: string | null, b: string | null): boolean {
 }
 
 /**
- * Cmd/Ctrl+R must NOT reload the dsgn renderer: that wipes the chat + the open
+ * Cmd/Ctrl+R must NOT reload the praxis renderer: that wipes the chat + the open
  * project (renderer-only zustand state) while the native preview WebContentsView
  * survives, stranding the tool in a broken half-state ("no project open" but the
  * preview still showing). Intercept it on whichever webContents has focus and
@@ -208,12 +273,38 @@ let recentProjects: RecentMenuEntry[] = []
  * commands (Reload/Select/Publish/Stop/Viewport) that used to be titlebar
  * buttons. Because we set our OWN menu, the default View → Reload (which reloaded
  * the renderer and stranded the tool) is gone; our Cmd+R reloads the PREVIEW
- * instead. Renderer-side actions go over `menu:action`; a chosen recent goes over
+ * instead. On macOS the app menu is spelled out rather than `role: 'appMenu'` so
+ * it can carry Settings… (Cmd+,); other platforms get that item under File.
+ * Renderer-side actions go over `menu:action`; a chosen recent goes over
  * `menu:open-recent`; reload is handled here directly.
  */
 function buildAppMenu(): void {
-  const send = (action: string): void => mainWindow?.webContents.send('menu:action', action)
-  const openRecent = (root: string): void => mainWindow?.webContents.send('menu:open-recent', root)
+  const send = (action: string): void => sendToMain('menu:action', action)
+  const openRecent = (root: string): void => sendToMain('menu:open-recent', root)
+
+  /**
+   * Edit → Undo/Redo. NOT `role: 'editMenu'`: the role's Undo item owns the
+   * Cmd+Z accelerator at the NATIVE menu level, which intercepts the keystroke
+   * in the main process and routes it to text-editing undo — the renderer's
+   * keydown listener (App.tsx, the praxis source-edit undo) never fires for a
+   * physical keyboard. (Tests never caught this: synthetic/CDP key events
+   * bypass native menu accelerators, so the renderer handler DID fire there.)
+   *
+   * Routing: a non-main focused webContents (the preview, the props island,
+   * the pop-out editor) gets plain text-editing undo — exactly what the role
+   * did, incl. CodeMirror, which maps the native historyUndo beforeinput to
+   * its own history. The MAIN renderer decides for itself (menu:action):
+   * a focused text field keeps native undo; anything else runs the praxis
+   * source-edit undo stack.
+   */
+  const editCommand = (cmd: 'undo' | 'redo'): void => {
+    const focused = webContents.getFocusedWebContents()
+    if (focused && focused !== mainWindow?.webContents) {
+      focused[cmd]()
+      return
+    }
+    send(cmd)
+  }
 
   const recentItems: MenuItemConstructorOptions[] = recentProjects.length
     ? [
@@ -228,8 +319,40 @@ function buildAppMenu(): void {
       ]
     : [{ label: 'No Recent Projects', enabled: false }]
 
+  /**
+   * Settings (the v10 providers dialog). MUST be a real menu item: Cmd+, is a
+   * native accelerator, so a renderer keydown for it would never fire on a
+   * physical keyboard (see the Edit-menu note above). On macOS that means
+   * spelling out `role: 'appMenu'`'s own template — it has no Settings slot —
+   * so the item sits where the platform puts it; elsewhere it rides File.
+   */
+  const settingsItem: MenuItemConstructorOptions = {
+    label: 'Settings…',
+    accelerator: 'CmdOrCtrl+,',
+    click: () => send('settings')
+  }
+
   const template: MenuItemConstructorOptions[] = [
-    ...(process.platform === 'darwin' ? [{ role: 'appMenu' as const }] : []),
+    ...(process.platform === 'darwin'
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: 'about' as const },
+              { type: 'separator' as const },
+              settingsItem,
+              { type: 'separator' as const },
+              { role: 'services' as const },
+              { type: 'separator' as const },
+              { role: 'hide' as const },
+              { role: 'hideOthers' as const },
+              { role: 'unhide' as const },
+              { type: 'separator' as const },
+              { role: 'quit' as const }
+            ]
+          }
+        ]
+      : []),
     {
       label: 'File',
       submenu: [
@@ -243,10 +366,26 @@ function buildAppMenu(): void {
           accelerator: 'CmdOrCtrl+O',
           click: () => send('open-project')
         },
-        { label: 'Open Recent', submenu: recentItems }
+        { label: 'Open Recent', submenu: recentItems },
+        ...(process.platform === 'darwin'
+          ? []
+          : [{ type: 'separator' as const }, settingsItem])
       ]
     },
-    { role: 'editMenu' },
+    {
+      label: 'Edit',
+      submenu: [
+        { label: 'Undo', accelerator: 'CmdOrCtrl+Z', click: () => editCommand('undo') },
+        { label: 'Redo', accelerator: 'Shift+CmdOrCtrl+Z', click: () => editCommand('redo') },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'pasteAndMatchStyle' },
+        { role: 'delete' },
+        { role: 'selectAll' }
+      ]
+    },
     {
       label: 'Actions',
       submenu: [
@@ -266,13 +405,21 @@ function buildAppMenu(): void {
           click: () => send('logs')
         },
         {
+          // Figma's "hide UI": chat + sidebar collapse, only the preview stays.
+          label: 'Toggle UI',
+          accelerator: 'CmdOrCtrl+.',
+          click: () => send('toggle-chat')
+        },
+        {
           label: 'Publish',
           accelerator: 'CmdOrCtrl+Shift+P',
           click: () => send('publish')
         },
         {
+          // ⌘. went to Toggle UI (the Figma muscle-memory); Stop keeps the
+          // Xcode-ish combo one modifier up.
           label: 'Stop Project',
-          accelerator: 'CmdOrCtrl+.',
+          accelerator: 'CmdOrCtrl+Shift+.',
           click: () => send('stop')
         },
         { type: 'separator' },
@@ -302,7 +449,7 @@ function buildAppMenu(): void {
 // The floating props island must paint ON TOP of the live preview content, and
 // renderer DOM never can (the preview is a native WebContentsView, which always
 // draws above the page). So the island is its own WebContentsView stacked after
-// (= above) the preview, running the same renderer bundle with ?dsgnPanel=1 —
+// (= above) the preview, running the same renderer bundle with ?praxisPanel=1 —
 // that entry renders just the PropPanel and syncs state/actions over panel:*.
 let panelView: WebContentsView | null = null
 let panelState: unknown = null
@@ -319,16 +466,17 @@ function ensurePanelView(): WebContentsView {
   // Transparent — the card draws its own surface + shadow inside the view rect.
   panelView.setBackgroundColor('#00000000')
   if (process.env['ELECTRON_RENDERER_URL']) {
-    void panelView.webContents.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?dsgnPanel=1`)
+    void panelView.webContents.loadURL(`${process.env['ELECTRON_RENDERER_URL']}?praxisPanel=1`)
   } else {
     void panelView.webContents.loadFile(join(__dirname, '../renderer/index.html'), {
-      query: { dsgnPanel: '1' }
+      query: { praxisPanel: '1' }
     })
   }
-  // The panel page is stateless — re-push the latest state after any (re)load.
-  panelView.webContents.on('did-finish-load', () => {
-    if (panelState) panelView?.webContents.send('panel:state', panelState)
-  })
+  // The panel page is stateless — it pulls the latest state itself once it is
+  // listening (panel:request-state below). Re-pushing here on `did-finish-load`
+  // instead would race the island's own ipcRenderer registration (React commits
+  // its effect after the page's load event as often as not) and the island would
+  // stay blank until some unrelated selection change happened to re-push.
   mainWindow?.contentView.addChildView(panelView)
   return panelView
 }
@@ -413,6 +561,7 @@ function ensurePreviewView(): WebContentsView {
       if (selectModeActive) wc.send(PREVIEW_SET_MODE, true)
       if (commentModeActive) wc.send(PREVIEW_SET_COMMENT_MODE, commentModeActive)
       if (frameModeActive) wc.send(PREVIEW_SET_FRAME, true)
+      if (layersWatchActive) wc.send(LAYERS_SET_WATCH, true)
       // Only re-send pins when there are some — an empty push would make the
       // preload build (and inject) the overlay host for nothing.
       if (annotationPins.length) wc.send(PREVIEW_SET_PINS, annotationPins)
@@ -426,7 +575,7 @@ function ensurePreviewView(): WebContentsView {
   // data: placeholder.
   const reportUrl = (): void => {
     const url = wc.getURL()
-    if (/^https?:/.test(url)) mainWindow?.webContents.send('preview:url-changed', url)
+    if (/^https?:/.test(url)) sendToMain('preview:url-changed', url)
   }
   wc.on('did-navigate', reportUrl)
   wc.on('did-navigate-in-page', reportUrl)
@@ -459,6 +608,7 @@ function resetStalePreview(): void {
   selectModeActive = false
   commentModeActive = null
   frameModeActive = false
+  layersWatchActive = false
   annotationPins = []
 }
 
@@ -498,7 +648,7 @@ function createWindow(): void {
   // macOS traffic lights are hidden, so the floating sidebar toggle re-aligns to
   // the window's left edge instead of clearing the (now absent) window controls.
   const sendFullscreen = (): void =>
-    mainWindow?.webContents.send('window:fullscreen', mainWindow.isFullScreen())
+    sendToMain('window:fullscreen', mainWindow?.isFullScreen() ?? false)
   mainWindow.on('enter-full-screen', sendFullscreen)
   mainWindow.on('leave-full-screen', sendFullscreen)
   // No material swap on these transitions: in fullscreen the renderer paints
@@ -547,11 +697,28 @@ function createWindow(): void {
   // initial load too (previewView is still null then, so this is a no-op).
   mainWindow.webContents.on('did-navigate', resetStalePreview)
 
+  // Closing the window (traffic-light close) does NOT quit on macOS — the app
+  // stays alive to own the dev server. Without this, `mainWindow` kept pointing
+  // at the *destroyed* BrowserWindow, so every `mainWindow?.…` guard elsewhere
+  // was defeated (non-null but dead) and background listeners that fire on wake
+  // — powerMonitor 'resume', dev-server socket data, preview navigation — threw
+  // an uncaught "Object has been destroyed", popping the crash dialog. Null the
+  // window and its child views (destroyed with it) so those guards short-circuit
+  // and a later dock re-open (app 'activate') rebuilds fresh views instead of
+  // ensurePreviewView/ensurePanelView handing back a dead one.
+  mainWindow.on('closed', () => {
+    mainWindow = null
+    previewView = null
+    panelView = null
+    previewUrl = null
+    lastPreviewBounds = { x: 0, y: 0, width: 0, height: 0, radius: 0 }
+  })
+
   loadRenderer()
 }
 
 // The code drawer, popped out into its own window. Runs the same renderer bundle
-// with ?dsgnEditor=1 (like the ?dsgnPanel island), so it reuses CodeMirror, the
+// with ?praxisEditor=1 (like the ?praxisPanel island), so it reuses CodeMirror, the
 // source:* IPC, and the app's theming — it just renders the editor full-window
 // instead of docked under the preview. Keyed by project root so a second pop-out
 // for the same project re-focuses the existing window rather than stacking.
@@ -594,7 +761,7 @@ function openEditorWindow(root: string, source: string): void {
     return { action: 'deny' }
   })
 
-  const query = { dsgnEditor: '1', root, source }
+  const query = { praxisEditor: '1', root, source }
   if (process.env['ELECTRON_RENDERER_URL']) {
     const u = new URL(process.env['ELECTRON_RENDERER_URL'])
     for (const [k, v] of Object.entries(query)) u.searchParams.set(k, v)
@@ -608,6 +775,20 @@ function registerEditorIpc(): void {
   ipcMain.handle('source:popout', (_e, root: string, source: string) => {
     openEditorWindow(root, source)
   })
+  // The pop-out editor's file-tree sidebar: repo-relative file paths for `root`.
+  ipcMain.handle('source:tree', (_e, root: string) => listProjectFiles(root))
+  // …and its file-manager ops. Every path is re-validated inside file-ops.ts —
+  // the renderer's is untrusted. Delete goes to the OS trash: these aren't
+  // content edits, so the undo history can't take them back.
+  ipcMain.handle('source:create-file', (_e, root: string, path: string) =>
+    createProjectFile(root, path)
+  )
+  ipcMain.handle('source:rename-file', (_e, root: string, from: string, to: string) =>
+    renameProjectFile(root, from, to)
+  )
+  ipcMain.handle('source:delete-file', (_e, root: string, path: string) =>
+    deleteProjectFile(root, path, (abs) => shell.trashItem(abs))
+  )
   // Close the editor window that sent this (a popped-out editor closing itself).
   ipcMain.handle('source:close-window', (e) => {
     BrowserWindow.fromWebContents(e.sender)?.close()
@@ -690,6 +871,7 @@ function registerPreviewIpc(): void {
     selectModeActive = false
     commentModeActive = null
     frameModeActive = false
+    layersWatchActive = false
     annotationPins = []
     ensurePreviewView().webContents.loadURL(PLACEHOLDER_HTML)
   })
@@ -723,12 +905,12 @@ function registerPreviewIpc(): void {
   // preview → renderer relays. Only trust events from the preview's webContents.
   ipcMain.on(PREVIEW_PICKED, (e, el: SelectedElement) => {
     if (e.sender !== previewView?.webContents) return
-    mainWindow?.webContents.send('preview:element-picked', el)
+    sendToMain('preview:element-picked', el)
   })
   ipcMain.on(PREVIEW_CANCELLED, (e) => {
     if (e.sender !== previewView?.webContents) return
     selectModeActive = false
-    mainWindow?.webContents.send('preview:select-cancelled')
+    sendToMain('preview:select-cancelled')
   })
 
   // Selection-toolbar actions that need the renderer (code drawer / delete turn);
@@ -736,7 +918,7 @@ function registerPreviewIpc(): void {
   ipcMain.on(PREVIEW_TOOLBAR_ACTION, (e, kind: string) => {
     if (e.sender !== previewView?.webContents) return
     if (kind !== 'code' && kind !== 'delete' && kind !== 'props') return
-    mainWindow?.webContents.send('preview:toolbar-action', kind)
+    sendToMain('preview:toolbar-action', kind)
   })
   // Renderer dropped the selection (pill ×, message sent) → hide the toolbar.
   ipcMain.on('preview:clear-selected', () => {
@@ -746,7 +928,7 @@ function registerPreviewIpc(): void {
   // S pressed while the preview has focus → the renderer runs its toggle.
   ipcMain.on(PREVIEW_TOGGLE_SELECT, (e) => {
     if (e.sender !== previewView?.webContents) return
-    mainWindow?.webContents.send('preview:toggle-select')
+    sendToMain('preview:toggle-select')
   })
 
   // Launch progress, drawn INSIDE the preview (bottom-center pill) instead of a
@@ -778,15 +960,91 @@ function registerPreviewIpc(): void {
     panelState = state
     panelView?.webContents.send('panel:state', state)
   })
+  // Island → "I'm listening, send me what you have". The first setState always
+  // predates the view (show creates it), so without this pull the island's very
+  // first render would have nothing to draw. Same channel as the pushes, so the
+  // reply can never overtake a newer state.
+  ipcMain.on('panel:request-state', (e) => {
+    if (e.sender !== panelView?.webContents) return
+    if (panelState) e.sender.send('panel:state', panelState)
+  })
   // Panel → main renderer: user actions (close/dock/seed/…) and content height.
   ipcMain.on('panel:action', (e, action: unknown) => {
     if (e.sender !== panelView?.webContents) return
-    mainWindow?.webContents.send('panel:action', action)
+    sendToMain('panel:action', action)
   })
   ipcMain.on('panel:size', (e, size: { width: number; height: number }) => {
     if (e.sender !== panelView?.webContents) return
-    mainWindow?.webContents.send('panel:size', size)
+    sendToMain('panel:size', size)
   })
+
+  // ── Styles tab: live-injection relays + computed-style reads (v10) ──────────
+  // The style controls live in the island (panelView), but the main renderer may
+  // also drive them — accept either sender, relay into the preview's preload.
+  const fromMainOrPanel = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
+    e.sender === mainWindow?.webContents || e.sender === panelView?.webContents
+  ipcMain.on('styles:preview', (e, p: { prop: string; value: string }) => {
+    if (!fromMainOrPanel(e)) return
+    previewView?.webContents.send('styles:preview', p)
+  })
+  ipcMain.on('styles:clear-preview', (e, p?: { prop?: string }) => {
+    if (!fromMainOrPanel(e)) return
+    previewView?.webContents.send('styles:clear-preview', p)
+  })
+  ipcMain.on('styles:replay', (e, p: { prop: string; from: string; to: string }) => {
+    if (!fromMainOrPanel(e)) return
+    previewView?.webContents.send('styles:replay', p)
+  })
+
+  // Fresh computed values from the selection. The preview preload is sandboxed
+  // (no contextBridge; executeJavaScript can't reach its isolated world), so
+  // reads are a request-id round trip over IPC: send `styles:read` {id, props},
+  // await the matching `styles:read-reply` {id, values, declaredVars}. A 500ms
+  // timeout guards a dead/navigating preview — null means no preview / no
+  // selection / timeout. `declaredVars` is the proof half (see
+  // `preview/style-provenance.ts`) that lets the panel tell a property's value
+  // IS a token from it merely equalling one.
+  let styleReadSeq = 0
+  const pendingStyleReads = new Map<number, (result: StyleReadResult | null) => void>()
+  ipcMain.on(
+    'styles:read-reply',
+    (
+      e,
+      p: {
+        id?: unknown
+        values?: Record<string, string> | null
+        declaredVars?: Record<string, string | null> | null
+        specified?: Record<string, string> | null
+      }
+    ) => {
+      if (e.sender !== previewView?.webContents) return
+      const resolve = typeof p?.id === 'number' ? pendingStyleReads.get(p.id) : undefined
+      resolve?.(
+        p.values
+          ? { values: p.values, declaredVars: p.declaredVars ?? {}, specified: p.specified ?? {} }
+          : null
+      )
+    }
+  )
+  ipcMain.handle(
+    'styles:read',
+    (e, props: string[]): Promise<StyleReadResult | null> | null => {
+      if (!fromMainOrPanel(e) || !previewView || !Array.isArray(props)) return null
+      const id = ++styleReadSeq
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingStyleReads.delete(id)
+          resolve(null)
+        }, 500)
+        pendingStyleReads.set(id, (result) => {
+          clearTimeout(timer)
+          pendingStyleReads.delete(id)
+          resolve(result)
+        })
+        previewView?.webContents.send('styles:read', { id, props })
+      })
+    }
+  )
 
   // v3 annotation pins: renderer pushes the list → preview; clicks come back.
   ipcMain.on('preview:set-annotations', (_e, pins: { id: string; selector: string }[]) => {
@@ -795,19 +1053,19 @@ function registerPreviewIpc(): void {
   })
   ipcMain.on(PREVIEW_PIN_CLICK, (e, id: string) => {
     if (e.sender !== previewView?.webContents) return
-    mainWindow?.webContents.send('annotations:pin-click', id)
+    sendToMain('annotations:pin-click', id)
   })
 
   // Readiness probe (stamp count) → renderer, to drive the setup offer.
   ipcMain.on(PREVIEW_READINESS, (e, info: { stamps: number }) => {
     if (e.sender !== previewView?.webContents) return
-    mainWindow?.webContents.send('preview:readiness', info)
+    sendToMain('preview:readiness', info)
   })
 
   // Inline text edit committed in the preview → renderer (which applies it).
   ipcMain.on(PREVIEW_TEXT_EDIT, (e, edit: { source: string; text: string }) => {
     if (e.sender !== previewView?.webContents) return
-    mainWindow?.webContents.send('preview:text-edit', edit)
+    sendToMain('preview:text-edit', edit)
   })
 
   // Inline commenting (C/Y): renderer arms the mode → preview.
@@ -820,7 +1078,7 @@ function registerPreviewIpc(): void {
   ipcMain.on(PREVIEW_COMMENT_MODE, (e, mode: 'comment' | 'annotate' | null) => {
     if (e.sender !== previewView?.webContents) return
     commentModeActive = mode
-    mainWindow?.webContents.send('preview:comment-mode', mode)
+    sendToMain('preview:comment-mode', mode)
   })
   // A submitted comment/annotation (element + text) → renderer (agent vs pin).
   ipcMain.on(
@@ -834,9 +1092,65 @@ function registerPreviewIpc(): void {
       }
     ) => {
       if (e.sender !== previewView?.webContents) return
-      mainWindow?.webContents.send('preview:comment', payload)
+      sendToMain('preview:comment', payload)
     }
   )
+
+  // ── Layers panel ─────────────────────────────────────────────────────────
+  const fromMainForLayers = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
+    e.sender === mainWindow?.webContents
+
+  // Bulk DOM-tree read: request-id round trip, same shape as styles:read — the
+  // preview preload is sandboxed, so a bulk read of its isolated world can only
+  // ever be this kind of message-passing round trip, never executeJavaScript.
+  let layersReadSeq = 0
+  const pendingLayersReads = new Map<number, (snapshot: unknown) => void>()
+  ipcMain.on(LAYERS_READ_REPLY, (e, p: { id?: unknown; snapshot?: unknown }) => {
+    if (e.sender !== previewView?.webContents) return
+    const resolve = typeof p?.id === 'number' ? pendingLayersReads.get(p.id) : undefined
+    resolve?.(p?.snapshot ?? null)
+  })
+  ipcMain.handle('layers:read', (e): Promise<unknown> | null => {
+    if (!fromMainForLayers(e) || !previewView) return null
+    const id = ++layersReadSeq
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        pendingLayersReads.delete(id)
+        resolve(null)
+      }, 800)
+      pendingLayersReads.set(id, (snapshot) => {
+        clearTimeout(timer)
+        pendingLayersReads.delete(id)
+        resolve(snapshot)
+      })
+      previewView?.webContents.send(LAYERS_READ, { id })
+    })
+  })
+  ipcMain.on('layers:select', (e, p: { path: number[]; fingerprint: unknown }) => {
+    if (!fromMainForLayers(e)) return
+    previewView?.webContents.send(LAYERS_SELECT, p)
+  })
+  ipcMain.on('layers:hover', (e, p: { path: number[]; fingerprint: unknown } | null) => {
+    if (!fromMainForLayers(e)) return
+    previewView?.webContents.send(LAYERS_HOVER, p)
+  })
+  ipcMain.on('layers:set-watch', (e, on: boolean) => {
+    if (!fromMainForLayers(e)) return
+    layersWatchActive = !!on
+    previewView?.webContents.send(LAYERS_SET_WATCH, layersWatchActive)
+  })
+  // Debounced structural-change ping from the preload → renderer (the renderer
+  // decides whether/when to re-`layers:read`).
+  ipcMain.on(LAYERS_CHANGED, (e) => {
+    if (e.sender !== previewView?.webContents) return
+    sendToMain('layers:changed')
+  })
+  // Drag-to-reorder: writes real source for a same-parent sibling move;
+  // anything ambiguous reports `needsAgent` instead (see move-node.ts).
+  ipcMain.handle('layers:move', (e, root: string, req: MoveNodeRequest) => {
+    if (!fromMainForLayers(e)) return null
+    return applyMoveNode(root, req)
+  })
 
   ipcMain.handle('project:pick', async (): Promise<string | null> => {
     if (!mainWindow) return null
@@ -861,6 +1175,10 @@ function registerPreviewIpc(): void {
     return res.canceled ? null : (res.filePath ?? null)
   })
   ipcMain.handle('project:create', (_e, root: string) => createProject(root))
+  // The project's own favicon for its rail row. Cheap + cached in main, and
+  // read from the source tree rather than the preview, so a project that has
+  // never been run still shows its icon.
+  ipcMain.handle('project:icon', (_e, root: string) => readProjectIcon(root))
 }
 
 // Dev-mode CDP endpoint: run `bun run dev`, then open chrome://inspect in a real
@@ -869,10 +1187,15 @@ function registerPreviewIpc(): void {
 // dev signal used in createWindow (loadURL vs loadFile), so a built/packaged app
 // never opens the port.
 if (process.env['ELECTRON_RENDERER_URL']) {
-  app.commandLine.appendSwitch('remote-debugging-port', process.env['DSGN_DEBUG_PORT'] ?? '9222')
+  app.commandLine.appendSwitch('remote-debugging-port', process.env['PRAXIS_DEBUG_PORT'] ?? '9222')
 }
 
+// The editor's image/video scheme. Privileges are frozen at app-ready, so this
+// has to run at module scope — registerMediaProtocol() (the handler) comes later.
+registerMediaScheme()
+
 app.whenReady().then(() => {
+  registerMediaProtocol()
   // macOS dock icon comes from the bundle's .icns (scripts/patch-electron.mjs
   // installs ours into the dev Electron.app). Do NOT app.dock.setIcon() here:
   // runtime dock images skip the system's icon treatment on macOS 26, so they
@@ -884,7 +1207,11 @@ app.whenReady().then(() => {
   // renderer ever firing 'render-process-gone' — it just goes quietly stale.
   // Nudge a repaint on resume; harmless no-op if the frame was already fine.
   powerMonitor.on('resume', () => {
-    mainWindow?.webContents.invalidate()
+    // The window may have been closed (app stays alive on macOS) or its renderer
+    // killed while asleep — either way its webContents is destroyed, and a bare
+    // .invalidate() would throw an uncaught "Object has been destroyed" on wake.
+    const wc = mainWindow?.webContents
+    if (wc && !wc.isDestroyed()) wc.invalidate()
   })
   // File → Open Recent is driven by the renderer's recents store: it pushes the
   // current list, we cap at 8 and rebuild the menu.
@@ -896,13 +1223,25 @@ app.whenReady().then(() => {
       : []
     buildAppMenu()
   })
+  // Edit → Undo/Redo bounced back from the main renderer: it received the
+  // menu:action, saw a text field focused, and wants the NATIVE text-editing
+  // command it would have gotten by default — which the custom menu item's
+  // accelerator swallowed (see buildAppMenu's editCommand).
+  ipcMain.on('menu:native-edit', (e, cmd: 'undo' | 'redo') => {
+    if (e.sender !== mainWindow?.webContents) return
+    if (cmd === 'undo') mainWindow.webContents.undo()
+    else if (cmd === 'redo') mainWindow.webContents.redo()
+  })
   registerPreviewIpc()
   registerEditorIpc()
   registerDevServerIpc(() => mainWindow)
   registerSimulatorIpc(() => mainWindow)
   registerAgentIpc(() => mainWindow)
   registerPropsIpc()
+  registerStylesIpc()
+  registerControlsIpc()
   registerAnnotationsIpc()
+  registerGithubIpc()
   registerTokensIpc()
   registerSetupIpc()
   ipcMain.handle('git:ensure', (_e, root: string) => ensureBranch(root))

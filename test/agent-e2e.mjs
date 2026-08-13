@@ -42,8 +42,8 @@ try {
   // tool isn't gated by an approve/deny card no one is here to click — this also
   // exercises that "Auto" genuinely bypasses via the SDK. Stub the folder dialog.
   await win.evaluate(() => {
-    window.__dsgnSession.getState().setModel('haiku')
-    window.__dsgnPermissions.getState().setMode('bypassPermissions')
+    window.__praxisSession.getState().setModel('haiku')
+    window.__praxisPermissions.getState().setMode('bypassPermissions')
   })
   await app.evaluate(async ({ dialog }, p) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [p] })
@@ -64,10 +64,10 @@ try {
 
   let finished = true
   try {
-    await win.waitForFunction(() => window.__dsgnStore.getState().isRunning === true, {
+    await win.waitForFunction(() => window.__praxisStore.getState().isRunning === true, {
       timeout: 20000
     })
-    await win.waitForFunction(() => window.__dsgnStore.getState().isRunning === false, {
+    await win.waitForFunction(() => window.__praxisStore.getState().isRunning === false, {
       timeout: 180000
     })
   } catch {
@@ -75,7 +75,7 @@ try {
   }
 
   const assistant = await win.evaluate(() => {
-    const ms = window.__dsgnStore.getState().messages
+    const ms = window.__praxisStore.getState().messages
     const a = [...ms].reverse().find((m) => m.role === 'assistant')
     return a ? `${a.statuses.join('\n')}\n${a.text}`.trim() : ''
   })

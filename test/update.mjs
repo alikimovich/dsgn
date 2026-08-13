@@ -1,5 +1,5 @@
 /**
- * dsgn self-update — pure unit test of the detection helpers. Runs under bun
+ * praxis self-update — pure unit test of the detection helpers. Runs under bun
  * (no electron), like rules.mjs/git.ts: update.ts is electron-free.
  *
  * Run with: bun test/update.mjs

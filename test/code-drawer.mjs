@@ -37,7 +37,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   // --- Engine: conflict guard — a stale baseline is refused, file untouched. ---
@@ -49,7 +49,7 @@ try {
   if (disk() !== baseline) throw new Error('conflicting write must not touch the file')
 
   // --- Engine: a good save writes the whole file + records an undo step. ---
-  const next = baseline + '\n// dsgn-drawer-test\n'
+  const next = baseline + '\n// praxis-drawer-test\n'
   const saved = await win.evaluate(
     (a) => window.api.source.write(a.fixture, a.src, a.baseline, a.next),
     { fixture, src: SRC, baseline, next }
@@ -72,8 +72,8 @@ try {
   // --- UI: select an element → the Code button opens the editor drawer. ---
   await win.evaluate(
     (args) => {
-      window.__dsgnSession.getState().setProjectRoot(args.fixture)
-      window.__dsgnSelection.getState().setSelected({
+      window.__praxisSession.getState().setProjectRoot(args.fixture)
+      window.__praxisSelection.getState().setSelected({
         tag: 'span',
         id: null,
         classes: ['badge'],
@@ -92,14 +92,14 @@ try {
   // test window (they live in different panes at real sizes).
   // The Code action lives in the in-preview selection toolbar now; open the
   // drawer through its store (what the toolbar's relay calls).
-  await win.evaluate((src) => window.__dsgnCodeDrawer.getState().open(src), SRC)
+  await win.evaluate((src) => window.__praxisCodeDrawer.getState().open(src), SRC)
 
   // CodeMirror mounts, the stamp span is highlighted, and the bottom inset is reserved.
   await win.waitForSelector('.codedrawer .cm-editor', { timeout: 5000 })
   await win.waitForFunction(() => document.querySelectorAll('.codedrawer .cm-stamp-line').length > 0, undefined, {
     timeout: 5000
   })
-  const bottom = await win.evaluate(() => window.__dsgnPanelInset.getState().bottom)
+  const bottom = await win.evaluate(() => window.__praxisPanelInset.getState().bottom)
   if (!(bottom > 0)) throw new Error(`drawer did not reserve a bottom inset (got ${bottom})`)
   const drawerText = await win.$eval('.codedrawer .cm-content', (el) => el.textContent ?? '')
   if (!drawerText.includes('variant')) throw new Error('drawer did not load the file source')
@@ -107,7 +107,7 @@ try {
 
   // --- Drag the top edge to resize; the reserved inset grows but is capped at
   // 80% of the window height. ---
-  const beforeDrag = await win.evaluate(() => window.__dsgnPanelInset.getState().bottom)
+  const beforeDrag = await win.evaluate(() => window.__praxisPanelInset.getState().bottom)
   const handle = await win.waitForSelector('.codedrawer__resize', { timeout: 5000 })
   const box = await handle.boundingBox()
   if (!box) throw new Error('resize handle has no bounding box')
@@ -115,27 +115,102 @@ try {
   await win.mouse.down()
   await win.mouse.move(box.x + box.width / 2, 0, { steps: 8 }) // drag to the very top
   await win.mouse.up()
-  const afterDrag = await win.evaluate(() => window.__dsgnPanelInset.getState().bottom)
+  const afterDrag = await win.evaluate(() => window.__praxisPanelInset.getState().bottom)
   const cap = await win.evaluate(() => window.innerHeight * 0.8)
   if (!(afterDrag > beforeDrag)) throw new Error(`drag did not grow the drawer (${beforeDrag} → ${afterDrag})`)
   if (afterDrag > cap + 1) throw new Error(`drawer exceeded the 80% cap (${afterDrag} > ${cap})`)
 
   // Close releases the inset.
   await win.$eval('.codedrawer__close', (el) => el.click())
-  await win.waitForFunction(() => window.__dsgnPanelInset.getState().bottom === 0, undefined, {
+  await win.waitForFunction(() => window.__praxisPanelInset.getState().bottom === 0, undefined, {
     timeout: 5000
   })
   if (await win.$('.codedrawer')) throw new Error('drawer did not unmount on close')
 
+  // --- Media: a PNG previews instead of being decoded as utf8 (LKM-73). The
+  // fixture is deliberately named .PNG — an uppercase extension must still hit
+  // the media path. ---
+  const shot = await win.evaluate((f) => window.api.source.read(f, 'src/Logo.PNG:1'), fixture)
+  if (!shot?.media) throw new Error(`PNG did not read as media: ${JSON.stringify(shot)}`)
+  if (shot.media.kind !== 'image' || shot.media.mediaType !== 'image/png') {
+    throw new Error(`wrong media descriptor: ${JSON.stringify(shot.media)}`)
+  }
+  if (!shot.media.url.startsWith('praxis-media://')) throw new Error(`bad url: ${shot.media.url}`)
+  if (shot.code !== '') throw new Error('media must not ship the file as text')
+  if (!(shot.bytes > 0)) throw new Error(`media must report its size (got ${shot.bytes})`)
+  // Saving one is refused outright — a utf8 round-trip would corrupt it.
+  const wrote = await win.evaluate(
+    (f) => window.api.source.write(f, 'src/Logo.PNG:1', '', 'nope'),
+    fixture
+  )
+  if (wrote.ok) throw new Error('an image must not be writable as text')
+
+  // The protocol itself: whole-file GET, a range request (what <video> seeking
+  // needs), and an unknown token. Driven from MAIN — the renderer's CSP allows
+  // praxis-media: for <img>/<video>, not for fetch().
+  const served = await app.evaluate(async ({ net }, url) => {
+    const whole = await net.fetch(url)
+    const bytes = (await whole.arrayBuffer()).byteLength
+    const part = await net.fetch(url, { headers: { Range: 'bytes=0-7' } })
+    const sig = [...new Uint8Array(await part.arrayBuffer())]
+    const missing = await net.fetch(url.replace(/[^/]+$/, 'deadbeef'))
+    return {
+      status: whole.status,
+      type: whole.headers.get('content-type'),
+      ranges: whole.headers.get('accept-ranges'),
+      bytes,
+      partStatus: part.status,
+      contentRange: part.headers.get('content-range'),
+      sig,
+      missingStatus: missing.status
+    }
+  }, shot.media.url)
+  if (served.status !== 200 || served.type !== 'image/png') {
+    throw new Error(`media GET: ${JSON.stringify(served)}`)
+  }
+  if (served.bytes !== shot.bytes) {
+    throw new Error(`media GET served ${served.bytes} of ${shot.bytes} bytes`)
+  }
+  if (served.ranges !== 'bytes') throw new Error('media response must advertise byte ranges')
+  if (served.partStatus !== 206 || served.contentRange !== `bytes 0-7/${shot.bytes}`) {
+    throw new Error(`range request: ${JSON.stringify(served)}`)
+  }
+  const PNG_SIG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+  if (String(served.sig) !== String(PNG_SIG)) throw new Error(`range served ${served.sig}`)
+  if (served.missingStatus !== 404) throw new Error('an unregistered token must 404')
+
+  // …and in the UI it's a picture, with no editor and nothing to save.
+  await win.evaluate(() => window.__praxisCodeDrawer.getState().open('src/Logo.PNG:1'))
+  const img = await win.waitForSelector('.codedrawer__media img', { timeout: 5000 })
+  await win.waitForFunction(
+    () => {
+      const el = document.querySelector('.codedrawer__media img')
+      return !!el && el.naturalWidth > 0
+    },
+    undefined,
+    { timeout: 5000 }
+  )
+  const natural = await img.evaluate((el) => [el.naturalWidth, el.naturalHeight])
+  if (natural[0] !== 96 || natural[1] !== 96) throw new Error(`image did not decode: ${natural}`)
+  if (await win.$('.codedrawer .cm-editor')) throw new Error('a preview must not mount CodeMirror')
+  if (await win.$('.codedrawer__save')) throw new Error('a preview must not offer Save')
+  const label = await win.$eval('.codedrawer__file', (el) => el.textContent ?? '')
+  if (!label.includes('Logo.PNG') || label.includes(':1')) {
+    throw new Error(`preview header should show the path alone: ${label}`)
+  }
+  await win.screenshot({ path: join(artifacts, '13c-media-preview.png') })
+  await win.$eval('.codedrawer__close', (el) => el.click())
+  await win.waitForFunction(() => !document.querySelector('.codedrawer'), undefined, { timeout: 5000 })
+
   // --- Pop out: the button opens a second BrowserWindow running the editor and
   // closes the docked drawer. ---
-  await win.evaluate((src) => window.__dsgnCodeDrawer.getState().open(src), SRC)
+  await win.evaluate((src) => window.__praxisCodeDrawer.getState().open(src), SRC)
   await win.waitForSelector('.codedrawer__popout', { timeout: 5000 })
   const windowsBefore = app.windows().length
   await win.$eval('.codedrawer__popout', (el) => el.click())
   // The docked drawer unmounts and its inset is released…
   await win.waitForFunction(() => !document.querySelector('.codedrawer'), undefined, { timeout: 5000 })
-  if (await win.evaluate(() => window.__dsgnPanelInset.getState().bottom)) {
+  if (await win.evaluate(() => window.__praxisPanelInset.getState().bottom)) {
     throw new Error('pop-out did not release the drawer inset')
   }
   // …and a new window appears, running the full-window editor variant.
@@ -146,9 +221,10 @@ try {
   }
   if (app.windows().length <= windowsBefore) throw new Error('pop-out did not open a new window')
   await editorWin.screenshot({ path: join(artifacts, '13b-code-editor-window.png') })
-  // Closing from inside the popped-out editor closes its window.
-  await editorWin.$eval('.codedrawer__close', (el) => el.click())
-  await editorWin.waitForEvent('close', { timeout: 5000 })
+  // The window variant has no in-editor close button (it closes via the native
+  // traffic lights); closing the window tears the popped-out editor down.
+  await editorWin.close()
+  await editorWin.waitForEvent('close', { timeout: 5000 }).catch(() => {})
 
   if (disk() !== baseline) throw new Error('fixture left modified')
   // --- Cmd+click resolution engine + drawer nav history. ---
@@ -163,7 +239,7 @@ try {
   )
   if (bare !== null) throw new Error(`bare package import must not resolve: ${bare}`)
   const nav = await win.evaluate(() => {
-    const d = () => window.__dsgnCodeDrawer.getState()
+    const d = () => window.__praxisCodeDrawer.getState()
     d().open('src/Card.tsx:3')
     d().open('src/Button.tsx:1')
     d().back()

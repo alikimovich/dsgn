@@ -30,12 +30,12 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   // Stand up the bridge (main process) and get its local URL.
-  const url = await app.evaluate(() => globalThis.__dsgnStartTestBridge().then((r) => r.url))
-  assert(/^http:\/\/127\.0\.0\.1:\d+\/\?dsgnSim=1$/.test(url), `unexpected bridge url: ${url}`)
+  const url = await app.evaluate(() => globalThis.__praxisStartTestBridge().then((r) => r.url))
+  assert(/^http:\/\/127\.0\.0\.1:\d+\/\?praxisSim=1$/.test(url), `unexpected bridge url: ${url}`)
   const port = Number(new URL(url).port)
   assert(port >= 7800, `bridge port ${port} should be >= 7800`)
 

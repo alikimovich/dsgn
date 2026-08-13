@@ -42,7 +42,7 @@ export default function SessionReview({ record, onClose, onResume }: Props): Rea
   // Apply it onto the live tree (preview HMRs), open a PR from it, or Discard it.
   const isComment = full.kind === 'comment' && !!full.branch
   const commentTitle =
-    full.transcript.find((t) => t.role === 'user')?.text?.slice(0, 70) || 'dsgn comment edit'
+    full.transcript.find((t) => t.role === 'user')?.text?.slice(0, 70) || 'Praxis comment edit'
 
   const apply = async (): Promise<void> => {
     setBusy('apply')

@@ -4,13 +4,21 @@ import { promisify } from 'util'
 import type { BranchResult } from '../shared/api'
 
 /**
- * Branch management for the opened project: dsgn does its work on a `dsgn/<…>`
+ * Branch management for the opened project: praxis does its work on a `praxis/<…>`
  * branch so the user's main branch stays clean. Pure (child_process + git only,
  * no electron) so it's unit-testable against a temp repo.
  */
 
 const execFileP = promisify(execFile)
-const DSGN_PREFIX = 'dsgn/'
+const PRAXIS_PREFIX = 'praxis/'
+// Work branches created before the dsgn→praxis rename (2026-07). Recognized as
+// ours (keep working on them, allow publish) but never created anymore.
+const LEGACY_PREFIX = 'dsgn/'
+
+/** Is this branch a Praxis work branch (current or legacy prefix)? */
+export function isWorkBranch(branch: string): boolean {
+  return branch.startsWith(PRAXIS_PREFIX) || branch.startsWith(LEGACY_PREFIX)
+}
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
 
 const git = (root: string, args: string[], timeout = 8000): Promise<{ stdout: string }> =>
@@ -33,17 +41,32 @@ export async function isGitRepo(root: string): Promise<boolean> {
  * in a monorepo), where switching the whole repo's branch would be surprising.
  */
 export async function isRepoRoot(root: string): Promise<boolean> {
+  // '' means "this folder IS the top level"; a path or null both mean it isn't.
+  return (await enclosingRepoRoot(root)) === ''
+}
+
+/**
+ * Which repository this folder actually belongs to, for explaining a refusal.
+ *
+ * Returns `''` when the folder IS the top level, the enclosing repo's path when
+ * it's a subdirectory of one, and `null` when git can't see a repo at all. The
+ * three cases need three different pieces of advice, and telling them apart is
+ * the difference between "open the repo's top-level folder" (useless when the
+ * user has never heard of that repo) and naming the path they should open — or
+ * telling them there's no repo here and `git init` is the answer.
+ */
+export async function enclosingRepoRoot(root: string): Promise<string | null> {
   try {
     const { stdout } = await git(root, ['rev-parse', '--show-toplevel'])
     const top = stdout.trim()
-    if (!top) return false
-    return (await realpath(top)) === (await realpath(root))
+    if (!top) return null
+    return (await realpath(top)) === (await realpath(root)) ? '' : top
   } catch {
-    return false
+    return null
   }
 }
 
-/** Check out an EXISTING branch by its exact name (no dsgn/ coercion) — for the
+/** Check out an EXISTING branch by its exact name (no praxis/ coercion) — for the
  *  titlebar branch switcher. Carries uncommitted changes across like git does. */
 export async function checkoutBranch(root: string, branch: string): Promise<BranchResult> {
   try {
@@ -61,7 +84,7 @@ export async function checkoutBranch(root: string, branch: string): Promise<Bran
   }
 }
 
-/** Local branches (current first, then dsgn/* newest-active, then the rest). */
+/** Local branches (current first, then praxis/* newest-active, then the rest). */
 export async function listBranches(
   root: string
 ): Promise<{ branches: string[]; current: string | null }> {
@@ -77,8 +100,8 @@ export async function listBranches(
       .map((s) => s.trim())
       .filter(Boolean)
     const current = await getCurrentBranch(root)
-    // Current first, then dsgn/* (recent), then everything else.
-    const rank = (b: string): number => (b === current ? 0 : b.startsWith(DSGN_PREFIX) ? 1 : 2)
+    // Current first, then praxis/* (recent), then everything else.
+    const rank = (b: string): number => (b === current ? 0 : isWorkBranch(b) ? 1 : 2)
     const branches = [...all].sort((a, b) => rank(a) - rank(b))
     return { branches, current }
   } catch {
@@ -96,17 +119,17 @@ export async function getCurrentBranch(root: string): Promise<string | null> {
   }
 }
 
-/** Make a git-ref-safe `dsgn/<…>` branch name from a requested name or bare suffix. */
+/** Make a git-ref-safe `praxis/<…>` branch name from a requested name or bare suffix. */
 export function normalizeBranchName(requested: string): string {
   const raw = requested.trim()
-  const withPrefix = raw.startsWith(DSGN_PREFIX) ? raw : DSGN_PREFIX + raw
+  const withPrefix = raw.startsWith(PRAXIS_PREFIX) ? raw : PRAXIS_PREFIX + raw
   const suffix = withPrefix
-    .slice(DSGN_PREFIX.length)
+    .slice(PRAXIS_PREFIX.length)
     .replace(/[\s~^:?*[\]\\@{}]+/g, '-') // git-forbidden chars + whitespace → -
     .replace(/\.{2,}/g, '-') // no ".."
     .replace(/\/{2,}/g, '/') // collapse //
-    .replace(/^[/.\-]+|[/.\-]+$/g, '') // trim leading/trailing / . -
-  return DSGN_PREFIX + (suffix || 'work')
+    .replace(/^[/.-]+|[/.-]+$/g, '') // trim leading/trailing / . -
+  return PRAXIS_PREFIX + (suffix || 'work')
 }
 
 async function branchExists(root: string, name: string): Promise<boolean> {
@@ -118,7 +141,7 @@ async function branchExists(root: string, name: string): Promise<boolean> {
   }
 }
 
-/** Switch to (creating if needed) a specific dsgn/* branch. */
+/** Switch to (creating if needed) a specific praxis/* branch. */
 export async function switchBranch(root: string, requested: string): Promise<BranchResult> {
   if (!(await isRepoRoot(root))) return { isRepo: false, branch: null, created: false }
   const name = normalizeBranchName(requested)
@@ -136,12 +159,12 @@ export async function switchBranch(root: string, requested: string): Promise<Bra
 }
 
 /**
- * Ensure work happens on a `dsgn/*` branch. If already on one, keep it; else
- * create `dsgn/<current-branch>` (or `dsgn/work` when detached) off HEAD.
+ * Ensure work happens on a `praxis/*` branch. If already on one, keep it; else
+ * create `praxis/<current-branch>` (or `praxis/work` when detached) off HEAD.
  */
 export async function ensureBranch(root: string): Promise<BranchResult> {
   if (!(await isRepoRoot(root))) return { isRepo: false, branch: null, created: false }
   const cur = await getCurrentBranch(root)
-  if (cur && cur.startsWith(DSGN_PREFIX)) return { isRepo: true, branch: cur, created: false }
-  return switchBranch(root, DSGN_PREFIX + (cur ?? 'work'))
+  if (cur && isWorkBranch(cur)) return { isRepo: true, branch: cur, created: false }
+  return switchBranch(root, PRAXIS_PREFIX + (cur ?? 'work'))
 }

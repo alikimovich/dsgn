@@ -1,11 +1,11 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process'
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
 import type { BrowserWindow } from 'electron'
 import type { AgentEvent, AgentOptions } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
-import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
-import { describeTool } from './tools'
+import { praxisRules } from '../rules'
 import { createRecordCapture } from './record'
-import { dsgnRules } from '../rules'
+import { describeTool, sendToRenderer } from './tools'
+import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
 
 /**
  * EXPERIMENTAL / UNWIRED (v7) — Google Gemini backend via the **Gemini CLI**
@@ -13,12 +13,12 @@ import { dsgnRules } from '../rules'
  * dependency in package.json — it shells out to an external `gemini` binary that
  * most installs won't have. Because a selectable-but-missing backend is a runtime
  * trap, `pickProvider` (see ./index.ts) does NOT route to it by default: it is
- * gated behind the DSGN_EXPERIMENTAL_GEMINI=1 opt-in env flag. Do not add a Gemini
+ * gated behind the PRAXIS_EXPERIMENTAL_GEMINI=1 opt-in env flag. Do not add a Gemini
  * SDK / wire this into the default provider list without revisiting that gate.
  *
  * Auth is the user's **Google account** ("Login with Google": run `gemini` once and
  * sign in) — NO API key. Gemini edits the repo with its own tools; we just map its
- * headless JSONL event stream to dsgn's `AgentEvent` stream.
+ * headless JSONL event stream to praxis's `AgentEvent` stream.
  *
  * Each turn spawns `gemini -p <prompt> --output-format stream-json` in the repo and
  * streams its JSONL events (`init`/`message`/`tool_use`/`tool_result`/`error`/
@@ -32,9 +32,9 @@ import { dsgnRules } from '../rules'
 
 // Overridable so tests can force the CLI-absent path even on machines where a
 // real `gemini` is installed (provider-seam asserts the fail-soft behavior).
-const GEMINI_BIN = process.env.DSGN_GEMINI_BIN || 'gemini'
+const GEMINI_BIN = process.env.PRAXIS_GEMINI_BIN || 'gemini'
 
-/** Map one parsed Gemini JSONL event to a dsgn AgentEvent (or null to ignore). */
+/** Map one parsed Gemini JSONL event to a praxis AgentEvent (or null to ignore). */
 function mapEvent(ev: unknown): AgentEvent | null {
   const e = ev as Record<string, unknown>
   const type = e?.type as string | undefined
@@ -85,7 +85,7 @@ async function startSession(
   let disposed = false
   let aborted = false
   let child: ChildProcessWithoutNullStreams | null = null
-  // dsgn rules (v8 R): no system-prompt arg here, so prepend them to the first turn.
+  // praxis rules (v8 R): no system-prompt arg here, so prepend them to the first turn.
   let firstTurn = true
 
   const emit = (event: AgentEvent): void => {
@@ -94,14 +94,18 @@ async function startSession(
     // agent.ts's in-process hook — v9 workspace-snapshot isRunning tracking
     // (set for every interactive session: default, new-chat, resumed).
     ctx?.onEvent?.(tagged)
-    getWindow()?.webContents.send('agent:event', tagged)
+    sendToRenderer(getWindow, 'agent:event', tagged)
   }
 
   // Serialize turns: each send() runs one `gemini -p` process to completion.
   let chain: Promise<void> = Promise.resolve()
+  // Set by `interrupt` for the CURRENT turn only (unlike session-level `aborted`),
+  // so the kill it performs isn't reported to the user as a crash.
+  let turnInterrupted = false
   const runTurn = (text: string): Promise<void> =>
     new Promise<void>((resolve) => {
       if (aborted || disposed) return resolve()
+      turnInterrupted = false
       let proc: ChildProcessWithoutNullStreams
       try {
         proc = spawn(GEMINI_BIN, ['-p', text, '--output-format', 'stream-json'], {
@@ -151,7 +155,9 @@ async function startSession(
       proc.on('close', (codeNum) => {
         if (buf.trim()) onLine(buf)
         // A non-zero exit with no streamed text usually means not-signed-in / bad input.
-        if (codeNum !== 0 && !aborted) {
+        // A turn the USER stopped exits non-zero by definition — reporting that as
+        // "Gemini exited with code null" would turn pressing Stop into an error.
+        if (codeNum !== 0 && !aborted && !turnInterrupted) {
           emit({
             type: 'error',
             message: `Gemini exited with code ${codeNum}. If you haven't signed in, run \`gemini\` and Login with Google.`
@@ -170,7 +176,9 @@ async function startSession(
     options,
     // Gemini CLI is text-only here; images (paste/drop) are ignored for now.
     send: (text, _images) => {
-      const prompt = firstTurn ? `${dsgnRules()}\n\n---\n\n${text}` : text
+      const prompt = firstTurn
+        ? `${praxisRules({ projectMemory: ctx?.projectMemory })}\n\n---\n\n${text}`
+        : text
       firstTurn = false
       chain = chain.then(() => runTurn(prompt))
     },
@@ -184,6 +192,17 @@ async function startSession(
     shutdown: () => {
       aborted = true
       child?.kill()
+    },
+    // Gemini had NO interrupt at all, so Stop was a silent no-op here: the button
+    // did nothing and the turn ran to completion. A turn IS one `gemini -p` child,
+    // so killing it ends the turn (its `close` handler emits the `done`) while
+    // leaving the session able to take the next one. Local and synchronous, so it
+    // can't wedge the way a control-request round trip can — no `hardStopped`.
+    interrupt: async () => {
+      if (!child) return undefined
+      turnInterrupted = true
+      child.kill()
+      return undefined
     }
   }
 }

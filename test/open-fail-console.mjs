@@ -4,6 +4,11 @@
  * the auto-opened activity console and the preview footer's retry command box.
  *
  * Run with: bun run test:open-fail
+ *
+ * The throwaway `PRAXIS_USER_DATA` below is load-bearing, not hygiene: without
+ * it the app boots against the real workspace, and any project restored from it
+ * means the empty state never renders and the `.empty__open` wait dies at 15s.
+ * See the "never run an Electron test directly" gotcha in CLAUDE.md.
  */
 import { _electron as electron } from 'playwright'
 import electronPath from 'electron'
@@ -16,7 +21,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
 // A folder with no package.json / index.html — project:detect rejects it.
-const emptyDir = mkdtempSync(join(tmpdir(), 'dsgn-empty-'))
+const emptyDir = mkdtempSync(join(tmpdir(), 'praxis-empty-'))
 
 let app
 try {
@@ -26,7 +31,7 @@ try {
     cwd: root,
     // Throwaway userData so a restored workspace from a previous run can't
     // steal the screen mid-attempt.
-    env: { ...process.env, DSGN_USER_DATA: mkdtempSync(join(tmpdir(), 'dsgn-ud-')) }
+    env: { ...process.env, PRAXIS_USER_DATA: mkdtempSync(join(tmpdir(), 'praxis-ud-')) }
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
@@ -49,7 +54,7 @@ try {
   if (bodyText.includes('Diagnosing the problem'))
     throw new Error('the "Diagnosing…" busy banner rendered')
 
-  await win.screenshot({ path: join(artifacts, 'open-fail-console.png') })
+  await win.screenshot({ path: join(artifacts, '20-open-fail-console.png') })
   console.log('OPEN-FAIL-CONSOLE OK — failed open shows console + retry bar, no top card')
 } catch (err) {
   console.error('OPEN-FAIL-CONSOLE FAILED:', err?.message ?? err)

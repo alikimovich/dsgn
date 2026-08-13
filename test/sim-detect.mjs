@@ -17,7 +17,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const work = mkdtempSync(join(tmpdir(), 'dsgn-sim-'))
+const work = mkdtempSync(join(tmpdir(), 'praxis-sim-'))
 
 /** Temp project dir with the given deps + scripts. */
 function project(name, deps, scripts = { start: 'echo start' }) {
@@ -44,7 +44,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   const detect = (dir) => win.evaluate((d) => window.api.project.detect(d), dir)

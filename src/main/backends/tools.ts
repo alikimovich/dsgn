@@ -1,3 +1,23 @@
+import type { BrowserWindow } from 'electron'
+
+/**
+ * Send an IPC message to the main renderer, guarding a destroyed webContents.
+ *
+ * Backend event streams fire from async SDK callbacks that keep running after
+ * the renderer process is killed (OS display sleep / GPU loss): the window
+ * outlives its `webContents`, so a bare `getWindow()?.webContents.send(...)`
+ * throws an uncaught "Object has been destroyed" — the crash dialog seen on
+ * wake. `isDestroyed()` makes a late emit a safe no-op.
+ */
+export function sendToRenderer(
+  getWindow: () => BrowserWindow | null,
+  channel: string,
+  payload: unknown
+): void {
+  const wc = getWindow()?.webContents
+  if (wc && !wc.isDestroyed()) wc.send(channel, payload)
+}
+
 /**
  * Tool-name policy + status helpers shared by the model-provider backends
  * (`claude.ts`, `codex.ts`, …) and by the generic permission machinery in
@@ -15,9 +35,10 @@ export const AUTO_ALLOW_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS', 'Notebook
 // Tools that 'acceptEdits' auto-approves (mirrors the SDK's edit semantics).
 export const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
 
-const SIDECAR_RE = /(^|[\s/\\"'])\.dsgn([/\\]|$)/
+// `.dsgn` is the sidecar's pre-rename name — old repos still carry it.
+const SIDECAR_RE = /(^|[\s/\\"'])\.(praxis|dsgn)([/\\]|$)/
 
-/** Does this tool target the .dsgn/ sidecar (edit-tool path or a Bash command)? */
+/** Does this tool target the .praxis/ sidecar (edit-tool path or a Bash command)? */
 export function touchesSidecar(toolName: string, input: unknown): boolean {
   const i = input as Record<string, unknown>
   if (EDIT_TOOLS.has(toolName)) {

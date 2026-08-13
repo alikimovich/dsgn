@@ -17,7 +17,7 @@ const assert = (cond, msg) => {
   if (!cond) throw new Error(msg)
 }
 
-const base = mkdtempSync(join(tmpdir(), 'dsgn-create-'))
+const base = mkdtempSync(join(tmpdir(), 'praxis-create-'))
 try {
   // Name sanitization.
   assert(packageName('/x/My App!') === 'my-app', `packageName: ${packageName('/x/My App!')}`)

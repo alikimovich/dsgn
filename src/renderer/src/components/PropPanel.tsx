@@ -2,13 +2,10 @@ import { useEffect, useState } from 'react'
 import type { PropField, PropInspection, SelectedElement } from '../../../shared/api'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Minimize2 } from 'lucide-react'
 
 interface Props {
   root: string
   element: SelectedElement
-  /** Tallest the card may grow (px) — supplied by PanelHost. */
-  maxHeight?: number
   /** null → no schema (readiness messaging shows instead of fields). */
   inspection: PropInspection | null
   /** Inspection still in flight. */
@@ -21,43 +18,34 @@ interface Props {
   onSetup: () => void
   /** v8 F3a: re-select the owning component instance. */
   onSelectOwner: () => void
-  /** Shrink the island to its collapsed chip. */
-  onCollapse: () => void
-  onClose: () => void
+  /** Ask the AI to surface a control panel (Custom Controls, v10) — offered
+   *  from the "not ready" states as an alternative to prompting. */
+  onControls?: () => void
 }
 
 /**
- * The floating props island — shown for EVERY selection, always as a card over
- * the preview's top right (it renders inside the ?dsgnPanel WebContentsView; a
- * docked-sidebar mode no longer exists — the header button collapses it to a
- * chip instead, see PanelApp). A schema-backed component gets editable fields;
- * anything else gets the readiness message (setup offer / owner jump /
- * prompt-only hint). Simple literal edits write straight to source;
- * non-literal ones go to chat.
+ * The Props tab body — content-only (the card chrome + header live in
+ * IslandCard, which renders this inside its Props tab). A schema-backed
+ * component gets editable fields; anything else gets the readiness message
+ * (setup offer / owner jump / prompt-only hint). Simple literal edits write
+ * straight to source; non-literal ones go to chat.
  */
 export default function PropPanel({
   root,
   element,
-  maxHeight,
   inspection,
   inspecting,
   onChange,
   onSeedPrompt,
   onSetup,
   onSelectOwner,
-  onCollapse,
-  onClose
+  onControls
 }: Props): React.JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const hasSchema = !!inspection?.hasSchema
   const source = inspection?.source ?? element.source ?? ''
   const hasOwner = !!element.componentSource && element.componentSource !== element.source
-  const ident = element.id
-    ? `#${element.id}`
-    : element.classes[0]
-      ? `.${element.classes[0]}`
-      : ''
 
   const reload = (): void => {
     if (source) window.api.props.inspect(root, source).then((res) => res && onChange(res))
@@ -115,45 +103,7 @@ export default function PropPanel({
   }
 
   return (
-    <aside
-      className="proppanel relative flex w-full flex-col overflow-hidden rounded-xl border bg-background shadow-[0_8px_24px_rgba(0,0,0,0.12)]"
-      style={{ maxHeight }}
-      aria-label={`Props for ${inspection?.component ?? element.tag}`}
-    >
-      <header className="proppanel__head flex shrink-0 items-center gap-0.5 px-3 pb-1 pt-2.5">
-        <div className="proppanel__id min-w-0 flex-1">
-          <div className="proppanel__title overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-semibold leading-5">
-            {inspection?.component ?? `${element.tag}${ident}`}
-          </div>
-          {source && (
-            <div
-              className="proppanel__source overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[10.5px] leading-4 text-muted-foreground"
-              title={source}
-            >
-              {source}
-            </div>
-          )}
-        </div>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="proppanel__collapse size-6 text-muted-foreground"
-          onClick={onCollapse}
-          aria-label="Collapse panel"
-          title="Collapse to a chip"
-        >
-          <Minimize2 className="size-3.5" aria-hidden="true" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="proppanel__close size-6 text-muted-foreground"
-          onClick={onClose}
-          aria-label="Close panel"
-        >
-          ✕
-        </Button>
-      </header>
+    <>
       {hasSchema && inspection ? (
         <>
           {error && (
@@ -197,7 +147,7 @@ export default function PropPanel({
               <button className="proppanel__link text-blue-600 underline" onClick={onSetup}>
                 set up the project
               </button>{' '}
-              or ask dsgn below.
+              or ask Praxis below.
             </div>
           ) : hasOwner ? (
             <div className="proppanel__ready proppanel__ready--no text-[12px] text-muted-foreground">
@@ -205,16 +155,27 @@ export default function PropPanel({
               <button className="proppanel__owner text-blue-600 underline" onClick={onSelectOwner}>
                 edit its component
               </button>{' '}
-              or ask dsgn below.
+              or ask Praxis below.
             </div>
           ) : (
             <div className="proppanel__ready proppanel__ready--no text-[12px] text-muted-foreground">
-              No editable props on {`<${element.tag}>`} — ask dsgn below to change it.
+              No editable props on {`<${element.tag}>`} — ask Praxis below to change it.
             </div>
+          )}
+          {/* Custom Controls (v10): when the automatic paths came up empty, the
+              AI can instrument the source and surface a panel — needs a stamp. */}
+          {!inspecting && element.source && onControls && (
+            <button
+              type="button"
+              className="proppanel__controls self-start text-[11.5px] text-blue-600 underline"
+              onClick={onControls}
+            >
+              Surface controls with AI
+            </button>
           )}
         </div>
       )}
-    </aside>
+    </>
   )
 }
 

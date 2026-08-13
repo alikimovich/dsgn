@@ -30,11 +30,11 @@ const execFileP = promisify(execFile)
 const HOST = '127.0.0.1'
 // Above the web-preview base (7777) so the bridge never contends with a dev server.
 const BRIDGE_PORT_BASE = 7800
-const MJPEG_BOUNDARY = 'dsgnframe'
+const MJPEG_BOUNDARY = 'praxisframe'
 
 // --- the served device page -------------------------------------------------
 
-// Flagged `?dsgnSim=1` (read by src/preview/preload.ts to skip the web overlay).
+// Flagged `?praxisSim=1` (read by src/preview/preload.ts to skip the web overlay).
 // Phase 2: when `interactive`, the page captures tap/swipe/scroll/type on the
 // <img>, converts to a 0..1 fraction of the device content (object-fit:contain
 // aware), and POSTs to /control — which idb replays on the device.
@@ -105,7 +105,7 @@ function pageHtml(interactive: boolean, token: string): string {
       // drive the simulator or read its screen (it can't read this HTML
       // cross-origin, so it can't learn the token). Exposed for the test harness.
       var TOKEN = ${JSON.stringify(token)};
-      window.__DSGN_SIM_TOKEN = TOKEN;
+      window.__PRAXIS_SIM_TOKEN = TOKEN;
       var img = document.getElementById('screen');
       // Surface failed commands (e.g. idb lost the device) instead of a dead-
       // feeling preview. View-only keeps its permanent hint; no flashing there.
@@ -202,7 +202,7 @@ function simctlFrameSource(udid: string, fps = 6): FrameSource {
   let timer: NodeJS.Timeout | null = null
   let stopped = false
   let inflight = false
-  const file = join(tmpdir(), `dsgn-sim-${udid}.jpg`)
+  const file = join(tmpdir(), `praxis-sim-${udid}.jpg`)
   return {
     start(onFrame, onError) {
       const tick = (): void => {
@@ -463,30 +463,30 @@ export function parseControlCommand(body: unknown): ControlCommand | null {
 
 // --- element select (Phase 3: tap → idb hit-test → RN source) ----------------
 
-/** A `testID` stamped by the dsgn RN Babel plugin → the source location it maps
- * to. `dsgn:path:line:col` → `path:line:col`, else null. */
+/** A `testID` stamped by the praxis RN Babel plugin → the source location it maps
+ * to. `praxis:path:line:col` → `path:line:col`, else null. */
 export function parseTestId(testId: unknown): { source: string } | null {
-  if (typeof testId !== 'string' || !testId.startsWith('dsgn:')) return null
-  const source = testId.slice('dsgn:'.length)
+  if (typeof testId !== 'string' || !testId.startsWith('praxis:')) return null
+  const source = testId.slice('praxis:'.length)
   // Shape-check: relpath:line[:col] — refuse anything that isn't a stamp.
   return /^[\w./@-]+:\d+(:\d+)?$/.test(source) ? { source } : null
 }
 
-/** Find the first dsgn `testID` stamp anywhere in an idb accessibility node
+/** Find the first praxis `testID` stamp anywhere in an idb accessibility node
  * (idb surfaces it under varying keys — AXUniqueId / AXIdentifier / identifier). */
-export function findDsgnStamp(node: unknown, depth = 0): string | null {
+export function findPraxisStamp(node: unknown, depth = 0): string | null {
   if (depth > 6 || node == null) return null
-  if (typeof node === 'string') return node.startsWith('dsgn:') ? node : null
+  if (typeof node === 'string') return node.startsWith('praxis:') ? node : null
   if (Array.isArray(node)) {
     for (const v of node) {
-      const f = findDsgnStamp(v, depth + 1)
+      const f = findPraxisStamp(v, depth + 1)
       if (f) return f
     }
     return null
   }
   if (typeof node === 'object') {
     for (const v of Object.values(node as Record<string, unknown>)) {
-      const f = findDsgnStamp(v, depth + 1)
+      const f = findPraxisStamp(v, depth + 1)
       if (f) return f
     }
   }
@@ -494,14 +494,14 @@ export function findDsgnStamp(node: unknown, depth = 0): string | null {
 }
 
 /** A picked simulator element (the RN analog of a web SelectedElement pick).
- * `source` is null when the tapped element carries no dsgn testID stamp. */
+ * `source` is null when the tapped element carries no praxis testID stamp. */
 export interface SimPick {
   source: string | null
   tag: string
 }
 
 /** idb view-hierarchy hit-test: the element at a 0..1 device point, with its
- * source when dsgn-stamped. Device-gated (needs idb + a booted app). */
+ * source when praxis-stamped. Device-gated (needs idb + a booted app). */
 async function idbHitTest(udid: string, fx: number, fy: number): Promise<SimPick | null> {
   const dims = await idbScreenPoints(udid)
   const p = fractionToPoints(fx, fy, dims)
@@ -510,7 +510,7 @@ async function idbHitTest(udid: string, fx: number, fy: number): Promise<SimPick
     8000
   )
   const node = JSON.parse(stdout) as Record<string, unknown>
-  const stamp = findDsgnStamp(node)
+  const stamp = findPraxisStamp(node)
   const parsed = stamp ? parseTestId(stamp) : null
   const tag = typeof node.type === 'string' ? node.type : 'element'
   // No stamp → still a pick: the Inspector then shows the tag + its "project
@@ -534,9 +534,17 @@ interface Interaction {
 let simSelectMode = false
 // The window to emit picks to, set in registerSimulatorIpc.
 let getWin: () => BrowserWindow | null = () => null
+// Send to the renderer, guarding a destroyed webContents: the window can outlive
+// its renderer process (OS kills it on display sleep), and async sources here —
+// the sim launch's socket `onData`, the bridge server — keep emitting during that
+// window and would throw an uncaught "Object has been destroyed" from `.send()`.
+const sendToWin = (channel: string, ...args: unknown[]): void => {
+  const wc = getWin()?.webContents
+  if (wc && !wc.isDestroyed()) wc.send(channel, ...args)
+}
 // Status line into the renderer's simulator log (safe before registration: no-op).
 const simLog = (line: string): void => {
-  getWin()?.webContents.send('simulator:log', line)
+  sendToWin('simulator:log', line)
 }
 
 // --- the bridge HTTP server -------------------------------------------------
@@ -840,7 +848,7 @@ export async function preflight(): Promise<SimPreflight> {
 
 // --- boot + launch ----------------------------------------------------------
 
-// The device dsgn boots + mirrors by default. Expo opens the app on whichever
+// The device praxis boots + mirrors by default. Expo opens the app on whichever
 // simulator is booted, so we boot this one most-recently to bias toward it, then
 // follow the device the launch logs actually name (see start()).
 const PREFERRED_DEVICE = 'iPhone 16 Pro'
@@ -1072,7 +1080,7 @@ async function start(
         onSelectTap: (fx, fy) => {
           void idbHitTest(udid, fx, fy)
             .then((pick) => {
-              if (pick) getWin()?.webContents.send('simulator:element-picked', pick)
+              if (pick) sendToWin('simulator:element-picked', pick)
             })
             .catch((err) => simLog(`Element select failed: ${msg(err)}`))
         }
@@ -1094,7 +1102,7 @@ async function start(
     stop()
     throw err
   }
-  const url = `http://${HOST}:${port}/?dsgnSim=1`
+  const url = `http://${HOST}:${port}/?praxisSim=1`
   onLog(`Simulator preview ready at ${url}`)
   return { url, pid, udid, bundleId, previewKind: 'simulator' }
 }
@@ -1123,14 +1131,14 @@ async function startTestBridge(interactive = false): Promise<{ url: string }> {
         isSelectMode: () => simSelectMode,
         onSelectTap: () => {
           testPicks.push(TEST_PICK)
-          getWin()?.webContents.send('simulator:element-picked', TEST_PICK)
+          sendToWin('simulator:element-picked', TEST_PICK)
         }
       }
     : null
   const bridge = await startBridge(source, port, interaction)
   await bridge.firstFrame
   current = { bridge, source }
-  return { url: `http://${HOST}:${port}/?dsgnSim=1` }
+  return { url: `http://${HOST}:${port}/?praxisSim=1` }
 }
 
 export function registerSimulatorIpc(getWindow: () => BrowserWindow | null): void {
@@ -1149,21 +1157,21 @@ export function registerSimulatorIpc(getWindow: () => BrowserWindow | null): voi
   // Test-only hooks — exercise the bridge transport + Phase-2 control + Phase-3
   // select routing off-macOS. Reached via `app.evaluate`, not the renderer API.
   const g = globalThis as {
-    __dsgnStartTestBridge?: (interactive?: boolean) => Promise<{ url: string }>
-    __dsgnTestControl?: () => ControlCommand[]
-    __dsgnTestPicks?: () => SimPick[]
-    __dsgnSimMap?: {
+    __praxisStartTestBridge?: (interactive?: boolean) => Promise<{ url: string }>
+    __praxisTestControl?: () => ControlCommand[]
+    __praxisTestPicks?: () => SimPick[]
+    __praxisSimMap?: {
       fractionToPoints: typeof fractionToPoints
       parseControlCommand: typeof parseControlCommand
       parseTestId: typeof parseTestId
-      findDsgnStamp: typeof findDsgnStamp
+      findPraxisStamp: typeof findPraxisStamp
       idbUiArgs: typeof idbUiArgs
     }
   }
-  g.__dsgnStartTestBridge = startTestBridge
-  g.__dsgnTestControl = () => testRecorded
-  g.__dsgnTestPicks = () => testPicks
-  g.__dsgnSimMap = { fractionToPoints, parseControlCommand, parseTestId, findDsgnStamp, idbUiArgs }
+  g.__praxisStartTestBridge = startTestBridge
+  g.__praxisTestControl = () => testRecorded
+  g.__praxisTestPicks = () => testPicks
+  g.__praxisSimMap = { fractionToPoints, parseControlCommand, parseTestId, findPraxisStamp, idbUiArgs }
 
   app.on('before-quit', stop)
 }

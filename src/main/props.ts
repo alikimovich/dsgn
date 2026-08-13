@@ -1,7 +1,7 @@
 import { ipcMain, shell } from 'electron'
 import { execFile } from 'child_process'
 import { promisify } from 'util'
-import { readFile, writeFile } from 'fs/promises'
+import { readFile, stat, writeFile } from 'fs/promises'
 import { existsSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, isAbsolute, join, normalize, relative, resolve } from 'path'
 import type {
@@ -21,21 +21,36 @@ import {
   inspectSvelteProps,
   removeSvelteProp
 } from './props-svelte'
+import { looksBinary, mediaTypeFor } from './media-types'
+import { mediaUrl } from './media'
+import { tokenReference } from '../shared/token-match'
 import { swapTailwindClass } from './tw-classes'
-import { recordEdit, undo, redo, canUndo, canRedo } from './edit-history'
+import { spliceHtmlText } from './html-source'
+import {
+  recordEdit,
+  undo,
+  redo,
+  canUndo,
+  canRedo,
+  revertGroup,
+  canRevertGroup
+} from './edit-history'
 
 /**
  * Write a source edit and record it for undo/redo (v8 F3b). A no-op (after ===
  * before) reports success without writing. `key` coalesces rapid edits of the same
- * target (e.g. retyping a prop) into one undo step. Shared by the React + Svelte
- * adapters so EVERY dsgn source edit is reversible.
+ * target (e.g. retyping a prop) into one undo step; `group` batches distinct-key
+ * edits of one gesture (e.g. the four sides of a linked padding scrub) into one
+ * atomic undo. Shared by the React + Svelte adapters so EVERY praxis source edit
+ * is reversible.
  */
 export async function commitEdit(
   root: string,
   file: string,
   before: string,
   after: string,
-  key: string
+  key: string,
+  group?: string
 ): Promise<PropEditResult> {
   if (after === before) return { applied: true }
   try {
@@ -43,20 +58,20 @@ export async function commitEdit(
   } catch {
     return { applied: false, error: 'Could not write the source file.' }
   }
-  recordEdit(root, file, before, after, key)
+  recordEdit(root, file, before, after, key, group)
   return { applied: true }
 }
 
 /**
  * Prop editing is framework-agnostic by dispatch: the source file's extension
  * picks an adapter. `.svelte` → props-svelte.ts; everything else (.tsx/.jsx/.ts/
- * .js) → the React/JSX engine below. Both speak the same `data-dsgn-source`
+ * .js) → the React/JSX engine below. Both speak the same `data-praxis-source`
  * stamp, the same shared helpers (resolveSource, mergeFields, …), and return the
  * same PropInspection / PropEditResult shapes.
  */
 
 /**
- * Prop/token editing for the v2 inspector. Given an element's `data-dsgn-source`
+ * Prop/token editing for the v2 inspector. Given an element's `data-praxis-source`
  * stamp ("relpath:line"), we parse the source file, find the JSX element on that
  * line, and read its current literal attributes — enriched, when we can resolve
  * a schema, by react-docgen. Edits are applied the "hybrid" way: simple literal
@@ -75,7 +90,7 @@ interface FoundElement {
   ast: BabelNode
 }
 
-interface BabelNode {
+export interface BabelNode {
   type: string
   start: number
   end: number
@@ -139,7 +154,7 @@ function jsxName(node: BabelNode | { type: string; name?: string } | undefined):
 }
 
 /** Recursively collect every node of a given `.type` in the tree. */
-function collectNodes(node: unknown, type: string, out: BabelNode[]): void {
+export function collectNodes(node: unknown, type: string, out: BabelNode[]): void {
   if (!node || typeof node !== 'object') return
   const n = node as BabelNode
   if (n.type === type) out.push(n)
@@ -151,7 +166,7 @@ function collectNodes(node: unknown, type: string, out: BabelNode[]): void {
   }
 }
 
-async function parseFile(code: string): Promise<BabelNode> {
+export async function parseFile(code: string): Promise<BabelNode> {
   const { parse } = await loadBabel()
   return parse(code, {
     sourceType: 'module',
@@ -161,24 +176,28 @@ async function parseFile(code: string): Promise<BabelNode> {
 }
 
 /**
- * The JSX opening element the stamp refers to. Multiple elements can share a
- * start line (e.g. `<li>Label <Badge/></li>`), so when the stamp carries a
- * column we match it; otherwise we take the innermost element starting on that
- * line (a DOM click resolves to the deepest stamped element), falling back to
- * the smallest element that encloses the line.
+ * The JSX opening element the stamp refers to, given an ALREADY-PARSED ast.
+ * Multiple elements can share a start line (e.g. `<li>Label <Badge/></li>`),
+ * so when the stamp carries a column we match it; otherwise we take the
+ * innermost element starting on that line (a DOM click resolves to the
+ * deepest stamped element), falling back to the smallest element that
+ * encloses the line.
+ *
+ * Split out from `findElementAtLine` so a caller needing TWO locations in the
+ * same file (the Layers panel's move engine) can parse once and locate both
+ * against the same ast — the JSX element objects then stay reference-equal,
+ * which is what its parent/sibling lookup depends on.
  */
-async function findElementAtLine(
-  code: string,
+export function locateJsxOpening(
+  ast: BabelNode,
   line: number,
   column?: number
-): Promise<FoundElement | null> {
-  const ast = await parseFile(code)
+): { name: string; opening: BabelNode } | null {
   const openings: BabelNode[] = []
   collectNodes(ast, 'JSXOpeningElement', openings)
-  const wrap = (o: BabelNode): FoundElement => ({
+  const wrap = (o: BabelNode): { name: string; opening: BabelNode } => ({
     name: jsxName(o.name as BabelNode),
-    opening: o,
-    ast
+    opening: o
   })
 
   const sameLine = openings.filter((o) => o.loc?.start.line === line)
@@ -202,6 +221,16 @@ async function findElementAtLine(
   return enclosing ? wrap(enclosing) : null
 }
 
+export async function findElementAtLine(
+  code: string,
+  line: number,
+  column?: number
+): Promise<FoundElement | null> {
+  const ast = await parseFile(code)
+  const hit = locateJsxOpening(ast, line, column)
+  return hit ? { ...hit, ast } : null
+}
+
 export interface CurrentAttr {
   name: string
   kind: PropKind
@@ -212,7 +241,7 @@ export interface CurrentAttr {
 }
 
 /** Read the current attributes off an opening element (literal values only). */
-function readAttributes(opening: BabelNode): CurrentAttr[] {
+export function readAttributes(opening: BabelNode): CurrentAttr[] {
   const attrs: CurrentAttr[] = []
   for (const attr of opening.attributes ?? []) {
     if (attr.type !== 'JSXAttribute') continue // skip spreads
@@ -325,9 +354,7 @@ export interface TsAliases {
 
 /** Strip `//`/`/* *​/` comments and trailing commas so JSONC tsconfigs parse. */
 function parseJsonc(text: string): unknown {
-  const noComments = text
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/(^|[^:])\/\/.*$/gm, '$1')
+  const noComments = text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1')
   const noTrailingCommas = noComments.replace(/,(\s*[}\]])/g, '$1')
   return JSON.parse(noTrailingCommas)
 }
@@ -345,7 +372,10 @@ export async function loadTsAliases(root: string): Promise<TsAliases | null> {
   const readConfig = async (file: string): Promise<TsAliases | null> => {
     if (tried.has(file) || tried.size > 4) return null
     tried.add(file)
-    let cfg: { compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> }; extends?: string }
+    let cfg: {
+      compilerOptions?: { baseUrl?: string; paths?: Record<string, string[]> }
+      extends?: string
+    }
     try {
       cfg = parseJsonc(await readFile(file, 'utf8')) as typeof cfg
     } catch {
@@ -720,6 +750,26 @@ async function applyTextEdit(
   if (loc.file.endsWith('.svelte')) {
     return applySvelteTextEdit(root, { source: edit.source, text: newText }, loc)
   }
+  // `.html`/`.htm` (vanilla projects, stamped at serve time) → splice the text
+  // node back into the HTML file; mixed/void content falls back to the agent.
+  if (/\.html?$/i.test(loc.file)) {
+    let html: string
+    try {
+      html = await readFile(loc.file, 'utf8')
+    } catch {
+      return { applied: false, error: 'Could not read the source file.' }
+    }
+    const next =
+      loc.column != null ? await spliceHtmlText(html, loc.line, loc.column, newText) : null
+    if (next == null) {
+      return {
+        applied: false,
+        needsAgent: true,
+        agentPrompt: textAgentPrompt(edit.source, newText)
+      }
+    }
+    return commitEdit(root, loc.file, html, next, `${edit.source}:text`)
+  }
   let code: string
   try {
     code = await readFile(loc.file, 'utf8')
@@ -771,8 +821,23 @@ async function applyTextEdit(
 
 // Main runs in Node (no CSS.supports), so family checks are regex-based.
 const NAMED_COLORS = new Set([
-  'red', 'blue', 'green', 'black', 'white', 'gray', 'grey', 'orange', 'purple', 'pink',
-  'yellow', 'teal', 'cyan', 'magenta', 'transparent', 'currentcolor', 'inherit'
+  'red',
+  'blue',
+  'green',
+  'black',
+  'white',
+  'gray',
+  'grey',
+  'orange',
+  'purple',
+  'pink',
+  'yellow',
+  'teal',
+  'cyan',
+  'magenta',
+  'transparent',
+  'currentcolor',
+  'inherit'
 ])
 function isColorValue(v: string): boolean {
   const s = v.trim().toLowerCase()
@@ -790,15 +855,49 @@ function isLengthValue(v: string): boolean {
 // T3 only swaps a style property when BOTH the property NAME and the VALUE belong
 // to the token's family — otherwise a color token could land in fontSize, etc.
 const COLOR_STYLE_PROPS = new Set([
-  'color', 'background', 'backgroundColor', 'borderColor', 'borderTopColor',
-  'borderRightColor', 'borderBottomColor', 'borderLeftColor', 'outlineColor', 'fill',
-  'stroke', 'caretColor', 'textDecorationColor', 'columnRuleColor'
+  'color',
+  'background',
+  'backgroundColor',
+  'borderColor',
+  'borderTopColor',
+  'borderRightColor',
+  'borderBottomColor',
+  'borderLeftColor',
+  'outlineColor',
+  'fill',
+  'stroke',
+  'caretColor',
+  'textDecorationColor',
+  'columnRuleColor'
 ])
 const LENGTH_STYLE_PROPS = new Set([
-  'width', 'height', 'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'padding',
-  'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'margin', 'marginTop',
-  'marginRight', 'marginBottom', 'marginLeft', 'gap', 'rowGap', 'columnGap', 'fontSize',
-  'lineHeight', 'borderRadius', 'top', 'right', 'bottom', 'left', 'letterSpacing',
+  'width',
+  'height',
+  'minWidth',
+  'maxWidth',
+  'minHeight',
+  'maxHeight',
+  'padding',
+  'paddingTop',
+  'paddingRight',
+  'paddingBottom',
+  'paddingLeft',
+  'margin',
+  'marginTop',
+  'marginRight',
+  'marginBottom',
+  'marginLeft',
+  'gap',
+  'rowGap',
+  'columnGap',
+  'fontSize',
+  'lineHeight',
+  'borderRadius',
+  'top',
+  'right',
+  'bottom',
+  'left',
+  'letterSpacing',
   'borderWidth'
 ])
 
@@ -813,7 +912,7 @@ function stylePropKey(p: BabelNode): string | null {
 
 /** The literal-string AST node behind a className attr value (`"…"` or `{'…'}`),
  * or null for an expression/dynamic className we must not rewrite. */
-function classNameStringNode(v: BabelNode | null | undefined): BabelNode | null {
+export function classNameStringNode(v: BabelNode | null | undefined): BabelNode | null {
   if (!v) return null
   if (v.type === 'StringLiteral') return v
   if (v.type === 'JSXExpressionContainer') {
@@ -826,12 +925,7 @@ function classNameStringNode(v: BabelNode | null | undefined): BabelNode | null 
 /** How to write a token reference into source: css vars stay var(--name); other
  * sources splice the resolved value (a manifest hex, a Tailwind scale value, …). */
 function tokenRef(edit: TokenEdit): string {
-  if (edit.tokenSource === 'css') {
-    if (/^var\(/.test(edit.token.value)) return edit.token.value
-    const n = edit.token.name
-    return `var(${n.startsWith('--') ? n : `--${n}`})`
-  }
-  return edit.token.value
+  return tokenReference(edit.tokenSource, edit.token)
 }
 
 function tokenAgentPrompt(edit: TokenEdit): string {
@@ -892,9 +986,7 @@ async function applyTokenEdit(root: string, edit: TokenEdit): Promise<PropEditRe
   // T1 — schema enum swap (the token name IS a valid enum option). If more than
   // one enum prop lists it, it's ambiguous → let the agent decide.
   const schema = await resolveSchema(root, loc.file, code, found)
-  const enumFields = schema.filter(
-    (f) => f.kind === 'enum' && f.options?.includes(edit.token.name)
-  )
+  const enumFields = schema.filter((f) => f.kind === 'enum' && f.options?.includes(edit.token.name))
   if (enumFields.length === 1) {
     return applyPropEdit(root, {
       source: edit.source,
@@ -953,7 +1045,8 @@ async function applyTokenEdit(root: string, edit: TokenEdit): Promise<PropEditRe
     })
     if (matches.length === 1) {
       const valNode = matches[0].value as BabelNode
-      const next = code.slice(0, valNode.start) + JSON.stringify(tokenRef(edit)) + code.slice(valNode.end)
+      const next =
+        code.slice(0, valNode.start) + JSON.stringify(tokenRef(edit)) + code.slice(valNode.end)
       return commitEdit(root, loc.file, code, next, `${edit.source}:token`)
     }
   }
@@ -970,17 +1063,50 @@ async function applyTokenEdit(root: string, edit: TokenEdit): Promise<PropEditRe
  * whole file (surrounding context stays visible) plus the element's full line
  * span so the renderer can highlight it. Svelte / unparsable files fall back to
  * the stamp line alone — the peek still works, just without the span.
+ *
+ * Images/video/audio come back as `media` (registered with the praxis-media
+ * protocol so the renderer can show them) and other non-text files as `binary`;
+ * both carry an empty `code`. Before that, a `.png` opened here was decoded as
+ * utf8 and rendered as thousands of lines of mojibake.
  */
 async function readSourceView(root: string, source: string): Promise<SourceView | null> {
   const loc = resolveSource(root, source)
   if (!loc) return null
+  const rel = relative(root, loc.file)
+
+  const media = mediaTypeFor(loc.file)
+  if (media) {
+    let bytes: number
+    try {
+      bytes = (await stat(loc.file)).size
+    } catch {
+      return null
+    }
+    return {
+      file: rel,
+      code: '',
+      line: loc.line,
+      media: { ...media, url: mediaUrl(loc.file) },
+      bytes
+    }
+  }
+
   let code: string
   try {
     code = await readFile(loc.file, 'utf8')
   } catch {
     return null
   }
-  const view: SourceView = { file: relative(root, loc.file), code, line: loc.line }
+  if (looksBinary(code)) {
+    let bytes = 0
+    try {
+      bytes = (await stat(loc.file)).size
+    } catch {
+      /* size is cosmetic — the placeholder still renders without it */
+    }
+    return { file: rel, code: '', line: loc.line, binary: true, bytes }
+  }
+  const view: SourceView = { file: rel, code, line: loc.line }
   if (!loc.file.endsWith('.svelte')) {
     try {
       const found = await findElementAtLine(code, loc.line, loc.column)
@@ -1017,12 +1143,16 @@ async function writeSourceFile(
 ): Promise<SourceWriteResult> {
   const loc = resolveSource(root, source)
   if (!loc) return { ok: false, error: 'Could not resolve the source location.' }
+  // The drawer shows these as a preview/placeholder rather than text, so a save
+  // could only ever be a utf8 round-trip that corrupts them.
+  if (mediaTypeFor(loc.file)) return { ok: false, error: 'This file is not editable as text.' }
   let current: string
   try {
     current = await readFile(loc.file, 'utf8')
   } catch {
     return { ok: false, error: 'Could not read the source file.' }
   }
+  if (looksBinary(current)) return { ok: false, error: 'This file is not editable as text.' }
   if (current !== baseline) return { ok: false, conflict: true }
   const res = await commitEdit(root, loc.file, current, content, `${source}:drawer`)
   return res.applied ? { ok: true } : { ok: false, error: res.error }
@@ -1040,7 +1170,10 @@ const EDITOR_CLIS: Array<{ cmd: string; args: (target: string) => string[] }> = 
   { cmd: 'subl', args: (t) => [t] }
 ]
 
-async function openInEditor(root: string, source: string): Promise<{ ok: boolean; error?: string }> {
+async function openInEditor(
+  root: string,
+  source: string
+): Promise<{ ok: boolean; error?: string }> {
   const loc = resolveSource(root, source)
   if (!loc) return { ok: false, error: 'Could not resolve the source location.' }
   try {
@@ -1158,7 +1291,9 @@ export function registerPropsIpc(): void {
     inspectProps(root, source, text)
   )
   ipcMain.handle('props:apply', (_e, root: string, edit: PropEdit) => applyPropEdit(root, edit))
-  ipcMain.handle('props:applyToken', (_e, root: string, edit: TokenEdit) => applyTokenEdit(root, edit))
+  ipcMain.handle('props:applyToken', (_e, root: string, edit: TokenEdit) =>
+    applyTokenEdit(root, edit)
+  )
   ipcMain.handle('props:remove', (_e, root: string, source: string, name: string) =>
     removeProp(root, source, name)
   )
@@ -1181,9 +1316,15 @@ export function registerPropsIpc(): void {
     (_e, root: string, source: string, baseline: string, content: string) =>
       writeSourceFile(root, source, baseline, content)
   )
-  // v8 F3b: undo/redo over ALL dsgn source edits (props, text, token swaps),
+  // v8 F3b: undo/redo over ALL praxis source edits (props, text, token swaps),
   // scoped to the active project root (the rail keeps several projects open).
   ipcMain.handle('edit:undo', (_e, root: string) => undo(root))
   ipcMain.handle('edit:redo', (_e, root: string) => redo(root))
   ipcMain.handle('edit:can', (_e, root: string) => ({ undo: canUndo(root), redo: canRedo(root) }))
+  // Per-turn "Revert changes" (chat): addressable revert of one recorded turn group
+  // (chat:<wtId>:<turnNo>) — restores its pre-turn files unless any drifted since.
+  ipcMain.handle('edit:revert', (_e, root: string, group: string) => revertGroup(root, group))
+  ipcMain.handle('edit:can-revert', (_e, root: string, group: string) =>
+    canRevertGroup(root, group)
+  )
 }

@@ -34,14 +34,14 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   // The props panel lives in the floating ISLAND (its own webContents,
-  // ?dsgnPanel=1) — query its DOM there.
+  // ?praxisPanel=1) — query its DOM there.
   const panelEval = (code) =>
     app.evaluate(async ({ webContents }, c) => {
-      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('dsgnPanel'))
+      const wc = webContents.getAllWebContents().find((w) => w.getURL().includes('praxisPanel'))
       if (!wc) return '__no_panel__'
       try { return await wc.executeJavaScript(c) } catch { return '__no_panel__' }
     }, code)
@@ -54,15 +54,42 @@ try {
       await new Promise((res) => setTimeout(res, 250))
     }
   }
-  // Tests assume the expanded card (a previous run may have collapsed it).
-  const expandPanel = () =>
-    panelEval("localStorage.setItem('dsgn.proppanel.collapsed','0'); document.querySelector('.proppanel__expand')?.click(); true")
+  // Tests assume the expanded card ON THE PROPS TAB. Both are persisted in the
+  // shared userData that direct `bun run test:*` runs use, so a previous run
+  // (or the style-edit suite / real-app use) may have collapsed the card or
+  // left the Styles tab active — and Radix unmounts inactive tab content, so a
+  // stale 'styles' tab would make every props-content wait time out. Retried:
+  // the island's webContents appears asynchronously, so a one-shot eval could
+  // run before it (or its React tree) exists.
+  const expandPanel = async () => {
+    const end = Date.now() + 10000
+    for (;;) {
+      const ok = await panelEval(`(() => {
+        localStorage.setItem('praxis.proppanel.collapsed', '0')
+        localStorage.setItem('praxis.island.tab', 'props')
+        document.querySelector('.proppanel__expand')?.click()
+        // If the island is already mounted on Styles, click Props (Radix
+        // TabsTrigger activates on mousedown — a bare .click() is not enough).
+        const t = [...document.querySelectorAll('.proppanel__tab')].find((b) => b.textContent.trim() === 'Props')
+        if (t && t.getAttribute('data-state') !== 'active') {
+          for (const type of ['mousedown', 'mouseup', 'click']) {
+            t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }))
+          }
+        }
+        return !!t && t.getAttribute('data-state') === 'active'
+      })()`)
+      if (ok === true) return
+      // Give up quietly — the caller's next waitPanel surfaces the real failure.
+      if (Date.now() > end) return
+      await new Promise((r) => setTimeout(r, 250))
+    }
+  }
 
   // --- UI: render the prop editor for a selected element (original file). ---
   await win.evaluate(
     (args) => {
-      window.__dsgnSession.getState().setProjectRoot(args.fixture)
-      window.__dsgnSelection.getState().setSelected({
+      window.__praxisSession.getState().setProjectRoot(args.fixture)
+      window.__praxisSelection.getState().setSelected({
         tag: 'span',
         id: null,
         classes: ['badge'],
@@ -76,7 +103,7 @@ try {
     { fixture, src: SRC }
   )
   // The island opens EXPLICITLY (toolbar props action) — simulate that.
-  await win.evaluate(() => window.__dsgnPropsIsland.getState().setOpen(true))
+  await win.evaluate(() => window.__praxisPropsIsland.getState().setOpen(true))
   await expandPanel()
   await waitPanel("!!document.querySelector('.proppanel__row')")
   const enumOptions = await panelEval(
@@ -366,7 +393,7 @@ try {
   if (!redid.ok) throw new Error(`redo not ok: ${JSON.stringify(redid)}`)
   if (readFileSync(badge, 'utf8') !== afterApply) throw new Error('redo did not re-apply the edit')
 
-  // Conflict: the user edits the file in their own editor, then hits undo. dsgn
+  // Conflict: the user edits the file in their own editor, then hits undo. praxis
   // must refuse to clobber that and report a conflict (the file is left intact).
   writeFileSync(badge, afterApply + '\n// edited elsewhere\n')
   const conflict = await win.evaluate((a) => window.api.edits.undo(a.fixture), { fixture })

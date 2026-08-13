@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url'
 
 const APP_NAME = 'Praxis'
 const BUNDLE_ID = 'com.alikimovich.praxis'
-const ICON_NAME = 'dsgn' // asset name inside Assets.car
+const ICON_NAME = 'praxis' // asset name inside Assets.car
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const electronDir = join(root, 'node_modules/electron')
 const appBundle = join(electronDir, 'dist/Electron.app')

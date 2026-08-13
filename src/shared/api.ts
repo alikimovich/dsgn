@@ -3,6 +3,9 @@
  * neutral (no electron or node imports) so every tsconfig can include it
  * without dragging in process-specific code.
  */
+import type { GithubConnectOptions, GithubConnectResult, GithubStatus } from './github'
+
+export type { GithubConnectOptions, GithubConnectResult, GithubStatus } from './github'
 
 export type PackageManager = 'bun' | 'pnpm' | 'yarn' | 'npm'
 export type Framework =
@@ -13,7 +16,7 @@ export type Framework =
   | 'expo'
   | 'react-native'
   // A plain static site (vanilla HTML/CSS/JS, no package.json or build step) —
-  // served by dsgn's own built-in static file server, not a spawned dev command.
+  // served by praxis's own built-in static file server, not a spawned dev command.
   | 'static'
   | 'unknown'
 
@@ -27,7 +30,7 @@ export type Framework =
 export type PreviewKind = 'web' | 'simulator'
 
 /**
- * AI-assisted diagnosis of an open/launch failure. dsgn *proposes* a fix (never
+ * AI-assisted diagnosis of an open/launch failure. praxis *proposes* a fix (never
  * auto-runs): repo-scoped steps it can apply, host-scoped steps (sudo / global /
  * downloads) the user runs. Cached per-machine by `signature` so a repeat error
  * recalls the plan instead of re-diagnosing.
@@ -36,7 +39,7 @@ export interface DiagStep {
   text: string
   /** Optional exact shell command (shown with a copy button). */
   command?: string
-  /** 'repo' = dsgn can apply it; 'host' = machine-level, the user must run it. */
+  /** 'repo' = praxis can apply it; 'host' = machine-level, the user must run it. */
   scope: 'repo' | 'host'
 }
 export interface Diagnosis {
@@ -51,7 +54,7 @@ export interface Diagnosis {
   status?: 'proposed' | 'applied' | 'dismissed'
 }
 
-/** Result of ensuring/switching the opened project's `dsgn/*` working branch. */
+/** Result of ensuring/switching the opened project's `praxis/*` working branch. */
 export interface BranchResult {
   isRepo: boolean
   /** The branch now checked out (null if not a git repo or the switch failed). */
@@ -72,6 +75,19 @@ export interface DetectedProject {
   devCommand: string
   /** Web dev server vs iOS Simulator (React Native / Expo → 'simulator'). */
   previewKind: PreviewKind
+}
+
+/**
+ * A project's own favicon, resolved from its source tree (see
+ * `src/main/project-icon.ts`). The rail leads each project with this instead of
+ * the generic folder glyph, so a wall of open projects is scannable by icon.
+ */
+export interface ProjectIcon {
+  /** Project-relative path the icon came from — shown in the rail row's title
+   *  so it's obvious WHICH file the rail is showing. */
+  path: string
+  /** `data:` URL, ready for an `<img src>`. Capped at 512 KB by main. */
+  dataUrl: string
 }
 
 export interface RunningDevServer {
@@ -129,13 +145,13 @@ export interface SimPreflight {
 
 /**
  * The agent's permission posture, mirroring the SDK's `PermissionMode`:
- * - `auto` — **dsgn's default**: a model classifier approves/denies each tool
- *   call; only the ones it flags as risky fall through to dsgn's canUseTool
+ * - `auto` — **praxis's default**: a model classifier approves/denies each tool
+ *   call; only the ones it flags as risky fall through to praxis's canUseTool
  *   (approve/deny card). No prompts for routine work, but genuinely dangerous
  *   ops still surface.
  * - `default` — ask (cards) for every tool the SDK gates.
  * - `acceptEdits` — auto-accept file edits, still ask for the rest (e.g. Bash).
- * - `bypassPermissions` — skip all checks (and dsgn's canUseTool guards); unused.
+ * - `bypassPermissions` — skip all checks (and praxis's canUseTool guards); unused.
  */
 export type PermissionMode = 'auto' | 'default' | 'acceptEdits' | 'bypassPermissions'
 
@@ -211,6 +227,11 @@ export type AgentEvent = (
   | { type: 'question-request'; request: QuestionRequest }
   /** A pending question was resolved (answered elsewhere / abort / session change) — dismiss its card. */
   | { type: 'question-resolved'; id: string }
+  /** Tokens the backend just reported, as a DELTA to add to the chat's running
+   *  totals (main dedupes the providers' repeated cumulative readings — see
+   *  `shared/run-stats.ts`). Drives the status line's ↑/↓ counters. `cached` is
+   *  the share of `input` served from the prompt cache, not an extra amount. */
+  | { type: 'usage'; input: number; output: number; cached: number }
   | { type: 'done' }
   | { type: 'error'; message: string }
   /** An auto-generated name for this chat, summarising what the conversation is
@@ -225,6 +246,23 @@ export type AgentEvent = (
    *  branch. `summary` (the agent's closing message) + `files` drive a notification
    *  in the parent project's chat so the user can follow up on it. */
   | { type: 'spawn-finished'; branch: string | null; summary?: string; files?: string[] }
+  /** Per-chat worktree isolation status (v9). A chat's turn merged back onto the live
+   *  checkout ('merged'), a private worktree was forked for the chat ('isolated'), or a
+   *  turn parked on its branch after mid-turn drift ('parked'). Routed by `projectKey` =
+   *  the chat's emitKey, like every other interactive-chat event. */
+  | {
+      type: 'isolation'
+      state: 'isolated' | 'merged' | 'parked'
+      branch?: string
+      files?: string[]
+      /** On 'merged': the edit-history group id (`chat:<wtId>:<turnNo>`) that reverts
+       *  this turn's file changes — the renderer tags the merged assistant message with
+       *  it to render a per-turn Revert button. */
+      group?: string
+      /** On 'merged': whether this turn is safely revertable (false once the chat's
+       *  work has been pushed & merged via a PR) — the renderer hides Revert if false. */
+      revertable?: boolean
+    }
 ) & {
   /** Which project's session emitted this — set by main so the renderer routes it
    * to the right chat (active project shows live; others accumulate in the rail). */
@@ -246,18 +284,132 @@ export interface ImageAttachment {
 }
 
 export interface AgentOptions {
-  /** Model alias ('opus' | 'sonnet' | 'haiku') or undefined for the account default. */
+  /** Model alias ('fable' | 'opus' | 'sonnet' | 'haiku') or undefined for the account default. */
   model?: string
   /** Reasoning effort ('low' | 'medium' | 'high') or undefined for the model default. */
   effort?: string
   /** Permission posture; defaults to 'default' (ask). */
   permissionMode?: PermissionMode
   /**
-   * Which subscription-login backend to run (v7): 'claude' (default) | 'codex' | …
-   * Undefined → Claude. Each backend authenticates with the user's own subscription
-   * (Claude setup-token / Codex sign-in-with-ChatGPT / …) — never an in-repo API key.
+   * Which HARNESS runs the agent loop (v7): 'claude' (default) | 'codex'.
+   * Undefined → Claude. The two built-in harnesses authenticate with the user's own
+   * subscription (Claude setup-token / Codex sign-in-with-ChatGPT). A key is never
+   * committed in-repo — but see `connectionId`: a user MAY store their own API key
+   * for a third-party endpoint, encrypted at rest and only in main.
    */
   provider?: string
+  /**
+   * Run this turn against a user-added endpoint (v10) instead of the harness's own
+   * account — see `ProviderConnection`. Harness and endpoint are orthogonal: the
+   * Codex harness supplies the agent loop while the connection supplies the URL,
+   * key and model. Undefined ⇒ the harness's own subscription, exactly as pre-v10.
+   */
+  connectionId?: string
+}
+
+/** Praxis-managed durable context for one project, stored outside the repo. */
+export interface ProjectMemory {
+  content: string
+  updatedAt: number
+}
+
+/**
+ * A user-added model endpoint (v10). Praxis's two built-in seats — Claude (Agent
+ * SDK) and Codex (`@openai/codex-sdk`) — log in with the user's own subscription and
+ * need no configuration. A *connection* is the third path: an OpenAI-compatible
+ * endpoint the user points Praxis at (Vercel AI Gateway, Groq, or any custom host)
+ * so open models like Kimi or DeepSeek can drive a chat.
+ *
+ * Harness and endpoint are ORTHOGONAL. The Codex harness runs the loop; the
+ * connection only says where requests go. `@openai/codex-sdk` accepts `baseUrl` +
+ * `apiKey` per `Codex` instance, so a connection never writes to (or reads from)
+ * the user's own `~/.codex/config.toml`.
+ *
+ * Connections are GLOBAL, not per-project — a key belongs to the user, not a repo.
+ * The API key is deliberately NOT a field here: it is encrypted at rest with
+ * Electron `safeStorage` and never crosses to the renderer, which only learns
+ * `hasKey`. That way a compromised renderer dependency cannot exfiltrate keys.
+ */
+export interface ProviderConnection {
+  /** Stable generated id — what `AgentOptions.connectionId` references. */
+  id: string
+  /** User-facing name shown as the picker's group heading ("AI Gateway"). */
+  label: string
+  /** Which preset created it; drives defaults and the dialog's badge. */
+  preset: 'gateway' | 'custom'
+  /** Endpoint root, e.g. `https://ai-gateway.vercel.sh/v1`. */
+  baseUrl: string
+  /**
+   * Which OpenAI wire format Praxis speaks to this host. Only `'responses'` (the
+   * newer `/responses` endpoint) is possible: the `codex` CLI bundled with
+   * `@openai/codex-sdk` REJECTS `wire_api = "chat"` at config load ("no longer
+   * supported"), so a host that offers only the older `/chat/completions` route
+   * cannot back a connection at all — verified against the vendored binary, not
+   * inferred. Kept as a field rather than hardcoded so the disk format survives
+   * the CLI ever restoring chat support; widen the union if it does.
+   */
+  wireApi: 'responses'
+  /** The models the user ticked from the catalog — these populate the chat picker. */
+  models: string[]
+  /** Whether a key is stored. The key itself never leaves main. */
+  hasKey: boolean
+}
+
+/** A connection draft from the settings dialog. `id` absent ⇒ create a new one. */
+export interface ProviderConnectionInput {
+  id?: string
+  label: string
+  preset: 'gateway' | 'custom'
+  baseUrl: string
+  wireApi: 'responses'
+  models: string[]
+  /** Plaintext key on its way to `safeStorage`. Omit to keep the stored one. */
+  apiKey?: string
+}
+
+/** Params for a catalog probe — an unsaved draft, or a saved connection by id. */
+export interface ModelCatalogInput {
+  baseUrl: string
+  /** Plaintext key to probe with. Omit to reuse the key stored for `id`. */
+  apiKey?: string
+  /** Saved connection whose stored key to use when `apiKey` is omitted. */
+  id?: string
+}
+
+/**
+ * Result of probing `{baseUrl}/models`. This one call both validates the credential
+ * and returns the catalog, so the dialog's "Connect" button does the whole job.
+ */
+export interface ModelCatalogResult {
+  ok: boolean
+  /** Model ids the endpoint advertises, sorted. Empty when `ok` is false. */
+  models: string[]
+  /** Human-readable failure ("401 Unauthorized"), for display in the dialog. */
+  error?: string
+  /** The host has no `/models` route — the dialog falls back to free-text entry
+   *  rather than leaving the user stuck. */
+  unsupported?: boolean
+}
+
+/**
+ * One selectable entry in the chat's model picker (v10). The picker is MODEL-first:
+ * the user picks a model and Praxis derives which harness runs it and which endpoint
+ * it points at, because people think in models rather than harnesses. Built in main
+ * so the renderer never hardcodes a model list again.
+ */
+export interface ModelChoice {
+  /** Stable value for the picker + `AgentOptions` round-trip. */
+  value: string
+  /** Display name ("Opus", "Kimi K3"). */
+  label: string
+  /** Which harness runs it. */
+  provider: 'claude' | 'codex'
+  /** Set when this model comes from a user connection (absent for built-in seats). */
+  connectionId?: string
+  /** The model id handed to the backend, when it differs from `value`. */
+  modelId?: string
+  /** Group heading in the picker ("Claude", "Codex", or a connection's label). */
+  group: string
 }
 
 /** One line of a recorded agent session's transcript (v5-D history). */
@@ -280,7 +432,7 @@ export interface SessionRecord {
   projectName: string
   startedAt: number
   endedAt: number | null
-  /** The dsgn/* branch it worked on, if the renderer tagged it. */
+  /** The praxis/* branch it worked on, if the renderer tagged it. */
   branch?: string
   /** The PR it produced, if published. */
   prUrl?: string
@@ -318,6 +470,14 @@ export interface LiveChatSnapshot {
   /** A turn is currently in flight for this session (best-effort — see
    *  `agent:workspace-snapshot`'s implementation for how it's derived). */
   isRunning: boolean
+  /** Per-chat worktree isolation status (v9), for the renderer to rehydrate the chat's
+   *  isolation chip after a reload. Absent for a non-isolated chat (treated as 'live'). */
+  isolation?: { state: 'live' | 'isolated' | 'parked'; branch?: string }
+  /** The options this session is ACTUALLY running with (main's live copy — the
+   *  authority). The renderer reconciles its per-chat pickers against these on
+   *  reattach so a reload can't leave the toolbar showing a posture the session
+   *  never had. */
+  options: AgentOptions
 }
 
 /** One live project (an open workspace-rail entry) and its live chat(s). */
@@ -350,7 +510,7 @@ export interface Bounds {
 
 /**
  * An element the user picked in the live preview (v2 select mode). `source` is
- * the repo's opt-in `data-dsgn-source` stamp ("path/File.tsx:line") when present
+ * the repo's opt-in `data-praxis-source` stamp ("path/File.tsx:line") when present
  * — that's what lets the agent edit the exact component (see DESIGN.md).
  */
 export interface SelectedElement {
@@ -360,7 +520,7 @@ export interface SelectedElement {
   selector: string
   source: string | null
   /**
-   * The nearest COMPONENT-instance call site (v8 F3a) — `data-dsgn-component-source`,
+   * The nearest COMPONENT-instance call site (v8 F3a) — `data-praxis-component-source`,
    * which the stamp plugin forwards so the authored `<Component …/>` (not the
    * innermost host) wins. Lets the inspector edit per-instance props. Null when the
    * element isn't inside a stamped component instance (or on a non-React backend).
@@ -369,6 +529,66 @@ export interface SelectedElement {
   text: string | null
   rect: Bounds
   styles: Record<string, string>
+}
+
+/**
+ * One row in the Layers panel's DOM tree. `path` is a child-index path from
+ * `document.body` (`[0,2,1]`) — recomputed fresh on every read, never a
+ * durable id: `data-praxis-source` stamps aren't unique (a `.map()` puts the
+ * same stamp on every rendered item) and a CSS selector is too lossy, so this
+ * is the only workable handle. Every action that resolves a path back to a
+ * live element re-validates the `{tag, source}` fingerprint first.
+ */
+export interface LayerNode {
+  path: number[]
+  parentPath: number[] | null
+  depth: number
+  tag: string
+  id: string | null
+  classes: string[]
+  source: string | null
+  componentSource: string | null
+  text: string | null
+  childCount: number
+  /** This stamp appears more than once in the snapshot — a client-side UX
+   *  hint only (grey out dragging), never the correctness boundary. */
+  dupStamp: boolean
+}
+
+export interface LayersSnapshot {
+  nodes: LayerNode[]
+  truncated: boolean
+  totalSeen: number
+}
+
+/** Identifies a layer node across the renderer↔preload boundary for select/hover. */
+export interface LayerFingerprint {
+  tag: string
+  source: string | null
+}
+
+/**
+ * A Layers-panel drag-to-reorder request. Both sides are identified by their
+ * `data-praxis-source` stamp — main never needs the DOM path, only the
+ * renderer does (to resolve rows back to elements). `sessionId` is a UUID
+ * minted client-side once per drag gesture: it becomes the `commitEdit`
+ * coalesce key, and deliberately never coalesces with anything else — a move
+ * shifts every later line in the file, invalidating subsequent stamps until
+ * the next HMR restamp, so reusing a stamp-based key would misbehave across
+ * repeated drags.
+ */
+export interface MoveNodeRequest {
+  dragged: { source: string }
+  target: { source: string }
+  position: 'before' | 'after' | 'inside'
+  sessionId: string
+}
+
+export interface MoveNodeResult {
+  applied: boolean
+  needsAgent?: boolean
+  agentPrompt?: string
+  error?: string
 }
 
 /** Figma-style inline overlay modes: comment-to-agent (C) or annotation (Y). */
@@ -381,21 +601,44 @@ export interface PreviewComment {
   text: string
 }
 
+/** Previewable media the editor shows instead of opening as text. */
+export interface SourceMedia {
+  kind: 'image' | 'video' | 'audio'
+  /** MIME type, derived from the extension. */
+  mediaType: string
+  /**
+   * `praxis-media://` URL the renderer can point an <img>/<video>/<audio> at.
+   * Opaque and per-file: main streams it from disk (range requests included), so
+   * a big video never has to cross IPC as base64.
+   */
+  url: string
+}
+
 /**
  * A stamped element's source file, read for the inspector's inline code peek —
  * the whole file (so surrounding context is visible) plus the stamp line and,
  * when the JSX parse resolves it, the element's full line span for highlighting.
+ *
+ * A file that isn't text carries `media` (previewable) or `binary` (not) instead,
+ * with an empty `code`: decoding a PNG as utf8 and pouring it into the editor is
+ * the bug this avoids.
  */
 export interface SourceView {
   /** Repo-relative file path (from the stamp). */
   file: string
-  /** The full file content. */
+  /** The full file content — empty for `media` / `binary` files. */
   code: string
   /** 1-based line the stamp points at. */
   line: number
   /** 1-based inclusive line span of the stamped element (open → close tag). */
   elementStart?: number
   elementEnd?: number
+  /** Set when the file is an image/video/audio: show it, don't edit it. */
+  media?: SourceMedia
+  /** Set when the file is binary but not previewable media (font, archive, …). */
+  binary?: boolean
+  /** Size on disk, for the preview's footer. Present with `media` / `binary`. */
+  bytes?: number
 }
 
 /** Result of a whole-file save from the v9 code drawer. */
@@ -404,6 +647,18 @@ export interface SourceWriteResult {
   /** The file drifted on disk since the drawer loaded it — refused to clobber. */
   conflict?: boolean
   /** Human-readable failure (unresolved path, write error). */
+  error?: string
+}
+
+/**
+ * Result of a create / rename / delete from the editor's file-tree sidebar.
+ * `path` is the repo-relative POSIX path the op landed on (the new path for a
+ * rename), so the renderer can re-select it once the tree reloads.
+ */
+export interface FileOpResult {
+  ok: boolean
+  path?: string
+  /** Human-readable failure (bad path, name taken, fs error). */
   error?: string
 }
 
@@ -433,7 +688,7 @@ export interface PropField {
 /** Result of inspecting a selected element's editable props. */
 export interface PropInspection {
   component: string
-  /** The `path:line` we edit at (from the element's data-dsgn-source). */
+  /** The `path:line` we edit at (from the element's data-praxis-source). */
   source: string
   fields: PropField[]
   /**
@@ -457,6 +712,21 @@ export interface PanelState {
    * height follows the card's reported height; 100vh would be circular).
    */
   maxHeight: number
+  /** AI-surfaced control panels matching the selection (Custom Controls, v10) —
+   *  fetched by the main renderer via `controls:get`; null while unfetched. */
+  controls: ResolvedControlPanel[] | null
+  /**
+   * Can praxis instrument this project for visual editing (a supported UI
+   * framework was detected)? Tailors the Styles tab's read-only guidance when
+   * the picked element has no source stamp. Null while unprobed.
+   */
+  canInstrument: boolean | null
+  /**
+   * The project's detected design tokens, so the Styles tab can name the
+   * current value ("--color-text", not "#6c6c6c") and offer a picker. Null
+   * while undetected / between projects.
+   */
+  tokens: TokenSet | null
 }
 
 /** A user action inside the island, relayed back to the main renderer. */
@@ -466,6 +736,9 @@ export type PanelAction =
   | { kind: 'setup' }
   | { kind: 'owner' }
   | { kind: 'inspection'; inspection: PropInspection }
+  /** Ask the AI to surface a control panel for the selection (Custom Controls,
+   *  v10) — App builds the trigger prompt and auto-sends it as a real turn. */
+  | { kind: 'controls'; hint?: string; panelId?: string }
 
 export interface PropEdit {
   source: string
@@ -483,7 +756,171 @@ export interface PropEditResult {
   error?: string
 }
 
-/** Result of an undo/redo over the dsgn source-edit history (v8 F3b). */
+/**
+ * A style change from the island's Styles tab (v10). `prop` is a css longhand
+ * from the fixed v1 allowlist (e.g. 'padding-top', 'border-radius',
+ * 'transition-duration'); `value` is its css text (e.g. '13px', '150ms',
+ * 'cubic-bezier(.17,.67,.83,.67)'). `classes` is the element's live class list,
+ * which drives the Tailwind-first commit strategy (rewrite a utility class when
+ * one matches, else splice an inline style, else route to the agent).
+ */
+export interface StyleEdit {
+  /** The element's `data-praxis-source` stamp ("path/File.tsx:line"). */
+  source: string
+  /** The css property (longhand) being edited. */
+  prop: string
+  /** The new css value, as css text. */
+  value: string
+  /** The element's current class list (Tailwind class-rewrite candidates). */
+  classes: string[]
+  /**
+   * Optional undo-batch id: a multi-prop gesture (the linked padding/margin
+   * scrubber commits four longhands) sends one shared group so a single Cmd+Z
+   * reverts the whole gesture — the per-prop coalesce keys differ, so
+   * edit-history's group batching is the only thing that can join them.
+   */
+  group?: string
+  /**
+   * Set when the user picked a DESIGN TOKEN rather than a raw value: write a
+   * reference (`var(--color-text)`, or a Tailwind token class) instead of
+   * `value`. `value` still carries the token's resolved css text, so the live
+   * preview, the post-commit reconcile and Replay all keep working against
+   * something concrete — only the text written into source differs.
+   *
+   * Only the name + group cross the boundary: main re-detects the project's
+   * tokens and re-validates the pick (name exists, value shape fits the
+   * property), so the island's claim is never trusted. An unresolvable token is
+   * dropped silently and the edit lands as a plain value edit — the value is
+   * still right, only the reference is unavailable.
+   */
+  token?: { name: string; group: string }
+  /**
+   * The property's AUTHORED css text before this edit (`1.5rem`), when the
+   * panel read one (`StyleReadResult.specified`). Prompt-context only — never
+   * spliced: it lets the S3 agent prompt tell the agent to keep the project's
+   * unit/idiom instead of pasting the scrub's px value into a rem-authored
+   * declaration.
+   */
+  authored?: string
+}
+
+/** A `styles:read` reply: fresh computed values plus proof of token usage. */
+export interface StyleReadResult {
+  values: Record<string, string>
+  /**
+   * Per editable longhand: the exact `--name` its SPECIFIED (unresolved)
+   * declaration references — inline `style=`, or a matched stylesheet /
+   * scoped-`<style>` rule (see `preview/style-provenance.ts`) — or null when
+   * it's a literal. `values`' computed style always fully resolves `var()`,
+   * so this is the only signal that tells "this value IS that token" apart
+   * from "happens to equal it".
+   */
+  declaredVars: Record<string, string | null>
+  /**
+   * Per editable longhand: the AUTHORED css text of that same specified
+   * declaration, when one was found — `1.5rem`, where `values` can only ever
+   * say `24px` (computed style serializes lengths as used px). What lets the
+   * panel read back the project's own units instead of the browser's.
+   */
+  specified: Record<string, string>
+}
+
+/** Result of applying a StyleEdit (mirrors PropEditResult's shape). */
+export interface StyleEditResult {
+  applied: boolean
+  /** How the edit landed: a Tailwind class rewrite or an inline-style splice. */
+  strategy?: 'tailwind' | 'inline'
+  /** True when a token REFERENCE was written (rather than the resolved value). */
+  wroteToken?: boolean
+  /** When not applied directly: the change needs the agent (dynamic class / expression style). */
+  needsAgent?: boolean
+  /** A ready-to-send prompt describing the change, when `needsAgent`. */
+  agentPrompt?: string
+  error?: string
+}
+
+/** Which control primitive the island renders for a custom-control param. */
+export type ControlKind = 'number' | 'color' | 'select' | 'toggle' | 'text' | 'bezier'
+
+/**
+ * How a custom-control param writes back to the repo. The manifest is untrusted
+ * agent output — main validates every strategy's target before any write.
+ * - `prop`    — a component prop edit, applied at the live selection's
+ *               `componentSource ?? source` through the props engine.
+ * - `style`   — a css property, routed through the Styles engine (StyleEdit).
+ * - `literal` — a source literal located by `anchor`: a unique substring that
+ *               ends immediately before the literal in the manifest's `file`.
+ *               Must occur exactly once (checked at save AND at every apply);
+ *               main lexes + renders the replacement literal itself — supplied
+ *               strings are never spliced raw.
+ */
+export type ControlApply =
+  | { strategy: 'prop'; propName: string }
+  | { strategy: 'style'; styleProp: string }
+  | { strategy: 'literal'; anchor: string }
+
+/** One parameter in an AI-surfaced control panel. Static metadata only — the
+ *  current value is re-derived from the source of truth on every read (no
+ *  values are stored, so manifests can't drift). */
+export interface ControlParam {
+  /** Stable id, unique within its panel (`^[a-z0-9][a-z0-9-]{0,40}$`). */
+  id: string
+  /** Human label rendered next to the control (≤80 chars, rendered as text). */
+  label: string
+  kind: ControlKind
+  /** Display unit for 'number' params, e.g. 'px' | 'ms'. */
+  unit?: string
+  /** Clamp range for 'number' params (main clamps on apply, not just in UI). */
+  min?: number
+  max?: number
+  /** Scrub increment for 'number' params. */
+  step?: number
+  /** Allowed values for `kind: 'select'`. */
+  options?: string[]
+  /** How the param writes back to source. */
+  apply: ControlApply
+}
+
+/**
+ * An AI-surfaced control panel for one component (Custom Controls, v10) —
+ * generated by the agent's `define_controls` tool, validated by main, and
+ * persisted in the repo's `.praxis/control-panels.json` sidecar. Upserted by
+ * `file` + `component` (regenerating replaces, never duplicates).
+ */
+export interface ControlPanelManifest {
+  id: string
+  /** Repo-relative source file the panel's params live in. */
+  file: string
+  /** The component name the panel targets (matches PropInspection.component). */
+  component: string
+  /** Panel heading shown in the island's Custom tab. */
+  title: string
+  params: ControlParam[]
+  createdAt: string
+}
+
+/**
+ * A ControlParam with its value freshly resolved from the source of truth
+ * (`literal` → lexed from the live file; `prop` → props:inspect; `style` →
+ * the element's computed styles). `valid: false` (with `reason`) marks a param
+ * whose target no longer resolves — rendered disabled with a Regenerate offer.
+ */
+export interface ResolvedControlParam extends ControlParam {
+  /** The current value, or null when it couldn't be resolved. */
+  value: string | number | boolean | null
+  /** False when the anchor/prop/style target no longer resolves. */
+  valid: boolean
+  /** Why the param is invalid (e.g. "anchor not found"), when `valid` is false. */
+  reason?: string
+}
+
+/** A manifest plus its params resolved against the live tree — what the island renders. */
+export interface ResolvedControlPanel {
+  manifest: ControlPanelManifest
+  params: ResolvedControlParam[]
+}
+
+/** Result of an undo/redo over the praxis source-edit history (v8 F3b). */
 export interface UndoResult {
   ok: boolean
   /** The file reverted/re-applied. */
@@ -501,7 +938,7 @@ export interface UndoResult {
  * expression, multiple candidates) fall back to the agent (`needsAgent`).
  */
 export interface TokenEdit {
-  /** The element's `data-dsgn-source` stamp (null → agent). */
+  /** The element's `data-praxis-source` stamp (null → agent). */
   source: string | null
   token: Token
   /** The token's group name (e.g. 'colors' | 'spacing' | 'radius' | 'fontSize'). */
@@ -512,10 +949,10 @@ export interface TokenEdit {
   classes: string[]
 }
 
-/** A reviewer note pinned to an element, stored in the repo's .dsgn sidecar. */
+/** A reviewer note pinned to an element, stored in the repo's .praxis sidecar. */
 export interface Annotation {
   id: string
-  /** The element's data-dsgn-source, if any. */
+  /** The element's data-praxis-source, if any. */
   source: string | null
   selector: string
   tag: string
@@ -536,7 +973,7 @@ export interface PublishResult {
   ok: boolean
   /** The created PR URL on success. */
   url?: string
-  /** The fresh dsgn/* branch created to continue on (publish.ship). */
+  /** The fresh praxis/* branch created to continue on (publish.ship). */
   branch?: string
   error?: string
 }
@@ -565,13 +1002,27 @@ export interface FeedbackResult {
 
 /** Result of scaffolding source-stamping into an unprepared project. */
 export type Frontend = 'react' | 'react-native' | 'svelte' | 'vue' | 'solid' | 'unknown'
-/** How dsgn instruments source mapping for the detected framework. */
+/** How praxis instruments source mapping for the detected framework. */
 export type SetupStrategy =
   | 'babel-plugin'
   | 'babel-plugin-rn'
   | 'svelte-preprocess'
   | 'inspector'
   | 'none'
+
+/**
+ * Read-only setup probe — can praxis instrument this project for visual editing?
+ * Runs the deps-based framework detection WITHOUT writing anything, so the
+ * renderer can decide up front whether to even offer setup (never dead-end a
+ * static/vanilla project on "Set it up") and how to word the Styles tab's
+ * read-only guidance.
+ */
+export interface SetupProbe {
+  /** The detected UI framework (deps-based), or 'unknown' when unrecognized. */
+  framework: Frontend
+  /** True when praxis can add source-mapping for this framework (i.e. framework !== 'unknown'). */
+  canInstrument: boolean
+}
 
 export interface SetupResult {
   ok: boolean
@@ -581,7 +1032,7 @@ export interface SetupResult {
   strategy?: SetupStrategy
   /** Svelte major version (4 or 5), so the prop-typing idiom is right. */
   svelteMajor?: number
-  /** Repo-relative files dsgn wrote (under `.dsgn/`). */
+  /** Repo-relative files praxis wrote (under `.praxis/`). */
   files?: string[]
   /** False if the helper already existed (idempotent). */
   written?: boolean
@@ -603,12 +1054,12 @@ export interface TokenGroup {
 /** Design tokens detected in the opened repo (one source wins per project). */
 export interface TokenSet {
   source: TokenSource
-  /** Human label for where they came from, e.g. ".dsgn/tokens.json". */
+  /** Human label for where they came from, e.g. ".praxis/tokens.json". */
   origin?: string
   groups: TokenGroup[]
 }
 
-/** Result of scaffolding a starter `.dsgn/tokens.json` manifest. */
+/** Result of scaffolding a starter `.praxis/tokens.json` manifest. */
 export interface TokenScaffoldResult {
   ok: boolean
   /** False if a manifest already existed (idempotent — nothing written). */
@@ -642,7 +1093,7 @@ export interface UpdateStatus {
 }
 
 /** The surface exposed on `window.api` by the preload bridge. */
-export interface DsgnApi {
+export interface PraxisApi {
   /** Subscribe to native-menu (Actions/File) commands: 'reload' | 'stop' | 'select' |
    *  'open-project' | 'new-project' | 'clear-recents' | 'viewport:desktop' |
    *  'viewport:mobile'. Returns an unsubscribe. */
@@ -667,6 +1118,10 @@ export interface DsgnApi {
     setRecents: (recents: RecentMenuEntry[]) => void
     /** Fires when a project is chosen from File → Open Recent. */
     onOpenRecent: (cb: (root: string) => void) => () => void
+    /** Run the NATIVE text-editing undo/redo in this window — used when the
+     *  Edit-menu accelerator arrived while a text field was focused (the
+     *  custom menu item swallowed the keystroke the field would have gotten). */
+    nativeEdit: (cmd: 'undo' | 'redo') => void
   }
   preview: {
     setBounds: (bounds: Bounds) => void
@@ -721,6 +1176,12 @@ export interface DsgnApi {
     setState: (state: PanelState) => void
     /** Island → receive state pushes. */
     onState: (cb: (state: PanelState) => void) => () => void
+    /** Island → ask main to (re)send the latest state on `onState`. The island
+     *  view is created by the first `show`, which the main renderer sends AFTER
+     *  its first `setState`, so that push has nowhere to land — and a re-push on
+     *  the view's load event races the island's own listener registration. The
+     *  island pulling once it is listening is the only order that can't lose. */
+    requestState: () => void
     /** Island → relay a user action to the main renderer. */
     action: (action: PanelAction) => void
     /** Main renderer → handle island actions. */
@@ -733,10 +1194,18 @@ export interface DsgnApi {
   project: {
     pick: () => Promise<string | null>
     detect: (root: string) => Promise<DetectedProject>
+    /** The project's own favicon, read from its source tree, so the rail can
+     *  lead the project with its real icon instead of a folder glyph. Null when
+     *  the project ships none. */
+    icon: (root: string) => Promise<ProjectIcon | null>
     /** Save-dialog for a folder to create (New Project…). Null when cancelled. */
     pickNew: () => Promise<string | null>
     /** Scaffold a minimal Vite+React app there, git init, install deps. */
-    create: (root: string) => Promise<{ ok: boolean; root?: string; error?: string }>
+    /** `warning` = created, but a non-fatal step failed and the user must be told
+     *  now (today: `git init` / the first commit — see scaffold.ts). */
+    create: (
+      root: string
+    ) => Promise<{ ok: boolean; root?: string; error?: string; warning?: string }>
   }
   devServer: {
     start: (opts: {
@@ -755,13 +1224,13 @@ export interface DsgnApi {
     onLog: (cb: (line: string) => void) => () => void
   }
   git: {
-    /** Ensure work happens on a `dsgn/*` branch (creates one off HEAD if needed). */
+    /** Ensure work happens on a `praxis/*` branch (creates one off HEAD if needed). */
     ensure: (root: string) => Promise<BranchResult>
-    /** Switch to / create a specific branch (name is coerced to `dsgn/<…>`). */
+    /** Switch to / create a specific branch (name is coerced to `praxis/<…>`). */
     set: (root: string, name: string) => Promise<BranchResult>
     /** List local branches (current first) so the titlebar pill can switch. */
     list: (root: string) => Promise<{ branches: string[]; current: string | null }>
-    /** Check out an existing branch by exact name (no dsgn/ coercion). */
+    /** Check out an existing branch by exact name (no praxis/ coercion). */
     checkout: (root: string, branch: string) => Promise<BranchResult>
   }
   diagnose: {
@@ -786,7 +1255,7 @@ export interface DsgnApi {
   props: {
     /**
      * Inspect the editable props of the element at `source` ("path:line").
-     * `text` is the clicked element's rendered text — for Svelte it lets dsgn
+     * `text` is the clicked element's rendered text — for Svelte it lets praxis
      * content-match the click to the concrete component INSTANCE (v8 F3a-svelte)
      * instead of falling back to a definition-default edit.
      */
@@ -802,6 +1271,71 @@ export interface DsgnApi {
   text: {
     /** Rewrite the element's text content in source; agent-fallback for complex content. */
     apply: (root: string, edit: { source: string; text: string }) => Promise<PropEditResult>
+  }
+  /** The island's Styles tab (v10): live scrub injection into the previewed app
+   *  plus the Tailwind-first commit engine (`main/styles.ts`). */
+  styles: {
+    /** Commit a style edit to source: Tailwind class rewrite → inline-style
+     *  splice → agent fallback (`needsAgent`, like prop editing). */
+    apply: (root: string, edit: StyleEdit) => Promise<StyleEditResult>
+    /** Live scrub override — inject `prop: value` inline on the selected element
+     *  (the preload stashes the original for exact revert). Fire-and-forget. */
+    preview: (prop: string, value: string) => void
+    /** Revert live override(s) exactly — one prop, or all when omitted. */
+    clearPreview: (prop?: string) => void
+    /** Fresh computed values for `props` from the current selection (pick-time
+     *  snapshots go stale), PLUS proof of design-token usage. Null when the
+     *  selection is gone (navigation / element removed), there's no preview,
+     *  or the read timed out. */
+    read: (props: string[]) => Promise<StyleReadResult | null>
+    /** Replay a transition on the selected element: jump to `from` with
+     *  transitions disabled, force reflow, then set `to` so it animates. */
+    replay: (prop: string, from: string, to: string) => void
+  }
+  /** The Layers panel: a tree of the previewed page's DOM, panel-driven
+   *  select/hover, and drag-to-reorder that writes back into source. */
+  layers: {
+    /** A full snapshot of the previewed page's DOM tree. Null on timeout / no
+     *  preview (mirrors `styles.read`'s contract). */
+    read: () => Promise<LayersSnapshot | null>
+    /** Fires on a debounced structural DOM change while the watch is armed —
+     *  the renderer decides whether/when to re-`read()`. */
+    onChanged: (cb: () => void) => () => void
+    /** Select the element at `path` — routes through the preview's normal
+     *  click-pick path (`describe`/`showToolbar`/outline), independent of
+     *  Select-mode. */
+    select: (path: number[], fingerprint: LayerFingerprint) => void
+    /** Hover-highlight the element at `path` (the transient box); null clears it. */
+    hover: (path: number[] | null, fingerprint: LayerFingerprint | null) => void
+    /** Arm/disarm the preload's structural MutationObserver — only while the
+     *  panel is open, so an idle panel costs nothing. */
+    setWatch: (on: boolean) => void
+    /** Drag-to-reorder: writes a real source edit for a same-parent sibling
+     *  move; anything ambiguous (list items, reparenting, cross-file) reports
+     *  `needsAgent` with a ready-made prompt instead. */
+    move: (root: string, req: MoveNodeRequest) => Promise<MoveNodeResult>
+  }
+  /** AI-surfaced custom-control panels (v10) — manifests persisted by main in
+   *  the repo's `.praxis/control-panels.json`, values resolved fresh per read. */
+  controls: {
+    /** Panels matching the selection's candidate files (two-stamp match), with
+     *  every param's value freshly resolved against the live tree. */
+    get: (root: string, q: { files: string[]; component?: string }) => Promise<ResolvedControlPanel[]>
+    /** Every stored panel for the repo (unresolved manifests). */
+    list: (root: string) => Promise<ControlPanelManifest[]>
+    /** Delete a panel by id ("Remove panel"). */
+    remove: (root: string, id: string) => Promise<void>
+    /** Apply a value to a literal-strategy param — main re-anchors, lexes and
+     *  renders the replacement itself (never splices a supplied string raw). */
+    applyLiteral: (
+      root: string,
+      panelId: string,
+      paramId: string,
+      value: string | number | boolean
+    ) => Promise<StyleEditResult>
+    /** Fires when the agent's `define_controls` tool saved a manifest — App
+     *  re-fetches and re-pushes panel state for that root. */
+    onUpdated: (cb: (root: string) => void) => () => void
   }
   source: {
     /** Resolve a component tag name to its defining file via imports (Cmd+click). */
@@ -824,20 +1358,35 @@ export interface DsgnApi {
     popout: (root: string, source: string) => Promise<void>
     /** Close the standalone editor window (called from inside a popped-out editor). */
     closeWindow: () => Promise<void>
+    /** Repo-relative file paths for the pop-out editor's file-tree sidebar. */
+    tree: (root: string) => Promise<string[]>
+    /** File-tree sidebar: create an empty file (parent dirs created as needed). */
+    createFile: (root: string, path: string) => Promise<FileOpResult>
+    /** File-tree sidebar: rename/move a file. Never overwrites an existing path. */
+    renameFile: (root: string, from: string, to: string) => Promise<FileOpResult>
+    /** File-tree sidebar: delete a file (to the OS trash where that's available). */
+    deleteFile: (root: string, path: string) => Promise<FileOpResult>
     /** Standalone editor window: retarget event when a second pop-out reuses it. */
     onNavigate: (cb: (source: string) => void) => () => void
   }
-  /** Undo/redo over ALL direct dsgn source edits — props, text, token swaps (v8 F3b).
+  /** Undo/redo over ALL direct praxis source edits — props, text, token swaps (v8 F3b).
    *  Scoped per project root: the rail keeps several projects open at once. */
   edits: {
     undo: (root: string) => Promise<UndoResult>
     redo: (root: string) => Promise<UndoResult>
     can: (root: string) => Promise<{ undo: boolean; redo: boolean }>
+    /** Per-turn chat revert: restore the pre-turn files of the recorded group
+     *  `chat:<wtId>:<turnNo>` (addressable, not stack-order). `conflict` when a file
+     *  drifted since (a later turn or hand edit touched it). */
+    revert: (root: string, group: string) => Promise<UndoResult>
+    /** Is that group still safely revertable right now (on the stack, no file drifted)?
+     *  A cheap pre-check for greying out the Revert button. */
+    canRevert: (root: string, group: string) => Promise<boolean>
   }
   tokens: {
     /** Detect design tokens in the repo (manifest → tailwind → CSS vars). */
     detect: (root: string) => Promise<TokenSet>
-    /** Write a starter `.dsgn/tokens.json` (idempotent — skips if one exists). */
+    /** Write a starter `.praxis/tokens.json` (idempotent — skips if one exists). */
     scaffold: (root: string) => Promise<TokenScaffoldResult>
   }
   annotations: {
@@ -851,13 +1400,21 @@ export interface DsgnApi {
     /** Create a branch + GitHub PR with the annotations; returns the PR URL. */
     toPr: (root: string, opts: { title: string }) => Promise<PublishResult>
     /** Full ship: commit all → push → PR → squash-merge to the default branch →
-     *  pull it → delete the merged branch → start a fresh dsgn/* branch. */
+     *  pull it → delete the merged branch → start a fresh praxis/* branch. */
     ship: (root: string, summary?: string[], mode?: 'merge' | 'pr') => Promise<PublishResult>
   }
+  github: {
+    /** GitHub link + gh readiness for the header + connect sheet. */
+    status: (root: string) => Promise<GithubStatus>
+    /** First-publish bridge: create the repo, wire origin, push the built work. */
+    connect: (root: string, opts: GithubConnectOptions) => Promise<GithubConnectResult>
+  }
   setup: {
+    /** Read-only: detect the UI framework + whether praxis can instrument it (no writes). */
+    detect: (root: string) => Promise<SetupProbe>
     /** Write the dev-only source-stamping plugin into the repo (deterministic). */
     scaffold: (root: string) => Promise<SetupResult>
-    /** Remove dsgn's scaffold files from the repo (the .dsgn helpers + legacy root plugin). */
+    /** Remove praxis's scaffold files from the repo (the .praxis helpers + legacy root plugin). */
     uninstall: (root: string) => Promise<SetupResult>
   }
   agent: {
@@ -884,6 +1441,16 @@ export interface DsgnApi {
       root: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; sessionKey?: string; error?: string }>
+    /**
+     * Rename one LIVE chat (rail inline rename). Replaces the record's name — the
+     * one main auto-generates — so the chosen name survives into the chat's
+     * persisted history record and blocks any later auto-naming. `ok:false` when
+     * that sessionKey has no live session or the name is empty.
+     */
+    renameChat: (
+      sessionKey: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     /** Restart one live chat with startup-only options (such as a Codex model)
      * without touching any of its sibling chats. */
     restartChat: (
@@ -891,15 +1458,23 @@ export interface DsgnApi {
       sessionKey: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; error?: string }>
+    /** Archive Main's current transcript and restart its provider context under
+     * the same stable project session key. Project memory is not modified. */
+    clearMainContext: (root: string) => Promise<{ ok: boolean; error?: string }>
     /**
      * Resume a past ("previous agent") session by its history record id — requires
      * the record to carry a Claude `sdkSessionId` (else `ok:false`). Starts a live
      * session with the SDK's `resume` option, registers it under a new sessionKey,
-     * and makes it the project's active session.
+     * and makes it the project's active session. `options` is the posture the
+     * resumed chat should run with (model/effort/permission mode) — omit it and the
+     * session falls back to main's defaults, which is how a resumed chat used to
+     * end up asking for every edit while the toolbar still read "Auto". The backend
+     * is always Claude here, whatever `options.provider` says.
      */
     resumeSession: (
       root: string,
-      recordId: string
+      recordId: string,
+      options?: AgentOptions
     ) => Promise<{ ok: boolean; sessionKey?: string; error?: string }>
     /**
      * Close ONE of a project's live chats (v9 multi-chat) — tears down just that
@@ -913,6 +1488,11 @@ export interface DsgnApi {
       sessionKey: string
     ) => Promise<{ ok: boolean; remaining: string[]; activeSessionKey: string | null }>
     send: (text: string, images?: ImageAttachment[]) => Promise<void>
+    /** Write a pasted image (clipboard bytes, no on-disk origin) into the app's
+     *  attachments dir and return its absolute path — so the turn can tell the
+     *  agent WHERE the image it can see actually lives. '' if it couldn't be
+     *  written; a dropped image needs no call (it already has a path). */
+    saveAttachment: (image: ImageAttachment, name?: string) => Promise<string>
     setModel: (model: string) => Promise<void>
     /** Change the permission posture live (drives the SDK's setPermissionMode). */
     setPermissionMode: (mode: PermissionMode) => Promise<void>
@@ -930,6 +1510,7 @@ export interface DsgnApi {
     spawnComment: (
       root: string,
       text: string,
+      parentSessionKey: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }>
     /** F1 Phase 3 — cancel a running or queued comment spawn (the rail row's ×). */
@@ -946,17 +1527,58 @@ export interface DsgnApi {
       title: string,
       recordId: string
     ) => Promise<{ ok: boolean; prUrl?: string; error?: string }>
+    /** v9 conflict card — "Resolve it" on the ACTIVE parked chat. Stages the worktree
+     *  with both sides 3-way merged; `conflicted` lists the files with real overlap and
+     *  `prompt` is the resolution turn the renderer should `send`. An empty `conflicted`
+     *  means the sides merged cleanly and were already applied (no turn to run). */
+    resolveConflict: () => Promise<{ ok: boolean; conflicted: string[]; prompt?: string; error?: string }>
+    /** v9 conflict card — "Discard changes" on the ACTIVE parked chat (drop its work). */
+    discardConflict: () => Promise<{ ok: boolean }>
     onEvent: (cb: (event: AgentEvent) => void) => () => void
     /** Everything still live in main (open projects, their live chats + in-progress
      *  transcripts) — used to reattach the renderer after a reload without tearing
      *  down any session. Read-only: never suspends/starts/closes anything. */
     workspaceSnapshot: () => Promise<WorkspaceSnapshot>
   }
+  projectMemory: {
+    get: (root: string) => Promise<ProjectMemory>
+    set: (root: string, content: string) => Promise<ProjectMemory>
+  }
+  /**
+   * User-added model endpoints (v10) — see `ProviderConnection`. Global, not
+   * per-project. Every call here is key-safe: keys go IN via `save`/`catalog` and
+   * never come back out, so the renderer can only ever observe `hasKey`.
+   */
+  providers: {
+    /** Every saved connection, keys excluded. */
+    list: () => Promise<ProviderConnection[]>
+    /**
+     * Create (no `id`) or update (with `id`) a connection. `apiKey` set ⇒ replace the
+     * stored key; omitted ⇒ leave it untouched, so editing a label can't wipe a key.
+     */
+    save: (
+      input: ProviderConnectionInput
+    ) => Promise<{ ok: boolean; connection?: ProviderConnection; error?: string }>
+    /** Delete a connection and its stored key. */
+    remove: (id: string) => Promise<void>
+    /** Probe `{baseUrl}/models` — validates the key AND returns the catalog (the
+     *  dialog's "Connect"). Accepts an unsaved draft so users can test before saving. */
+    catalog: (input: ModelCatalogInput) => Promise<ModelCatalogResult>
+    /** Every model the chat picker should offer, grouped: built-in seats first, then
+     *  one group per connection. Recomputed on demand, so it always reflects the store. */
+    choices: () => Promise<ModelChoice[]>
+  }
   /** Persisted agent-session history ("previous agents") — v5-D. */
   sessions: {
     /** Past sessions for a project, newest first (excludes the live one). */
     list: (root: string) => Promise<SessionRecord[]>
     get: (id: string) => Promise<SessionRecord | null>
+    /** Rename a past session (rail inline rename). `ok:false` for an unknown
+     *  record or an empty name. */
+    rename: (
+      id: string,
+      title: string
+    ) => Promise<{ ok: boolean; title?: string; error?: string }>
     remove: (id: string) => Promise<void>
   }
   /** In-app feedback → a GitHub issue on Praxis's own repo (LKM-27). */

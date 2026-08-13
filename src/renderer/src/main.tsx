@@ -7,14 +7,14 @@ import './styles.css'
 
 const params = new URLSearchParams(location.search)
 
-// ?dsgnPanel=1 → this instance is the floating prop-panel island (a separate
+// ?praxisPanel=1 → this instance is the floating prop-panel island (a separate
 // WebContentsView stacked above the native preview). It renders ONLY the panel.
-const isPanel = params.has('dsgnPanel')
+const isPanel = params.has('praxisPanel')
 if (isPanel) document.documentElement.classList.add('panel-host')
 
-// ?dsgnEditor=1 → this instance is the code drawer popped out into its own window
+// ?praxisEditor=1 → this instance is the code drawer popped out into its own window
 // (main/index.ts openEditorWindow). It renders ONLY the full-window editor.
-const editorRoot = params.get('dsgnEditor') ? params.get('root') : null
+const editorRoot = params.get('praxisEditor') ? params.get('root') : null
 const editorSource = params.get('source')
 
 // macOS: the main window is created with under-page vibrancy (main/index.ts) —

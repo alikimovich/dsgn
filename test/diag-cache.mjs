@@ -18,7 +18,7 @@ assert.notEqual(
   'different module → different signature'
 )
 
-const dir = mkdtempSync(join(tmpdir(), 'dsgn-diag-'))
+const dir = mkdtempSync(join(tmpdir(), 'praxis-diag-'))
 const root = '/proj/a'
 const err = "Cannot find module '@ai-sdk/xai' imported from /Users/x/chat.ts"
 const diag = {

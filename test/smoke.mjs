@@ -33,7 +33,7 @@ try {
   await shot(win, '01-launch.png')
 
   // Open a project (store-only) so the chat + preview panes render for the checks.
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   // Assert the shell: both panes + composer.
   for (const sel of ['.pane--chat', '.pane--preview', '.composer__input']) {
     await win.waitForSelector(sel, { timeout: 5000 })

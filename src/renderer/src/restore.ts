@@ -1,5 +1,7 @@
 import type { LiveProjectSnapshot, SessionRecord } from '../../shared/api'
 import {
+  type ChatAgentSettings,
+  chatAgentSettingsFromOptions,
   messagesFromTranscript,
   type ProjectEntry,
   readPersistedWorkspace,
@@ -15,7 +17,7 @@ import {
  * MAIN process survives with its live agent sessions, dev servers, and preview —
  * but the fresh renderer has no in-memory state and would land on Welcome. This
  * reattaches the UI to whatever is still live in main, repainting chat transcripts;
- * and when main has nothing (a real relaunch), auto-reopens the last dsgn-launched
+ * and when main has nothing (a real relaunch), auto-reopens the last praxis-launched
  * project and resumes its most recent chat from disk.
  *
  * Reuses App's own `attempt`/`applyProject`/`resumeRecord` (passed in) rather than
@@ -53,8 +55,18 @@ const minimalEntry = (lp: LiveProjectSnapshot): ProjectEntry => ({
   launchSpec: null,
   touchedAt: 0,
   sessionKeys: lp.chats.map((c) => c.sessionKey),
-  activeSessionKey: lp.activeSessionKey ?? lp.chats[0]?.sessionKey ?? lp.projectKey
+  activeSessionKey: lp.activeSessionKey ?? lp.chats[0]?.sessionKey ?? lp.projectKey,
+  chatSettings: liveChatSettings(lp)
 })
+
+/** Every live chat's REAL posture, straight from main's session options. It
+ *  outranks the persisted copy: main survived the reload, the renderer's state
+ *  didn't, so anything the two disagree on is stale on the renderer's side (and a
+ *  stale mode is one the toolbar would then misreport for the rest of the chat). */
+const liveChatSettings = (lp: LiveProjectSnapshot): Record<string, ChatAgentSettings> =>
+  Object.fromEntries(
+    lp.chats.map((c) => [c.sessionKey, chatAgentSettingsFromOptions(c.options)])
+  )
 
 export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
   if (started) return
@@ -78,7 +90,18 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
       const p = persistedByKey.get(lp.projectKey)
       const sessionKeys = lp.chats.map((c) => c.sessionKey)
       const activeSessionKey = lp.activeSessionKey ?? sessionKeys[0] ?? lp.projectKey
-      restored.push(p ? { ...p, sessionKeys, activeSessionKey } : minimalEntry(lp))
+      restored.push(
+        p
+          ? {
+              ...p,
+              sessionKeys,
+              activeSessionKey,
+              // Main's live options win over the persisted copy for the chats it
+              // still has; persisted entries for chats it no longer has are dropped.
+              chatSettings: liveChatSettings(lp)
+            }
+          : minimalEntry(lp)
+      )
       for (const c of lp.chats) {
         useChat
           .getState()
@@ -86,6 +109,9 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
         // Restore the chat's auto-generated name so the rail shows its subject
         // label immediately, not the opening-words fallback, after a reload.
         if (c.record.title) useChat.getState().setTitle(c.sessionKey, c.record.title)
+        // Restore the isolation chip (v9) — main's chat-isolation state survives a
+        // renderer-only reload, so re-seed the chip instead of defaulting to 'live'.
+        if (c.isolation) useChat.getState().setIsolation(c.sessionKey, c.isolation.state)
       }
     }
 
@@ -121,7 +147,7 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
       }
       await deps.applyProject(entry)
     } else if (activePersisted && activePersisted.launchSpec) {
-      // Real relaunch (main empty) — only auto-reopen a project dsgn OWNS the launch
+      // Real relaunch (main empty) — only auto-reopen a project praxis OWNS the launch
       // of (a persisted launchSpec). Attached-server / never-launched entries can't
       // be relaunched meaningfully and are left in recents for the user to reopen.
       await deps.attempt(activePersisted.root)
@@ -131,7 +157,7 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
         await resumeMostRecent(activePersisted.root, deps)
       }
     }
-    // else: nothing live and the last project isn't dsgn-launched → stay on Welcome.
+    // else: nothing live and the last project isn't praxis-launched → stay on Welcome.
   } catch (err) {
     // Any failure falls back cleanly rather than a broken half-state.
     const message = err instanceof Error ? err.message : String(err)

@@ -1,21 +1,23 @@
-import { ipcMain } from 'electron'
 import { execFile } from 'child_process'
+import { ipcMain } from 'electron'
 import { mkdir, readFile, rename, writeFile } from 'fs/promises'
 import { join } from 'path'
 import { promisify } from 'util'
 import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
 import { buildPublishMessage } from '../shared/publish-message'
+import { enclosingRepoRoot, ensureBranch } from './git'
+import { aheadOfBase, changedSince, defaultBase } from './publish-scope'
 
 /**
  * Annotation sidecar + engineer handoff (v3). Reviewer notes are pinned to
- * elements and stored in `<repo>/.dsgn/annotations.json` — a sidecar the agent
- * is told not to touch (writes under `.dsgn/` are denied in agent.ts). "Publish"
- * turns the dsgn-related working changes + the notes into a branch and a PR.
+ * elements and stored in `<repo>/.praxis/annotations.json` — a sidecar the agent
+ * is told not to touch (writes under `.praxis/` are denied in agent.ts). "Publish"
+ * turns the praxis-related working changes + the notes into a branch and a PR.
  */
 
 const execFileP = promisify(execFile)
-const dir = (root: string): string => join(root, '.dsgn')
+const dir = (root: string): string => join(root, '.praxis')
 const file = (root: string): string => join(dir(root), 'annotations.json')
 
 let counter = 0
@@ -81,14 +83,8 @@ async function git(root: string, args: string[]): Promise<string> {
   return stdout.trim()
 }
 
-/** Tracked files changed vs HEAD — clean paths (no porcelain quoting/rename arrows). */
-async function changedSince(root: string): Promise<string[]> {
-  const out = await git(root, ['-c', 'core.quotePath=false', 'diff', '--name-only', 'HEAD'])
-  return out.split('\n').map((l) => l.trim()).filter(Boolean)
-}
-
 async function publishToPr(root: string, opts: { title: string }): Promise<PublishResult> {
-  const title = opts.title || 'dsgn: design handoff'
+  const title = opts.title || 'praxis: design handoff'
   // --- Pre-flight: fail before any mutation. ---
   let original: string
   try {
@@ -117,22 +113,28 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
     return { ok: false, error: 'Nothing to publish — no changes or notes yet.' }
   }
 
-  const branch = `dsgn/handoff-${Date.now().toString(36)}`
+  const branch = `praxis/handoff-${Date.now().toString(36)}`
   let committed = false
   try {
     await git(root, ['checkout', '-b', branch])
     // Stage tracked changes + the sidecar only — never sweep in untracked files
     // (local .env, build artifacts, unrelated WIP).
     await git(root, ['add', '-u'])
-    await git(root, ['add', '--', '.dsgn'])
+    await git(root, ['add', '--', '.praxis'])
     const staged = await git(root, ['diff', '--cached', '--name-only'])
-    if (!staged) {
+    // Per-turn live commits mean the work is usually already IN the branch's history,
+    // so "nothing staged" no longer means "nothing to publish" — only nothing staged
+    // AND nothing ahead of the base does. When nothing is staged the handoff branch
+    // simply points at the same commits, which is a perfectly publishable PR.
+    if (!staged && (await aheadOfBase(root, await defaultBase(root))) === 0) {
       await git(root, ['checkout', original])
       await git(root, ['branch', '-D', branch])
       return { ok: false, error: 'Nothing to publish — no changes or notes yet.' }
     }
-    await git(root, ['commit', '-m', title])
-    committed = true
+    if (staged) {
+      await git(root, ['commit', '-m', title])
+      committed = true
+    }
     await git(root, ['push', '-u', 'origin', branch])
 
     const body = buildPrBody(annotations, changedFiles)
@@ -140,10 +142,16 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
       cwd: root,
       maxBuffer: 10 * 1024 * 1024
     })
-    const url = stdout.trim().split('\n').find((l) => /^https?:\/\//.test(l))
+    const url = stdout
+      .trim()
+      .split('\n')
+      .find((l) => /^https?:\/\//.test(l))
     return { ok: true, ...(url ? { url } : {}) }
   } catch (err) {
-    const msg = (err instanceof Error ? err.message : String(err)).split('\n').slice(0, 3).join('\n')
+    const msg = (err instanceof Error ? err.message : String(err))
+      .split('\n')
+      .slice(0, 3)
+      .join('\n')
     // Roll back to the user's branch. If we already committed, the work lives on
     // the handoff branch — say so rather than silently leaving them stranded.
     try {
@@ -159,10 +167,10 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
 }
 
 /**
- * Full "Publish": commit every change on the current dsgn/* branch → push →
+ * Full "Publish": commit every change on the current praxis/* branch → push →
  * create (or reuse) a PR → squash-merge it into the default branch (deleting the
  * remote branch) → check out the default branch and pull → delete the merged
- * local branch → start a fresh same-named dsgn/* branch off the updated base to
+ * local branch → start a fresh same-named praxis/* branch off the updated base to
  * keep working on. One-click ship-and-continue.
  */
 async function shipToMain(
@@ -179,17 +187,40 @@ async function shipToMain(
   }
   if (branch === 'HEAD') return { ok: false, error: 'Detached HEAD — check out a branch first.' }
   // Default branch (main/master), from origin/HEAD; fall back to main.
-  let base = 'main'
-  try {
-    base = (await git(root, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD'])).replace(
-      /^origin\//,
-      ''
-    ) || 'main'
-  } catch {
-    /* origin/HEAD not set — assume main */
-  }
+  const base = await defaultBase(root)
   if (branch === base) {
-    return { ok: false, error: `You're on ${base} — publish runs from a dsgn/* work branch.` }
+    // The open-time `git:ensure` should have moved the checkout onto a praxis/*
+    // work branch, but a project can still land here on its base branch (ensure
+    // failed at open, the user switched back via the titlebar, or a previous
+    // publish's recovery stranded them). Self-heal instead of refusing: move
+    // onto `praxis/<base>` now — `checkout -b` carries the uncommitted work
+    // along, and the rest of the flow keeps the base branch clean exactly as if
+    // open-time ensure had succeeded. `ensureBranch` still refuses non-root
+    // checkouts (a subdir of a larger repo), which stays a hard error.
+    const healed = await ensureBranch(root)
+    if (!healed.isRepo) {
+      // The old message just said "open the repo's top-level folder", which is a
+      // dead end: it never said WHICH repo, and for a freshly created project the
+      // answer usually isn't "open something else" at all — it's that this folder
+      // never became a repo (a scaffold whose `git init` failed used to be
+      // swallowed silently), so git resolved to whatever repo happens to sit
+      // above it. Name the actual situation and the actual next step.
+      const enclosing = await enclosingRepoRoot(root)
+      return {
+        ok: false,
+        error:
+          enclosing === null
+            ? `This folder isn't a git repository, so there's nothing to publish from. Run \`git init\` in ${root} (and make a first commit), then try again.`
+            : `Can't publish: this folder is inside the repository at ${enclosing}, but isn't its top level, so Praxis won't switch that whole repo onto a work branch. Either open ${enclosing} as the project and publish from there, or make this folder its own repository with \`git init\` in ${root}.`
+      }
+    }
+    if (!healed.branch || healed.branch === base || healed.error) {
+      return {
+        ok: false,
+        error: `You're on ${base} and Praxis couldn't create a work branch${healed.error ? `: ${healed.error}` : '.'}`
+      }
+    }
+    branch = healed.branch
   }
   try {
     await git(root, ['remote', 'get-url', 'origin'])
@@ -209,7 +240,7 @@ async function shipToMain(
     // 1. Commit all changes (gitignore-respected). Skip the commit if clean.
     // Title + body come from the session's user requests (and the diffstat vs
     // base), so the branch commit, the PR, and the squash-merge commit all read
-    // as the actual work — not "dsgn: publish <branch>".
+    // as the actual work — not "praxis: publish <branch>".
     await git(root, ['add', '-A'])
     const diffstat = await git(root, ['diff', '--stat', base]).catch(() => '')
     const msg = buildPublishMessage(branch, summary, diffstat)
@@ -225,10 +256,22 @@ async function shipToMain(
     let url = ''
     try {
       const { stdout } = await gh([
-        'pr', 'create', '--base', base, '--head', branch,
-        '--title', msg.title, '--body', msg.body
+        'pr',
+        'create',
+        '--base',
+        base,
+        '--head',
+        branch,
+        '--title',
+        msg.title,
+        '--body',
+        msg.body
       ])
-      url = stdout.trim().split('\n').find((l) => /^https?:\/\//.test(l)) ?? ''
+      url =
+        stdout
+          .trim()
+          .split('\n')
+          .find((l) => /^https?:\/\//.test(l)) ?? ''
     } catch (e) {
       const existing = await gh(['pr', 'view', branch, '--json', 'url', '-q', '.url']).catch(
         () => ({ stdout: '' })
@@ -247,9 +290,15 @@ async function shipToMain(
     // "default commit message" setting; keep GitHub's "(#N)" convention.
     const prNumber = url.match(/\/pull\/(\d+)/)?.[1]
     await gh([
-      'pr', 'merge', branch, '--squash', '--delete-branch',
-      '--subject', prNumber ? `${msg.title} (#${prNumber})` : msg.title,
-      '--body', msg.body
+      'pr',
+      'merge',
+      branch,
+      '--squash',
+      '--delete-branch',
+      '--subject',
+      prNumber ? `${msg.title} (#${prNumber})` : msg.title,
+      '--body',
+      msg.body
     ])
     // 5. Update the local base branch.
     await git(root, ['checkout', base])
@@ -267,14 +316,15 @@ async function shipToMain(
     try {
       const now = await git(root, ['rev-parse', '--abbrev-ref', 'HEAD'])
       if (now !== branch) {
-        await git(root, ['checkout', branch]).catch(() =>
-          git(root, ['checkout', '-b', branch])
-        )
+        await git(root, ['checkout', branch]).catch(() => git(root, ['checkout', '-b', branch]))
       }
     } catch {
       /* couldn't restore — surface the original error below */
     }
-    const msg = (err instanceof Error ? err.message : String(err)).split('\n').slice(0, 4).join('\n')
+    const msg = (err instanceof Error ? err.message : String(err))
+      .split('\n')
+      .slice(0, 4)
+      .join('\n')
     return { ok: false, error: msg }
   }
 }
@@ -284,9 +334,7 @@ export function registerAnnotationsIpc(): void {
   ipcMain.handle('annotations:add', (_e, root: string, input: AnnotationInput) =>
     addAnnotation(root, input)
   )
-  ipcMain.handle('annotations:remove', (_e, root: string, id: string) =>
-    removeAnnotation(root, id)
-  )
+  ipcMain.handle('annotations:remove', (_e, root: string, id: string) => removeAnnotation(root, id))
   ipcMain.handle('publish:to-pr', (_e, root: string, opts: { title: string }) =>
     publishToPr(root, opts)
   )

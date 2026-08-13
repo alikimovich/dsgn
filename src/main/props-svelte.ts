@@ -23,7 +23,7 @@ import {
 
 /**
  * Svelte adapter for the prop editor — the `.svelte` counterpart of the
- * React/JSX engine in props.ts. Same contract: given a `data-dsgn-source` stamp,
+ * React/JSX engine in props.ts. Same contract: given a `data-praxis-source` stamp,
  * find the element on that line/column, read its literal attributes, resolve a
  * component prop schema (`export let` for Svelte 4, `$props()` destructuring for
  * Svelte 5, with TS types → enums when present), and apply simple literal edits
@@ -38,7 +38,7 @@ type SvelteCompiler = typeof import('svelte/compiler')
 let sveltePromise: Promise<SvelteCompiler> | null = null
 const loadSvelte = (): Promise<SvelteCompiler> => (sveltePromise ??= import('svelte/compiler'))
 
-interface Node {
+export interface Node {
   type?: string
   start?: number
   end?: number
@@ -87,7 +87,7 @@ function collectElements(node: unknown, out: Node[]): void {
 }
 
 /** The element the stamp points at (mirrors the React findElementAtLine logic). */
-function findElement(
+export function findElement(
   root: Node,
   code: string,
   line: number,
@@ -340,7 +340,7 @@ function isRouteFile(file: string): boolean {
   return basename(file).startsWith('+')
 }
 
-async function parseSvelte(code: string): Promise<Node | null> {
+export async function parseSvelte(code: string): Promise<Node | null> {
   try {
     const { parse } = await loadSvelte()
     return parse(code, { modern: true }) as unknown as Node
@@ -351,7 +351,7 @@ async function parseSvelte(code: string): Promise<Node | null> {
 
 // Dirs that never hold authored usage sites — skip them while scanning so a big
 // repo doesn't read its build output / deps on every inspect.
-const SCAN_SKIP = new Set(['node_modules', '.git', '.svelte-kit', '.dsgn', 'dist', 'build', 'out'])
+const SCAN_SKIP = new Set(['node_modules', '.git', '.svelte-kit', '.praxis', 'dist', 'build', 'out'])
 
 /** `.svelte` files under `root` whose text mentions `<Component` (cheap pre-filter). */
 async function svelteFilesUsing(root: string, component: string, limit = 4000): Promise<string[]> {

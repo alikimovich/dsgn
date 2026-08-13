@@ -9,8 +9,8 @@ interface Props {
 
 /**
  * First-run offer shown when a project exposes no design tokens (no
- * `.dsgn/tokens.json`, Tailwind theme, or CSS custom properties). Accepting
- * writes a starter `.dsgn/tokens.json` — a deterministic file write, no agent —
+ * `.praxis/tokens.json`, Tailwind theme, or CSS custom properties). Accepting
+ * writes a starter `.praxis/tokens.json` — a deterministic file write, no agent —
  * which then becomes the editable, canonical token source for the palette.
  * Shares the SetupCard surface; shadcn Buttons. `.setup*` hooks preserved.
  */
@@ -31,7 +31,7 @@ export default function TokenOfferCard({
       </div>
       <div className="setup__body text-[12.5px] leading-snug text-blue-800 dark:text-blue-200/90">
         This project has no design tokens yet. I can create an editable{' '}
-        <code>.dsgn/tokens.json</code> with starter colors, spacing, and radii — then you can apply
+        <code>.praxis/tokens.json</code> with starter colors, spacing, and radii — then you can apply
         them from the inspector and tune them to your brand.
       </div>
       {status && <div className="setup__status text-[11.5px] text-muted-foreground">{status}</div>}

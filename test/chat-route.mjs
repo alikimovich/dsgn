@@ -29,7 +29,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   const assert = (cond, msg) => {
@@ -38,7 +38,7 @@ try {
 
   // Two projects with a streaming assistant message each; A is the active chat.
   await win.evaluate(() => {
-    const c = window.__dsgnStore.getState()
+    const c = window.__praxisStore.getState()
     c.setActiveChat('A')
     c.startAssistant('A')
     c.startAssistant('B')
@@ -53,7 +53,7 @@ try {
   await new Promise((r) => setTimeout(r, 400))
 
   const r = await win.evaluate(() => {
-    const s = window.__dsgnStore.getState()
+    const s = window.__praxisStore.getState()
     return {
       aText: s.byKey['A'].messages.at(-1).text,
       bText: s.byKey['B'].messages.at(-1).text,
@@ -69,8 +69,8 @@ try {
   assert(r.bRunning === false, 'B finished (done routed to B) — its "working" dot clears')
 
   // Switching to B reveals its accumulated output.
-  await win.evaluate(() => window.__dsgnStore.getState().setActiveChat('B'))
-  const afterText = await win.evaluate(() => window.__dsgnStore.getState().messages.at(-1).text)
+  await win.evaluate(() => window.__praxisStore.getState().setActiveChat('B'))
+  const afterText = await win.evaluate(() => window.__praxisStore.getState().messages.at(-1).text)
   assert(afterText === 'beta', `switching to B should show its output, got "${afterText}"`)
 
   console.log('CHAT-ROUTE OK — events route by project; background accumulates; switch reveals it')

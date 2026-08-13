@@ -101,9 +101,15 @@ try {
   })
   await waitRunning()
 
-  // Both servers warm.
-  const ws = await win.evaluate(() => window.__dsgnWorkspace.getState())
-  const urlA = ws.projects.find((p) => p.name === 'dsgn-fixture-static')?.url
+  // Both servers warm. `waitRunning` above can be satisfied by A's URL still in
+  // the previewbar, so wait for B's own entry to carry a URL before reading them.
+  await win.waitForFunction(
+    () => window.__praxisWorkspace.getState().projects.filter((p) => p.url).length === 2,
+    undefined,
+    { timeout: 60000 }
+  )
+  const ws = await win.evaluate(() => window.__praxisWorkspace.getState())
+  const urlA = ws.projects.find((p) => p.name === 'praxis-fixture-static')?.url
   const urlB = ws.projects.find((p) => p.name.includes('selectable'))?.url
   if (!urlA || !urlB || urlA === urlB) {
     throw new Error(`expected two distinct warm URLs, got ${urlA} / ${urlB}`)
@@ -112,9 +118,9 @@ try {
   if (!(await reachable(app, urlB))) throw new Error('project B server should be running')
 
   // Active is B; give B's chat a distinctive message so we can prove the slice swaps.
-  await win.evaluate(() => window.__dsgnStore.getState().appendUser('hello from B'))
+  await win.evaluate(() => window.__praxisStore.getState().appendUser('hello from B'))
   const bText = await win.evaluate(
-    () => window.__dsgnStore.getState().messages.at(-1)?.text
+    () => window.__praxisStore.getState().messages.at(-1)?.text
   )
   if (bText !== 'hello from B') throw new Error(`B chat should hold its message, got "${bText}"`)
 
@@ -122,7 +128,7 @@ try {
   if (!(await waitPreviewPort(app, port(urlB)))) throw new Error("preview should show B after opening it")
 
   // Switch to A via the rail.
-  await win.click('.rail__item:has-text("dsgn-fixture-static") .rail__open')
+  await win.click('.rail__item:has-text("praxis-fixture-static") .rail__open')
   await win.waitForFunction(
     (u) => document.querySelector('.previewbar__url')?.textContent?.includes(u),
     new URL(urlA).host,
@@ -131,12 +137,38 @@ try {
   if (!(await waitPreviewPort(app, port(urlA)))) throw new Error("switching should load A in the preview")
   // A's chat is its OWN slice — it must NOT contain B's message (per-project isolation).
   const aHasBText = await win.evaluate(() =>
-    window.__dsgnStore.getState().messages.some((m) => m.text.includes('hello from B'))
+    window.__praxisStore.getState().messages.some((m) => m.text.includes('hello from B'))
   )
   if (aHasBText) throw new Error("A's chat leaked B's message — per-project isolation broken")
 
+  // A project's fold is its OWN state: switching to A must NOT collapse B — its
+  // chat list (the "hello from B" row) stays on screen, backgrounded but open.
+  const itemB = win.locator('.rail__item', { hasText: 'selectable' })
+  const chatsB = itemB.locator('.rail__chats .rail__chat-item')
+  if ((await chatsB.count()) === 0) {
+    throw new Error("B's chats should stay listed after switching away from B")
+  }
+  await win.screenshot({ path: join(artifacts, '10-rail-folds.png') })
+
+  // The chevron folds only the project it belongs to…
+  await itemB.locator('.rail__glyph-btn').click()
+  await win.waitForFunction(() => {
+    const b = [...document.querySelectorAll('.rail__item')].find((li) =>
+      li.textContent?.includes('selectable')
+    )
+    return b && !b.querySelector('.rail__chats')
+  }, undefined, { timeout: 3000 })
+
+  // …and the fold survives becoming the active project again (it used to spring
+  // back open, because "expanded" meant "is the active project").
+  await win.click('.rail__item:has-text("selectable") .rail__name-btn')
+  if (!(await waitPreviewPort(app, port(urlB)))) throw new Error('switching back should load B')
+  if ((await chatsB.count()) !== 0) {
+    throw new Error("B stayed collapsed only until it was active again — fold state didn't persist")
+  }
+
   await win.screenshot({ path: join(artifacts, '10-rail.png') })
-  console.log('RAIL OK — two projects warm, switch swaps preview + per-project chat')
+  console.log('RAIL OK — two projects warm, switch swaps preview + per-project chat, folds persist')
 } catch (err) {
   console.error('RAIL FAILED:', err?.message ?? err)
   process.exitCode = 1

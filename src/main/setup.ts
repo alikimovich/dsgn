@@ -4,44 +4,51 @@ import { join } from 'path'
 import type { Frontend, SetupResult, SetupStrategy } from '../shared/api'
 
 /**
- * Project setup — make a repo dsgn-ready, FRAMEWORK-FIRST. We detect the UI
+ * Project setup — make a repo praxis-ready, FRAMEWORK-FIRST. We detect the UI
  * framework from package.json before generating anything, then emit the right
  * source-mapping instrumentation for it (never a React Babel plugin in a Svelte
- * repo). Everything lands in a namespaced `.dsgn/` dir, is structurally dev-gated
+ * repo). Everything lands in a namespaced `.praxis/` dir, is structurally dev-gated
  * (not just a comment), idempotent, and removable via uninstall. The agent does
  * the config wiring + prop typing with framework-correct instructions.
  */
 
-const DSGN_DIR = '.dsgn'
-const REACT_HELPER = '.dsgn/dsgn-source.cjs'
-const RN_HELPER = '.dsgn/dsgn-rn-source.cjs'
+const PRAXIS_DIR = '.praxis'
+const REACT_HELPER = '.praxis/praxis-source.cjs'
+const RN_HELPER = '.praxis/praxis-rn-source.cjs'
 // `.mjs` pins ESM regardless of the repo's package.json `type` (plain Svelte+Vite
 // repos are often `type: commonjs`, where a bare `.js` ESM file fails to import) —
 // mirrors the React helper pinning CommonJS via `.cjs`.
-const SVELTE_HELPER = '.dsgn/dsgn-svelte-stamp.mjs'
-const LEGACY_ROOT_PLUGIN = 'dsgn-source-plugin.cjs' // the old (buggy) root-level file
+const SVELTE_HELPER = '.praxis/praxis-svelte-stamp.mjs'
+// Pre-rename (dsgn-era) files: the old root-level plugin plus the `.dsgn/`
+// helpers written before the 2026-07 dsgn→praxis rename. Removed on uninstall.
+const LEGACY_FILES = [
+  'dsgn-source-plugin.cjs', // the old (buggy) root-level file
+  '.dsgn/dsgn-source.cjs',
+  '.dsgn/dsgn-rn-source.cjs',
+  '.dsgn/dsgn-svelte-stamp.mjs'
+]
 
-// React/Solid: a JSX Babel plugin that stamps data-dsgn-source. Structurally
+// React/Solid: a JSX Babel plugin that stamps data-praxis-source. Structurally
 // dev-gated (returns an empty visitor in production — not trust-the-comment).
-const REACT_HELPER_CONTENT = `// Added by dsgn (.dsgn/). Stamps data-dsgn-source="path:line:col" on JSX elements
-// so dsgn can map a clicked element to its source. Wire into the React Babel
+const REACT_HELPER_CONTENT = `// Added by Praxis (.praxis/). Stamps data-praxis-source="path:line:col" on JSX elements
+// so Praxis can map a clicked element to its source. Wire into the React Babel
 // plugins for DEVELOPMENT ONLY; it also self-disables in production builds.
-module.exports = function dsgnSource({ types: t }) {
-  if (process.env.NODE_ENV === 'production') return { name: 'dsgn-source', visitor: {} }
+module.exports = function praxisSource({ types: t }) {
+  if (process.env.NODE_ENV === 'production') return { name: 'praxis-source', visitor: {} }
   const path = require('path')
   return {
-    name: 'dsgn-source',
+    name: 'praxis-source',
     visitor: {
       JSXOpeningElement(p, state) {
         const loc = p.node.loc
         if (!loc) return
-        if (p.node.attributes.some((a) => a.name && a.name.name === 'data-dsgn-source')) return
+        if (p.node.attributes.some((a) => a.name && a.name.name === 'data-praxis-source')) return
         const root = state.file.opts.root || process.cwd()
         const file = path.relative(root, state.file.opts.filename || '')
         const where = file + ':' + loc.start.line + ':' + loc.start.column
         // Host stamp: APPEND so the innermost host's own location wins (a forwarded
         // {...props} value is overwritten by this).
-        p.node.attributes.push(t.jsxAttribute(t.jsxIdentifier('data-dsgn-source'), t.stringLiteral(where)))
+        p.node.attributes.push(t.jsxAttribute(t.jsxIdentifier('data-praxis-source'), t.stringLiteral(where)))
         // v8 F3a — component-instance stamp: on COMPONENT tags (Capitalized or a
         // member like Foo.Bar), UNSHIFT (insert first) so a child's {...props}
         // spread overwrites it with the OUTER authored instance — the instance call
@@ -64,7 +71,7 @@ module.exports = function dsgnSource({ types: t }) {
           (name.type === 'JSXMemberExpression' || name.type === 'JSXIdentifier')
         if (isComponent) {
           p.node.attributes.unshift(
-            t.jsxAttribute(t.jsxIdentifier('data-dsgn-component-source'), t.stringLiteral(where))
+            t.jsxAttribute(t.jsxIdentifier('data-praxis-component-source'), t.stringLiteral(where))
           )
         }
       }
@@ -73,19 +80,19 @@ module.exports = function dsgnSource({ types: t }) {
 }
 `
 
-// React Native: the data-dsgn-source analog. RN host elements have no DOM, so we
-// stamp `testID="dsgn:path:line:col"` — which iOS surfaces as the view's
-// accessibilityIdentifier, letting dsgn map an idb view-hierarchy hit back to
+// React Native: the data-praxis-source analog. RN host elements have no DOM, so we
+// stamp `testID="praxis:path:line:col"` — which iOS surfaces as the view's
+// accessibilityIdentifier, letting praxis map an idb view-hierarchy hit back to
 // source. Dev-gated; only stamps elements without an existing testID.
-const RN_HELPER_CONTENT = `// Added by dsgn (.dsgn/). Stamps testID="dsgn:path:line:col" on JSX elements so
-// dsgn can map a tapped simulator element to its source via idb's accessibility
+const RN_HELPER_CONTENT = `// Added by Praxis (.praxis/). Stamps testID="praxis:path:line:col" on JSX elements so
+// Praxis can map a tapped simulator element to its source via idb's accessibility
 // hierarchy. Wire into the React Native Babel plugins for DEVELOPMENT ONLY; it
 // also self-disables in production builds.
-module.exports = function dsgnRnSource({ types: t }) {
-  if (process.env.NODE_ENV === 'production') return { name: 'dsgn-rn-source', visitor: {} }
+module.exports = function praxisRnSource({ types: t }) {
+  if (process.env.NODE_ENV === 'production') return { name: 'praxis-rn-source', visitor: {} }
   const path = require('path')
   return {
-    name: 'dsgn-rn-source',
+    name: 'praxis-rn-source',
     visitor: {
       JSXOpeningElement(p, state) {
         const loc = p.node.loc
@@ -97,7 +104,7 @@ module.exports = function dsgnRnSource({ types: t }) {
         p.node.attributes.push(
           t.jsxAttribute(
             t.jsxIdentifier('testID'),
-            t.stringLiteral('dsgn:' + file + ':' + loc.start.line + ':' + loc.start.column)
+            t.stringLiteral('praxis:' + file + ':' + loc.start.line + ':' + loc.start.column)
           )
         )
       }
@@ -106,11 +113,11 @@ module.exports = function dsgnRnSource({ types: t }) {
 }
 `
 
-// Svelte: a markup preprocessor that stamps data-dsgn-source on elements. The
+// Svelte: a markup preprocessor that stamps data-praxis-source on elements. The
 // line/col use svelte/compiler offsets (1-based line, 0-based col) so they match
-// dsgn's Svelte adapter. Dev-gated; idempotent.
-const SVELTE_HELPER_CONTENT = `// Added by dsgn (.dsgn/). A dev-only Svelte markup preprocessor that stamps
-// data-dsgn-source="path:line:col" on elements so dsgn can map them to source.
+// praxis's Svelte adapter. Dev-gated; idempotent.
+const SVELTE_HELPER_CONTENT = `// Added by Praxis (.praxis/). A dev-only Svelte markup preprocessor that stamps
+// data-praxis-source="path:line:col" on elements so Praxis can map them to source.
 // Add to svelte.config preprocess for development only.
 import { parse } from 'svelte/compiler'
 import path from 'node:path'
@@ -133,11 +140,11 @@ function walk(node, visit) {
   }
 }
 
-export default function dsgnStamp() {
-  const noop = { name: 'dsgn-stamp', markup: ({ content }) => ({ code: content }) }
+export default function praxisStamp() {
+  const noop = { name: 'praxis-stamp', markup: ({ content }) => ({ code: content }) }
   if (process.env.NODE_ENV === 'production') return noop
   return {
-    name: 'dsgn-stamp',
+    name: 'praxis-stamp',
     markup({ content, filename }) {
       let ast
       try { ast = parse(content, { modern: true, filename }) } catch { return { code: content } }
@@ -146,13 +153,13 @@ export default function dsgnStamp() {
       walk(ast.fragment ?? ast, (n) => {
         if (!ELEMENT_TYPES.has(n.type) || typeof n.start !== 'number' || typeof n.name !== 'string') return
         const attrs = n.attributes || []
-        if (attrs.some((a) => a.name === 'data-dsgn-source')) return
+        if (attrs.some((a) => a.name === 'data-praxis-source')) return
         const pos = n.start + 1 + n.name.length
         // Only splice when start points exactly at '<name' — bail on any misaligned
         // offset rather than corrupt markup mid-token (mirrors props-svelte.ts).
         if (content.slice(n.start + 1, pos) !== n.name) return
         const { line, column } = lineCol(content, n.start)
-        inserts.push({ pos, text: ' data-dsgn-source="' + rel + ':' + line + ':' + column + '"' })
+        inserts.push({ pos, text: ' data-praxis-source="' + rel + ':' + line + ':' + column + '"' })
       })
       inserts.sort((a, b) => b.pos - a.pos)
       let code = content
@@ -209,15 +216,24 @@ async function detect(root: string): Promise<Detected> {
   const has = (n: string): boolean => deps.has(n)
   // Svelte / SvelteKit
   if (has('@sveltejs/kit') || has('svelte')) {
-    return { framework: 'svelte', strategy: 'svelte-preprocess', svelteMajor: await svelteMajorOf(root) }
+    return {
+      framework: 'svelte',
+      strategy: 'svelte-preprocess',
+      svelteMajor: await svelteMajorOf(root)
+    }
   }
   // React Native / Expo FIRST (they also depend on react) — stamp testID, not
-  // data-dsgn-source, since RN host elements have no DOM.
+  // data-praxis-source, since RN host elements have no DOM.
   if (has('react-native') || has('expo')) {
     return { framework: 'react-native', strategy: 'babel-plugin-rn' }
   }
   // React (incl. the React Vite plugins)
-  if (has('react') || has('@vitejs/plugin-react') || has('@vitejs/plugin-react-swc') || has('next')) {
+  if (
+    has('react') ||
+    has('@vitejs/plugin-react') ||
+    has('@vitejs/plugin-react-swc') ||
+    has('next')
+  ) {
     return { framework: 'react', strategy: 'babel-plugin' }
   }
   // Solid also uses JSX, so the same Babel JSX visitor works.
@@ -246,7 +262,7 @@ async function scaffold(root: string): Promise<SetupResult> {
         : d.strategy === 'babel-plugin-rn'
           ? RN_HELPER_CONTENT
           : REACT_HELPER_CONTENT
-    await mkdir(join(root, DSGN_DIR), { recursive: true })
+    await mkdir(join(root, PRAXIS_DIR), { recursive: true })
     const abs = join(root, helper)
     let written = false
     if (!(await exists(abs))) {
@@ -269,7 +285,7 @@ async function scaffold(root: string): Promise<SetupResult> {
 async function uninstall(root: string): Promise<SetupResult> {
   try {
     const removed: string[] = []
-    for (const f of [REACT_HELPER, RN_HELPER, SVELTE_HELPER, LEGACY_ROOT_PLUGIN]) {
+    for (const f of [REACT_HELPER, RN_HELPER, SVELTE_HELPER, ...LEGACY_FILES]) {
       const abs = join(root, f)
       if (await exists(abs)) {
         await rm(abs)
@@ -283,6 +299,13 @@ async function uninstall(root: string): Promise<SetupResult> {
 }
 
 export function registerSetupIpc(): void {
+  // Read-only probe: detect the UI framework without writing, so the renderer can
+  // decide whether setup is even possible (an 'unknown'/vanilla project has no
+  // instrumentation strategy — never offer a dead-end "Set it up").
+  ipcMain.handle('setup:detect', async (_e, root: string) => {
+    const d = await detect(root)
+    return { framework: d.framework, canInstrument: d.framework !== 'unknown' }
+  })
   ipcMain.handle('setup:scaffold', (_e, root: string) => scaffold(root))
   ipcMain.handle('setup:uninstall', (_e, root: string) => uninstall(root))
 }

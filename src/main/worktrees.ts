@@ -1,13 +1,13 @@
 import { execFile } from 'child_process'
 import { mkdir, symlink, writeFile, readFile, rm, readdir, stat } from 'fs/promises'
 import { randomUUID } from 'crypto'
-import { join } from 'path'
+import { join, dirname, resolve } from 'path'
 import { promisify } from 'util'
 import { normalizeBranchName } from './git'
 
 /**
  * Git-worktree management for F1 (comment → parallel agent session). Each spawned
- * comment agent runs in its OWN `git worktree` on a `dsgn/comment-<id>` branch — a
+ * comment agent runs in its OWN `git worktree` on a `praxis/comment-<id>` branch — a
  * private on-disk checkout that shares the repo's object store — so N comments edit
  * the repo truly in parallel with zero cross-writes, and the user's live preview
  * (which stays on the main working tree) is undisturbed until they accept one.
@@ -18,6 +18,35 @@ import { normalizeBranchName } from './git'
 
 const execFileP = promisify(execFile)
 const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
+
+const SAFE_ENV_TEMPLATES = new Set([
+  '.env.example',
+  '.env.sample',
+  '.env.template',
+  '.env.defaults'
+])
+
+/** Paths that belong to the machine/tooling, not to an agent turn. */
+export function excludedWorktreePath(raw: string): boolean {
+  const rel = raw.replaceAll('\\', '/').replace(/^\.\//, '')
+  const parts = rel.split('/').filter(Boolean)
+  if (parts.includes('node_modules')) return true
+  if (parts[0] === '.praxis' || parts[0] === '.dsgn') return true
+  const name = parts.at(-1) ?? ''
+  if (name.endsWith('.tsbuildinfo')) return true
+  if (name === '.env') return true
+  return name.startsWith('.env.') && !SAFE_ENV_TEMPLATES.has(name)
+}
+
+/** Reset excluded staged paths back to HEAD in either the real or a temporary index. */
+async function unstageExcluded(cwd: string, env?: NodeJS.ProcessEnv): Promise<void> {
+  const staged = (await git(cwd, ['diff', '--cached', '--name-only'], env)).stdout
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+  const excluded = staged.filter(excludedWorktreePath)
+  if (excluded.length) await git(cwd, ['reset', '-q', 'HEAD', '--', ...excluded], env)
+}
 
 const git = (
   cwd: string,
@@ -32,6 +61,16 @@ const git = (
     ...(env ? { env: { ...process.env, ...env } } : {})
   }) as Promise<{ stdout: string; stderr: string }>
 
+// Runtime deps a worktree needs to build/typecheck but that must NEVER enter a
+// commit, snapshot, or merge: they're symlinked into every worktree (see
+// `doCreateWorktree`) and are enormous/churning. We can't rely on the target repo's
+// `.gitignore` to keep them out, because the common `node_modules/` (trailing-slash,
+// directory-only) pattern does NOT match the SYMLINK we create — git never treats a
+// symlink as a directory — so `git add -A` would stage the symlink, and the merge-back
+// then chokes reading it (`EISDIR`) and parks every turn. So we exclude these paths
+// explicitly at every stage instead. Consumers also spare them from `git clean` (`-e`).
+export const RUNTIME_DEPS = ['node_modules', '.env'] as const
+
 // `git worktree add` mutates shared admin state under .git/worktrees and is NOT
 // concurrency-safe (firing several comment spawns at once can race). Serialize the
 // create path behind a single in-process chain — creates are fast, so this is cheap.
@@ -43,7 +82,7 @@ export interface Worktree {
   repoRoot: string
   /** The on-disk checkout (under worktreesDir). */
   path: string
-  /** `dsgn/comment-<id>`. */
+  /** `praxis/comment-<id>`. */
   branch: string
   /** The commit the worktree forked from (main-tree HEAD + any uncommitted WIP). */
   baseSha: string
@@ -52,32 +91,32 @@ export interface Worktree {
 /**
  * Snapshot the live tree's FULL current state — tracked modifications AND brand-new
  * untracked files — into a dangling base commit, WITHOUT touching the live tree or
- * its index. `git stash create` omits untracked files (no `-u`), and the dsgn
+ * its index. `git stash create` omits untracked files (no `-u`), and the praxis
  * interactive agent constantly creates new files, so we build the snapshot in a
- * throwaway index instead: seed it from HEAD, `add -A` the whole working tree
- * (`.gitignore` keeps node_modules/.env out), write a tree, commit it off HEAD.
+ * throwaway index instead: seed it from HEAD, `add -A` the whole working tree,
+ * explicitly remove machine-only/sensitive paths (including runtime symlinks that
+ * escape a trailing-slash ignore pattern), write a tree, and commit it off HEAD.
  * A clean tree just yields HEAD.
  */
-async function captureBase(repoRoot: string, indexFile: string): Promise<string> {
+export async function captureBase(repoRoot: string, indexFile: string): Promise<string> {
   const head = (await git(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim()
   const env: NodeJS.ProcessEnv = {
     GIT_INDEX_FILE: indexFile,
-    GIT_AUTHOR_NAME: 'dsgn',
-    GIT_AUTHOR_EMAIL: 'dsgn@local',
-    GIT_COMMITTER_NAME: 'dsgn',
-    GIT_COMMITTER_EMAIL: 'dsgn@local'
+    GIT_AUTHOR_NAME: 'Praxis',
+    GIT_AUTHOR_EMAIL: 'praxis@local',
+    GIT_COMMITTER_NAME: 'Praxis',
+    GIT_COMMITTER_EMAIL: 'praxis@local'
   }
   try {
     await git(repoRoot, ['read-tree', 'HEAD'], env)
     await git(repoRoot, ['add', '-A'], env)
+    await unstageExcluded(repoRoot, env)
     const tree = (await git(repoRoot, ['write-tree'], env)).stdout.trim()
     if (!tree) return head
     const commit = (
-      await git(repoRoot, ['commit-tree', tree, '-p', head, '-m', 'dsgn: spawn base (WIP snapshot)'], env)
+      await git(repoRoot, ['commit-tree', tree, '-p', head, '-m', 'praxis: spawn base (WIP snapshot)'], env)
     ).stdout.trim()
     return commit || head
-  } catch {
-    return head // any hiccup — fork off HEAD rather than fail the spawn
   } finally {
     await rm(indexFile, { force: true }).catch(() => {})
   }
@@ -93,7 +132,7 @@ async function captureBase(repoRoot: string, indexFile: string): Promise<string>
 export function createWorktree(
   repoRoot: string,
   worktreesDir: string,
-  opts: { label?: string; id?: string } = {}
+  opts: { label?: string; id?: string; branchName?: (id: string) => string } = {}
 ): Promise<Worktree> {
   const run = createChain.then(() => doCreateWorktree(repoRoot, worktreesDir, opts))
   createChain = run.catch(() => {}) // keep the chain alive even if one create fails
@@ -103,21 +142,26 @@ export function createWorktree(
 async function doCreateWorktree(
   repoRoot: string,
   worktreesDir: string,
-  opts: { label?: string; id?: string }
+  opts: { label?: string; id?: string; branchName?: (id: string) => string }
 ): Promise<Worktree> {
   // The id may be assigned up front (so a queued spawn's rail row keeps a stable id
   // before its worktree exists); otherwise generate one.
   const id = opts.id ?? randomUUID().slice(0, 8)
-  const branch = normalizeBranchName(`comment-${id}`)
+  // Callers other than comment-spawn (e.g. per-chat isolation) can supply their own
+  // branch-name scheme; default keeps today's `praxis/comment-<id>` naming.
+  const branch = normalizeBranchName((opts.branchName ?? ((i) => `comment-${i}`))(id))
   const dir = join(worktreesDir, id)
   await mkdir(worktreesDir, { recursive: true })
 
   const baseSha = await captureBase(repoRoot, join(worktreesDir, `.index-${id}`))
   await git(repoRoot, ['worktree', 'add', '-b', branch, dir, baseSha])
 
-  // Symlink gitignored runtime deps so the spawn can build (best-effort).
-  for (const name of ['node_modules', '.env']) {
+  // Symlink gitignored runtime deps so the spawn can build (best-effort). Never add
+  // an unignored symlink: if `.gitignore` changes during a turn it would become part
+  // of the patch (the root cause of issue #203's committed `.env` symlink).
+  for (const name of RUNTIME_DEPS) {
     try {
+      await git(repoRoot, ['check-ignore', '-q', '--', name])
       await symlink(join(repoRoot, name), join(dir, name))
     } catch {
       /* absent or already present — fine */
@@ -145,10 +189,7 @@ export async function commitWorktree(
   // `branchPatch`'s `branch^..branch`. The reset is a no-op when HEAD == baseSha.
   await git(wt.path, ['reset', '--soft', wt.baseSha]).catch(() => {})
   await git(wt.path, ['add', '-A'])
-  // `.dsgn/` is dsgn-managed and NOT gitignored in target repos, so unstage it: a
-  // spawn's accidental sidecar writes must never reach the durable branch or the
-  // apply patch. (The Bash allowlist is deferred.)
-  await git(wt.path, ['reset', '-q', '--', '.dsgn']).catch(() => {})
+  await unstageExcluded(wt.path)
   const staged = (await git(wt.path, ['diff', '--cached', '--name-only'])).stdout
     .split('\n')
     .map((s) => s.trim())
@@ -160,13 +201,13 @@ export async function commitWorktree(
   // the spawn's finalization, losing the work.
   await git(wt.path, [
     '-c',
-    'user.name=dsgn',
+    'user.name=Praxis',
     '-c',
-    'user.email=dsgn@local',
+    'user.email=praxis@local',
     'commit',
     '--no-verify',
     '-m',
-    message || 'dsgn comment edit'
+    message || 'Praxis comment edit'
   ])
   return { committed: true, files: staged }
 }
@@ -201,6 +242,28 @@ export async function deleteBranch(repoRoot: string, branch: string): Promise<vo
   await git(repoRoot, ['branch', '-D', branch]).catch(() => {})
 }
 
+/**
+ * Re-create and attach a chat's ephemeral branch before a turn can edit its worktree.
+ * Successful turns retire the branch immediately; attaching at the next turn boundary
+ * keeps crash recovery durable while avoiding one permanent branch per idle chat.
+ */
+export async function attachWorktreeBranch(wt: Worktree): Promise<void> {
+  const current = (await git(wt.path, ['branch', '--show-current'])).stdout.trim()
+  if (current === wt.branch) return
+  await git(wt.path, ['checkout', '-B', wt.branch, 'HEAD'])
+}
+
+/**
+ * Detach a clean/landed worktree and delete its now-redundant branch. The worktree
+ * remains available as the session cwd; `attachWorktreeBranch` recreates the branch
+ * before the next turn. Parked branches never call this helper.
+ */
+export async function retireWorktreeBranch(wt: Worktree): Promise<void> {
+  const current = (await git(wt.path, ['branch', '--show-current'])).stdout.trim()
+  if (current === wt.branch) await git(wt.path, ['checkout', '--detach', 'HEAD'])
+  await deleteBranch(wt.repoRoot, wt.branch)
+}
+
 /** Does this branch exist locally? */
 export async function branchExists(repoRoot: string, branch: string): Promise<boolean> {
   try {
@@ -229,6 +292,8 @@ export async function applyToWorkingTree(
   if (!patchText.trim()) return { ok: true, conflict: false }
   await mkdir(tmpDir, { recursive: true })
   const patchFile = join(tmpDir, `apply-${randomUUID().slice(0, 8)}.patch`)
+  const applyIndex = join(tmpDir, `.index-apply-${randomUUID().slice(0, 8)}`)
+  const captureIndex = join(tmpDir, `.index-capture-${randomUUID().slice(0, 8)}`)
   await writeFile(patchFile, patchText, 'utf8')
   try {
     try {
@@ -238,7 +303,16 @@ export async function applyToWorkingTree(
       // Context drifted — fall back to a 3-way merge against the index.
     }
     try {
-      await git(repoRoot, ['apply', '--3way', '--whitespace=nowarn', patchFile])
+      // `--3way` normally consults the user's real index, which may legitimately
+      // differ from their working tree. That produced the recurring "does not match
+      // index" resolver failures. Snapshot the current working tree and run the
+      // three-way apply through a throwaway index instead; the user's staged work is
+      // never read or mutated.
+      const live = await captureBase(repoRoot, captureIndex)
+      const env = { GIT_INDEX_FILE: applyIndex }
+      await git(repoRoot, ['read-tree', live], env)
+      await git(repoRoot, ['update-index', '--refresh'], env)
+      await git(repoRoot, ['apply', '--3way', '--whitespace=nowarn', patchFile], env)
       return { ok: true, conflict: false }
     } catch (e) {
       // `git apply --3way` exits non-zero on overlap but still writes the markers.
@@ -248,6 +322,8 @@ export async function applyToWorkingTree(
     }
   } finally {
     await rm(patchFile, { force: true }).catch(() => {})
+    await rm(applyIndex, { force: true }).catch(() => {})
+    await rm(captureIndex, { force: true }).catch(() => {})
   }
 }
 
@@ -329,19 +405,50 @@ export async function removeWorktree(
   }
 }
 
+/** The branch a leftover checkout is on and its OWNING repo root — both discoverable
+ *  only BEFORE the checkout is removed. The owning repo may differ from the project
+ *  being opened (the worktrees dir is shared across projects), so crash-recovery keys
+ *  its record to this repo, not the opener's. Nulls on any failure (not a worktree). */
+async function orphanMeta(dir: string): Promise<{ branch: string | null; repoRoot: string | null }> {
+  let branch: string | null = null
+  let repoRoot: string | null = null
+  try {
+    branch = (await git(dir, ['rev-parse', '--abbrev-ref', 'HEAD'])).stdout.trim() || null
+  } catch {
+    /* detached / not a worktree */
+  }
+  try {
+    // `--git-common-dir` is the MAIN repo's `.git` (shared across its linked
+    // worktrees); its parent is the owning repo root.
+    const common = (await git(dir, ['rev-parse', '--git-common-dir'])).stdout.trim()
+    if (common) repoRoot = dirname(resolve(dir, common))
+  } catch {
+    /* not a worktree */
+  }
+  return { branch, repoRoot }
+}
+
 /**
  * Startup recovery: a crash/quit can leave checkouts in worktreesDir whose admin
  * entries git no longer tracks. Prune stale entries, then for each leftover commit
- * any dirty work to its branch (so a crashed-mid-run spawn isn't lost) and remove the
- * checkout. `skip` names ids that are CURRENTLY ACTIVE (a live spawn this session) —
- * never touch those. Branches are kept; we only reclaim the on-disk checkouts.
- * Returns the ids it reclaimed. Never throws.
+ * any dirty work to its branch (so a crashed-mid-run spawn/chat isn't lost) and remove
+ * the checkout. `skip` names ids that are CURRENTLY ACTIVE (a live spawn/chat this
+ * session) — never touch those. Branches are kept; we only reclaim the on-disk
+ * checkouts. Returns each reclaimed id with `dirty` (whether the worktree had
+ * uncommitted changes at reclaim time — checked via `status --porcelain` BEFORE the
+ * recovery add/commit, not inferred from commit success) plus its `branch` and owning
+ * `repoRoot` (both captured before removal, for the caller's crash-recovery records).
+ * Never throws.
  */
 export async function pruneOrphans(
   repoRoot: string,
   worktreesDir: string,
-  skip: Set<string> = new Set()
-): Promise<string[]> {
+  skip: Set<string> = new Set(),
+  /** True when a persisted `chatpark-<id>` record exists for this worktree id (the
+   *  branch was PARKED). Only then is a dirty per-chat orphan's recovery commit folded
+   *  into the parked squash — see the fold block below. Defaults to "never parked". */
+  isParked: (id: string) => boolean = () => false
+): Promise<Array<{ id: string; dirty: boolean; branch: string | null; repoRoot: string | null }>> {
   try {
     await git(repoRoot, ['worktree', 'prune'])
   } catch {
@@ -353,35 +460,61 @@ export async function pruneOrphans(
   } catch {
     return [] // dir doesn't exist yet — nothing to reclaim
   }
-  const reclaimed: string[] = []
+  const reclaimed: Array<{ id: string; dirty: boolean; branch: string | null; repoRoot: string | null }> = []
   for (const id of entries) {
-    if (skip.has(id)) continue // a live spawn this session — leave it alone
+    if (skip.has(id)) continue // a live spawn/chat this session — leave it alone
     const dir = join(worktreesDir, id)
     try {
       if (!(await stat(dir)).isDirectory()) continue
     } catch {
       continue
     }
+    // Capture branch + owning repo BEFORE removal (both are lost with the checkout).
+    const { branch, repoRoot: ownRoot } = await orphanMeta(dir)
+    let dirty = false
+    try {
+      const status = (await git(dir, ['status', '--porcelain'])).stdout
+      dirty = status.trim().length > 0
+    } catch {
+      /* not a worktree — treat as clean */
+    }
+    // For a per-chat orphan that was actually PARKED (a persisted `chatpark-<id>` record
+    // exists → its tip is the cumulative parked squash), FOLD the dirty recovery commit
+    // into that squash — soft-reset HEAD^ first — so the branch stays a single commit and
+    // `branchPatch(branch^..branch)` still yields the full pending diff. A stacked
+    // recovery commit would otherwise hide the parked work from the park record's Apply.
+    //
+    // Gating on the park record (not author/message) is essential: a chat branch gains one
+    // commit per MERGED turn and `baseSha` advances to the tip on each merge, so a crash
+    // mid-turn after a merged turn leaves tip = a praxis-authored, non-base commit that is
+    // ALREADY LIVE. Folding that (as an author/message heuristic would) splices merged
+    // content into the recovery commit, and the record's Apply then re-applies live changes
+    // → spurious 3-way conflicts. Un-parked (merged-tip) orphans just get the WIP committed
+    // ON TOP, so branchPatch = only the genuinely-unmerged crash WIP. Comment-spawn orphans
+    // have no park record either, so they are unaffected (unchanged prune behavior).
+    if (dirty && branch?.startsWith('praxis/chat-') && isParked(id)) {
+      await git(dir, ['reset', '--soft', 'HEAD^']).catch(() => {})
+    }
     // Best-effort: commit any dirty leftover to its branch before removing the dir,
     // so a crashed-mid-run spawn's work isn't lost.
     try {
       await git(dir, [
         '-c',
-        'user.name=dsgn',
+        'user.name=Praxis',
         '-c',
-        'user.email=dsgn@local',
+        'user.email=praxis@local',
         'add',
         '-A'
       ])
       await git(dir, [
         '-c',
-        'user.name=dsgn',
+        'user.name=Praxis',
         '-c',
-        'user.email=dsgn@local',
+        'user.email=praxis@local',
         'commit',
         '--no-verify',
         '-m',
-        'dsgn: recovered orphaned worktree'
+        'Praxis: recovered orphaned worktree'
       ]).catch(() => {})
     } catch {
       /* not a worktree / already clean */
@@ -391,7 +524,7 @@ export async function pruneOrphans(
     } catch {
       await rm(dir, { recursive: true, force: true }).catch(() => {})
     }
-    reclaimed.push(id)
+    reclaimed.push({ id, dirty, branch, repoRoot: ownRoot })
   }
   try {
     await git(repoRoot, ['worktree', 'prune'])

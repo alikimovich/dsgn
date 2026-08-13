@@ -79,7 +79,7 @@ try {
     }
   })
   if (expanded.hasClass) throw new Error('rail still collapsed after re-toggle')
-  if (expanded.width < 160) throw new Error(`expanded rail width ${expanded.width}px should be ~168`)
+  if (expanded.width < 200) throw new Error(`expanded rail width ${expanded.width}px should be ~208`)
   await win.screenshot({ path: join(artifacts, '13-rail-reexpanded.png') })
 
   console.log('RAIL-COLLAPSE OK — collapsed width', collapsed.width, '→ expanded', expanded.width)

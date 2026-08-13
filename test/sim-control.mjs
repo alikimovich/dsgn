@@ -32,7 +32,7 @@ try {
   })
   const win = await app.firstWindow()
   await win.waitForSelector('.empty__open', { timeout: 15000 })
-  await win.evaluate(() => window.__dsgnWorkspace.getState().openOrActivate('/tmp/dsgn-test-project'))
+  await win.evaluate(() => window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-test-project'))
   await win.waitForSelector('.composer__input', { timeout: 15000 })
 
   // Run JS in the preview WebContentsView once it has navigated to `url` (its page
@@ -62,17 +62,17 @@ try {
     throw new Error(`preview never loaded ${base}`)
   }
   const loadPreview = (url) => win.evaluate((u) => window.api.preview.load(u), url)
-  // The page bakes in its per-bridge token as window.__DSGN_SIM_TOKEN; ride it on
+  // The page bakes in its per-bridge token as window.__PRAXIS_SIM_TOKEN; ride it on
   // the same-origin /control call the way the page's own post() does.
   const postCtl = (url, cmd) =>
     previewExec(
       url,
-      `fetch('/control?token='+encodeURIComponent(window.__DSGN_SIM_TOKEN),{method:'POST',body:JSON.stringify(${JSON.stringify(cmd)})}).then(r=>r.json())`
+      `fetch('/control?token='+encodeURIComponent(window.__PRAXIS_SIM_TOKEN),{method:'POST',body:JSON.stringify(${JSON.stringify(cmd)})}).then(r=>r.json())`
     )
 
   // --- pure mapping + input validation ---
   const m = await app.evaluate(() => {
-    const s = globalThis.__dsgnSimMap
+    const s = globalThis.__praxisSimMap
     return {
       mid: s.fractionToPoints(0.5, 0.5, { width: 390, height: 844 }),
       clamp: s.fractionToPoints(1.5, -1, { width: 100, height: 100 }),
@@ -103,11 +103,11 @@ try {
   )
 
   // --- interactive bridge: a /control POST is replayed (recorded here) ---
-  const interactive = await app.evaluate(() => globalThis.__dsgnStartTestBridge(true))
+  const interactive = await app.evaluate(() => globalThis.__praxisStartTestBridge(true))
   await loadPreview(interactive.url)
   const okBody = await postCtl(interactive.url, { type: 'tap', x: 0.5, y: 0.5 })
   assert(okBody && okBody.ok === true, `control POST should succeed: ${JSON.stringify(okBody)}`)
-  const recorded = await app.evaluate(() => globalThis.__dsgnTestControl())
+  const recorded = await app.evaluate(() => globalThis.__praxisTestControl())
   assert(
     recorded.length === 1 && recorded[0].type === 'tap' && recorded[0].x === 0.5,
     `controller should have recorded the tap: ${JSON.stringify(recorded)}`
@@ -119,7 +119,7 @@ try {
     `fetch('/control',{method:'POST',body:JSON.stringify({type:'tap',x:0.5,y:0.5})}).then(r=>r.status)`
   )
   assert(noTok === 403, `token-less /control must be rejected: got ${noTok}`)
-  const recordedAfterNoTok = await app.evaluate(() => globalThis.__dsgnTestControl())
+  const recordedAfterNoTok = await app.evaluate(() => globalThis.__praxisTestControl())
   assert(
     recordedAfterNoTok.length === 1,
     `token-less POST must not run a command: ${JSON.stringify(recordedAfterNoTok)}`
@@ -133,34 +133,34 @@ try {
   assert(flags.interactive === true && flags.hasPost === true, `capture script: ${JSON.stringify(flags)}`)
 
   // --- no controller (no idb) → degraded, nothing runs ---
-  const viewOnly = await app.evaluate(() => globalThis.__dsgnStartTestBridge(false))
+  const viewOnly = await app.evaluate(() => globalThis.__praxisStartTestBridge(false))
   await loadPreview(viewOnly.url)
   const degBody = await postCtl(viewOnly.url, { type: 'tap', x: 0.5, y: 0.5 })
   assert(degBody && degBody.degraded === true, `view-only should be degraded: ${JSON.stringify(degBody)}`)
-  const recorded2 = await app.evaluate(() => globalThis.__dsgnTestControl())
+  const recorded2 = await app.evaluate(() => globalThis.__praxisTestControl())
   assert(recorded2.length === 0, 'view-only bridge must not run any command')
   const flag2 = await previewExec(viewOnly.url, `(typeof INTERACTIVE !== 'undefined' && INTERACTIVE)`)
   assert(flag2 === false, 'view-only page should flag INTERACTIVE=false')
 
   // --- Phase 3: testID parse + accessibility-tree stamp search (pure) ---
   const sel = await app.evaluate(() => {
-    const s = globalThis.__dsgnSimMap
+    const s = globalThis.__praxisSimMap
     return {
-      good: s.parseTestId('dsgn:src/App.tsx:10:4'),
+      good: s.parseTestId('praxis:src/App.tsx:10:4'),
       noPrefix: s.parseTestId('my-button'),
-      malformed: s.parseTestId('dsgn:not a source'),
-      found: s.findDsgnStamp({ type: 'View', AXLabel: 'x', children: [{ AXUniqueId: 'dsgn:src/A.tsx:3:1' }] }),
-      none: s.findDsgnStamp({ type: 'View', AXLabel: 'plain' })
+      malformed: s.parseTestId('praxis:not a source'),
+      found: s.findPraxisStamp({ type: 'View', AXLabel: 'x', children: [{ AXUniqueId: 'praxis:src/A.tsx:3:1' }] }),
+      none: s.findPraxisStamp({ type: 'View', AXLabel: 'plain' })
     }
   })
   assert(sel.good && sel.good.source === 'src/App.tsx:10:4', `parseTestId: ${JSON.stringify(sel.good)}`)
   assert(sel.noPrefix === null && sel.malformed === null, 'parseTestId must reject non-stamps')
-  assert(sel.found === 'dsgn:src/A.tsx:3:1', `findDsgnStamp (nested): ${sel.found}`)
-  assert(sel.none === null, 'findDsgnStamp returns null with no stamp')
+  assert(sel.found === 'praxis:src/A.tsx:3:1', `findPraxisStamp (nested): ${sel.found}`)
+  assert(sel.none === null, 'findPraxisStamp returns null with no stamp')
 
   // --- Phase 3: a tap in SELECT mode becomes a pick (hit-test), not a tap-through.
   // The renderer receives the pick via simulator.onElementPicked. ---
-  const sel3 = await app.evaluate(() => globalThis.__dsgnStartTestBridge(true))
+  const sel3 = await app.evaluate(() => globalThis.__praxisStartTestBridge(true))
   await loadPreview(sel3.url)
   // Capture element-picked events in the renderer, then arm select mode.
   await win.evaluate(() => {
@@ -170,9 +170,9 @@ try {
   await win.evaluate(() => window.api.simulator.setSelectMode(true))
   const selBody = await postCtl(sel3.url, { type: 'tap', x: 0.5, y: 0.5 })
   assert(selBody && selBody.selected === true, `select-mode tap → selected: ${JSON.stringify(selBody)}`)
-  const picksMain = await app.evaluate(() => globalThis.__dsgnTestPicks())
+  const picksMain = await app.evaluate(() => globalThis.__praxisTestPicks())
   assert(picksMain.length === 1 && picksMain[0].source === 'src/App.tsx:10:4', `pick recorded: ${JSON.stringify(picksMain)}`)
-  const tapsInSelect = await app.evaluate(() => globalThis.__dsgnTestControl())
+  const tapsInSelect = await app.evaluate(() => globalThis.__praxisTestControl())
   assert(tapsInSelect.length === 0, 'a select-mode tap must NOT be forwarded as a tap')
   // The renderer got the pick.
   await win.waitForFunction(() => (window.__simPicks?.length ?? 0) > 0, { timeout: 5000 })

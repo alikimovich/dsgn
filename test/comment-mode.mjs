@@ -80,17 +80,17 @@ try {
   })()`
 
   const COMPOSER_DISPLAY = `(() => {
-    const sr = document.querySelector('[data-dsgn-overlay]')?.shadowRoot
-    const c = sr?.querySelector('[data-dsgn-composer]')
+    const sr = document.querySelector('[data-praxis-overlay]')?.shadowRoot
+    const c = sr?.querySelector('[data-praxis-composer]')
     return c ? getComputedStyle(c).display : 'none'
   })()`
 
   // Fill the composer's textarea and return the send button's centre point.
   const fillAndGetSend = (text) => `(() => {
-    const sr = document.querySelector('[data-dsgn-overlay]')?.shadowRoot
-    const ta = sr?.querySelector('[data-dsgn-composer] textarea')
+    const sr = document.querySelector('[data-praxis-overlay]')?.shadowRoot
+    const ta = sr?.querySelector('[data-praxis-composer] textarea')
     // The pill's first button is now the comment toggle — target Submit by label.
-    const btn = sr?.querySelector('[data-dsgn-composer] button[aria-label="Submit"]')
+    const btn = sr?.querySelector('[data-praxis-composer] button[aria-label="Submit"]')
     if (!ta || !btn) return null
     ta.focus(); ta.value = ${JSON.stringify(text)}
     const b = btn.getBoundingClientRect()
@@ -105,7 +105,7 @@ try {
     // actions on the selection pill now); arm via the store — the same path the
     // C/Y keyboard shortcuts use.
     await win.evaluate((m) => {
-      window.__dsgnSelection.getState().setCommentMode(m)
+      window.__praxisSelection.getState().setCommentMode(m)
       void window.api.preview.setCommentMode(m)
     }, mode)
     for (let i = 0; i < 60; i++) {
@@ -132,7 +132,7 @@ try {
   // The comment reaches the agent: a user message referencing the element + source.
   await win.waitForFunction(
     (src) => {
-      const msgs = window.__dsgnStore?.getState().messages ?? []
+      const msgs = window.__praxisStore?.getState().messages ?? []
       return msgs.some(
         (m) => m.role === 'user' && m.text.includes('needs more contrast') && m.text.includes(src)
       )
@@ -141,29 +141,29 @@ try {
     { timeout: 8000 }
   )
   // Mode disarmed after submit (one comment per arming).
-  const modeAfter = await win.evaluate(() => window.__dsgnSelection?.getState().commentMode)
+  const modeAfter = await win.evaluate(() => window.__praxisSelection?.getState().commentMode)
   if (modeAfter) throw new Error(`comment mode should disarm after submit, got ${modeAfter}`)
 
   // ---- Annotate mode → pin (no agent) ----
-  const before = await win.evaluate(() => window.__dsgnAnnotations?.getState().list.length ?? 0)
+  const before = await win.evaluate(() => window.__praxisAnnotations?.getState().list.length ?? 0)
   if (!(await armAndOpen('Annotate', 'annotate'))) throw new Error('annotate composer never opened')
   const send2 = await previewEval(fillAndGetSend('social media links, lead out'))
   if (!send2) throw new Error('could not fill the annotate composer')
   await previewClick(send2)
   await win.waitForFunction(
-    (n) => (window.__dsgnAnnotations?.getState().list.length ?? 0) > n,
+    (n) => (window.__praxisAnnotations?.getState().list.length ?? 0) > n,
     before,
     { timeout: 8000 }
   )
   const note = await win.evaluate(
-    () => window.__dsgnAnnotations?.getState().list.at(-1)?.text
+    () => window.__praxisAnnotations?.getState().list.at(-1)?.text
   )
   if (note !== 'social media links, lead out') {
     throw new Error(`annotation text wrong: ${note}`)
   }
   // Annotate must NOT have sent an agent turn — the last message isn't the note.
   const lastUser = await win.evaluate(() => {
-    const msgs = window.__dsgnStore?.getState().messages ?? []
+    const msgs = window.__praxisStore?.getState().messages ?? []
     return msgs.filter((m) => m.role === 'user').at(-1)?.text ?? ''
   })
   if (lastUser.includes('social media links')) {
@@ -176,6 +176,6 @@ try {
   process.exitCode = 1
 } finally {
   await app?.close()
-  // The annotate step writes into the fixture's .dsgn sidecar — leave it pristine.
-  rmSync(join(fixture, '.dsgn'), { recursive: true, force: true })
+  // The annotate step writes into the fixture's .praxis sidecar — leave it pristine.
+  rmSync(join(fixture, '.praxis'), { recursive: true, force: true })
 }

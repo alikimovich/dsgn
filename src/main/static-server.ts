@@ -1,11 +1,12 @@
 import { createReadStream, watch, type FSWatcher } from 'fs'
 import { readdir, stat } from 'fs/promises'
 import { createServer, type Server } from 'http'
-import { extname, join, normalize, resolve, sep } from 'path'
+import { extname, join, normalize, relative, resolve, sep } from 'path'
 import type { RunningDevServer } from '../shared/api'
+import { stampHtml } from './html-source'
 
 /**
- * dsgn's built-in static file server — the preview backend for plain
+ * praxis's built-in static file server — the preview backend for plain
  * HTML/CSS/JS projects that have no package.json and no dev command to spawn.
  *
  * It's an in-process Node http.Server (not a spawned child) so it needs no
@@ -45,7 +46,7 @@ const MIME: Record<string, string> = {
   '.pdf': 'application/pdf'
 }
 
-const RELOAD_PATH = '/__dsgn_reload'
+const RELOAD_PATH = '/__praxis_reload'
 
 // Injected before </body>: opens an SSE stream and hard-reloads on any change.
 const LIVE_RELOAD_SNIPPET = `<script>(function(){try{var es=new EventSource("${RELOAD_PATH}");es.onmessage=function(){location.reload()}}catch(e){}})();</script>`
@@ -111,11 +112,10 @@ export function startStaticServer(
       return
     }
 
-    void serveFile(req.method === 'HEAD')
-      .catch(() => {
-        if (!res.headersSent) res.writeHead(500)
-        res.end('Internal error')
-      })
+    void serveFile(req.method === 'HEAD').catch(() => {
+      if (!res.headersSent) res.writeHead(500)
+      res.end('Internal error')
+    })
 
     async function serveFile(headOnly: boolean): Promise<void> {
       const abs = resolveWithinRoot(root, url)
@@ -132,9 +132,11 @@ export function startStaticServer(
         info = await stat(target).catch(() => null)
       }
       if (!info?.isFile()) {
-        res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' }).end(
-          `<!doctype html><meta charset=utf-8><title>404</title><body style="font:14px system-ui;padding:2rem">Not found: ${url.replace(/</g, '&lt;')}</body>`
-        )
+        res
+          .writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' })
+          .end(
+            `<!doctype html><meta charset=utf-8><title>404</title><body style="font:14px system-ui;padding:2rem">Not found: ${url.replace(/</g, '&lt;')}</body>`
+          )
         return
       }
       const type = MIME[extname(target).toLowerCase()] ?? 'application/octet-stream'
@@ -150,16 +152,29 @@ export function startStaticServer(
           rs.on('error', rej2)
         })
         let html = Buffer.concat(chunks).toString('utf8')
+        // Inject data-praxis-source stamps so the preview can map an element back
+        // to its line in this file (vanilla projects have no build step to do it).
+        // Best-effort: stampHtml returns the input unchanged on any parse failure.
+        const rel = relative(root, target).split(sep).join('/')
+        html = await stampHtml(html, rel)
         html = html.includes('</body>')
           ? html.replace('</body>', `${LIVE_RELOAD_SNIPPET}</body>`)
           : html + LIVE_RELOAD_SNIPPET
         const body = Buffer.from(html, 'utf8')
-        res.writeHead(200, { 'Content-Type': type, 'Content-Length': body.length, 'Cache-Control': 'no-cache' })
+        res.writeHead(200, {
+          'Content-Type': type,
+          'Content-Length': body.length,
+          'Cache-Control': 'no-cache'
+        })
         res.end(headOnly ? undefined : body)
         return
       }
 
-      res.writeHead(200, { 'Content-Type': type, 'Content-Length': info.size, 'Cache-Control': 'no-cache' })
+      res.writeHead(200, {
+        'Content-Type': type,
+        'Content-Length': info.size,
+        'Cache-Control': 'no-cache'
+      })
       if (headOnly) {
         res.end()
         return

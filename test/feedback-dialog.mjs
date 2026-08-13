@@ -1,8 +1,9 @@
 /**
- * UI test for the in-app feedback dialog (LKM-27): open it from the empty state,
- * confirm the screenshot capture + attachment toggles render, and that the
- * "attach the conversation" toggle is disabled when there's no chat yet.
- * Never posts (that would shell out to gh); it only exercises the dialog UI.
+ * UI test for the in-app feedback dialog (LKM-27): open it from the sidebar's
+ * pinned "Send feedback" button, confirm the screenshot capture + attachment
+ * toggles render, and that the "attach the conversation" toggle is disabled
+ * when there's no chat yet. Never posts (that would shell out to gh); it only
+ * exercises the dialog UI.
  *
  * Run with: bun run test:feedback-dialog
  */
@@ -26,9 +27,15 @@ try {
   })
 
   const win = await app.firstWindow()
-  // The empty state carries a "Send feedback" button.
-  await win.waitForSelector('.empty__feedback', { timeout: 15000 })
-  await win.click('.empty__feedback')
+  // The button lives in the rail, which renders once a project is open — seed a
+  // fake workspace entry (no dev server needed; diagnose-card.mjs does the same).
+  await win.waitForSelector('.empty', { timeout: 15000 })
+  await win.evaluate(() =>
+    window.__praxisWorkspace.getState().openOrActivate('/tmp/praxis-feedback-test', { name: 'fake' })
+  )
+  // The rail pins "Send feedback" at its bottom.
+  await win.waitForSelector('.rail__feedback', { timeout: 15000 })
+  await win.click('.rail__feedback')
 
   // Dialog opens with the title + both attachment toggles.
   await win.waitForSelector('[data-slot="dialog-title"]', { timeout: 5000 })

@@ -15,7 +15,7 @@ import { tmpdir } from 'node:os'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixtureA = join(root, 'test', 'fixtures', 'static-app')
 // Second project = a copy of the fixture (distinct root → distinct workspace entry).
-const fixtureB = mkdtempSync(join(tmpdir(), 'dsgn-viewport-b-'))
+const fixtureB = mkdtempSync(join(tmpdir(), 'praxis-viewport-b-'))
 cpSync(fixtureA, fixtureB, { recursive: true })
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -69,7 +69,7 @@ try {
   const expect = async (label, want) => {
     await sleep(600)
     const got = await win.evaluate(() => ({
-      store: window.__dsgnViewport.getState().viewport,
+      store: window.__praxisViewport.getState().viewport,
       mobileDom: !!document.querySelector('.preview-slot--mobile')
     }))
     const ok = got.store === want && got.mobileDom === (want === 'mobile')
