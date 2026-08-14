@@ -69,7 +69,19 @@ with `capturePage()` or read its URL via
 ```
 src/
   main/           Electron main (CJS, Node)
-    index.ts        window + native WebContentsView preview (IPC geometry sync)
+    index.ts        window + native WebContentsView preview (IPC geometry sync).
+                    Owns the VIEWS: creates/raises/hides them, and owns the
+                    untrusted preview's guards — its own session partition with
+                    every permission denied, and a will-navigate/will-redirect
+                    policy pinned to the origin main itself loaded
+    preview-ipc.ts  every ipcMain handler that talks to (or about) that preview:
+                    bounds/load/reset/capture, the select + comment relays, the
+                    prop-panel island's plumbing, Styles reads, Layers. Owns no
+                    view — index.ts hands it a `PreviewIpcHost` (accessors +
+                    the shared `PreviewState`, which index.ts's did-finish-load
+                    re-arm reads). The sandboxed preload can only be READ by a
+                    request/reply round trip; `requestReply` is that pattern
+                    once, shared by styles:read and layers:read
     devserver.ts    detect framework/PM, spawn dev server, parse URL, readiness
     static-server.ts in-process static file server for vanilla HTML/JS projects
                     (framework 'static': no package.json/dev command; live-reload)
@@ -192,8 +204,8 @@ src/
   shared/preview-channels.ts  the raw channel NAMES for the one IPC surface api.ts
                     can't type: main ⇄ the sandboxed preview preload (no
                     contextBridge there, so it's bare `ipcRenderer` strings).
-                    Imported by BOTH ends (main + src/preview/preload.ts) —
-                    never re-declare one of these channels locally
+                    Imported by BOTH ends (src/main/preview-ipc.ts + index.ts,
+                    and src/preview/preload.ts) — never re-declare one locally
   shared/token-match.ts  which design tokens may be offered for a css property
                     and which one a computed value IS. Pure + used by BOTH main
                     (re-validating a pick) and the island (chips + picker)
