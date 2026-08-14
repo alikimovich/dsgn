@@ -10,6 +10,8 @@
  * AND under plain bun in `test/css-values.mjs`.
  */
 
+import type { StyleProp } from '../../../shared/style-props'
+
 export interface CssNumber {
   n: number
   unit: string // '' for unitless (opacity, font-weight)
@@ -50,16 +52,39 @@ const pxMeta = (
 
 const SIDES = ['top', 'right', 'bottom', 'left'] as const
 
+/** `sideMeta('padding', 0, 400)` → the 4 `padding-{top,right,bottom,left}`
+ *  entries, keyed with real literal types (not widened to `string`) so the
+ *  `satisfies` check below can see them. */
+function sideMeta<P extends 'padding' | 'margin'>(
+  prefix: P,
+  min: number,
+  max: number
+): { [S in (typeof SIDES)[number] as `${P}-${S}`]: StylePropMeta } {
+  const out = {} as { [S in (typeof SIDES)[number] as `${P}-${S}`]: StylePropMeta }
+  for (const s of SIDES) (out as Record<string, StylePropMeta>)[`${prefix}-${s}`] = pxMeta('layout', min, max)
+  return out
+}
+
 /**
  * The ENTIRE v1 property set (longhands), keyed by css property name.
  * Out of scope for v1 (width/height, box-shadow, per-corner radius, borders,
  * position/inset, variants) is deliberately absent — the styles engine
  * allowlist mirrors this table.
+ *
+ * Checked with `satisfies Record<StyleProp | 'font-family' | 'display', …>` —
+ * `StyleProp` is the shared/style-props.ts canonical WRITABLE set main's
+ * `styles.ts` also derives from; `font-family`/`display` are the two extra
+ * READ-ONLY chips this panel shows that aren't part of that writable set.
+ * `satisfies` (rather than a plain type annotation) requires every one of
+ * those keys to be present WITHOUT narrowing the exported type away from
+ * `Record<string, StylePropMeta>` — callers below still look up arbitrary
+ * prop strings and expect `undefined` for anything out of scope. Dropping (or
+ * misspelling) a `StyleProp` key here is now a compile error, not a silent gap.
  */
 export const STYLE_PROP_META: Record<string, StylePropMeta> = {
   // --- layout ---
-  ...Object.fromEntries(SIDES.map((s) => [`padding-${s}`, pxMeta('layout', 0, 400)])),
-  ...Object.fromEntries(SIDES.map((s) => [`margin-${s}`, pxMeta('layout', -400, 400)])),
+  ...sideMeta('padding', 0, 400),
+  ...sideMeta('margin', -400, 400),
   gap: pxMeta('layout', 0, 400, 1, { flexGridOnly: true }),
 
   // --- appearance ---
@@ -112,7 +137,7 @@ export const STYLE_PROP_META: Record<string, StylePropMeta> = {
     step: 10
   },
   'transition-timing-function': { group: 'transition', control: 'bezier' }
-}
+} satisfies Record<StyleProp | 'font-family' | 'display', StylePropMeta>
 
 /** Metadata for a v1 property, or null when the prop isn't in the set. */
 export function stylePropMeta(prop: string): StylePropMeta | null {

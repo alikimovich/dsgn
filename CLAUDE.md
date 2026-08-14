@@ -213,6 +213,12 @@ src/
                     provider's usage payload + dedupes its repeated cumulative
                     readings into `usage` event deltas, the renderer sums and
                     formats them (RunStats.tsx, next to the cat)
+  shared/style-props.ts  the Styles panel's v1 editable CSS-property allowlist
+                    (the `StyleProp` union). main/styles.ts derives its
+                    `STYLE_PROPS` from it (the actual write-time boundary);
+                    renderer/src/lib/css-values.ts's `STYLE_PROP_META` is
+                    `satisfies`-checked against it, so the two can't drift
+                    apart by hand again
   renderer/src/     React 18 UI: App.tsx, components/ (ChatPanel, PreviewPane,
                     PropPanel, CodeDrawer, Rail, LayersPanel + LayersTree, …),
                     zustand store.ts, shadcn ui/
