@@ -11,34 +11,14 @@
  * Every action that resolves a path back to a live element re-validates a
  * cheap fingerprint (tag + source) at the leaf — the same self-healing
  * discipline `resolveStyleTarget()` uses for the styles panel's selection.
+ *
+ * `LayerNode`/`LayersSnapshot`/`LayerFingerprint` live in `../shared/api` (the
+ * single source of truth for the renderer↔preload contract) — re-exported
+ * here so callers in this file can keep importing them locally.
  */
 
-export interface LayerNode {
-  path: number[]
-  parentPath: number[] | null
-  depth: number
-  tag: string
-  id: string | null
-  classes: string[]
-  source: string | null
-  componentSource: string | null
-  text: string | null
-  childCount: number
-  /** This stamp appears more than once in the snapshot — a client-side UX hint
-   *  only (grey out dragging), never the correctness boundary for a move. */
-  dupStamp: boolean
-}
-
-export interface LayersSnapshot {
-  nodes: LayerNode[]
-  truncated: boolean
-  totalSeen: number
-}
-
-export interface LayerFingerprint {
-  tag: string
-  source: string | null
-}
+import type { LayerFingerprint, LayerNode, LayersSnapshot } from '../shared/api'
+export type { LayerFingerprint, LayerNode, LayersSnapshot }
 
 // Elements not worth showing as page structure: script-ish/head-ish tags the
 // user never reorders, plus icon internals (treated as a leaf below).
