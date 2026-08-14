@@ -253,8 +253,28 @@ interface QueuedSpawn {
   options: AgentOptions
 }
 const spawnQueue: QueuedSpawn[] = []
+// `startSpawn` only inserts into `spawns` once the worktree + session have
+// finished starting up — a long async stretch (createWorktree, then the
+// provider's startSession). Counting just `spawns` left a window where
+// concurrent `pumpQueue` iterations (from separate finalizeSpawn calls) and
+// the direct `agent:spawn-comment` handler could all read the cap as not-yet-
+// reached and start a spawn together, overshooting MAX_SPAWNS_PER_REPO. This
+// tracks slots reserved-but-not-yet-counted-in-`spawns`, incremented
+// SYNCHRONOUSLY (the first statement of `startSpawn`, before its first
+// `await`) so the reservation lands before control ever yields back to the
+// event loop — the same tick as the cap check both callers just did.
+const startingCounts = new Map<string, number>()
+function reserveSpawnSlot(parentKey: string): void {
+  startingCounts.set(parentKey, (startingCounts.get(parentKey) ?? 0) + 1)
+}
+function releaseSpawnSlot(parentKey: string): void {
+  const n = (startingCounts.get(parentKey) ?? 0) - 1
+  if (n <= 0) startingCounts.delete(parentKey)
+  else startingCounts.set(parentKey, n)
+}
 const runningCount = (parentKey: string): number =>
-  [...spawns.values()].filter((s) => s.parentKey === parentKey).length
+  [...spawns.values()].filter((s) => s.parentKey === parentKey).length +
+  (startingCounts.get(parentKey) ?? 0)
 const worktreesDir = (): string => join(dataDir(), 'worktrees')
 const firstLine = (t: string): string => (t.split('\n')[0] || 'Praxis comment edit').slice(0, 72)
 /** Normalise a user-typed chat name: one line, collapsed whitespace, capped.
@@ -390,10 +410,16 @@ function safeSend(get: () => BrowserWindow | null, channel: string, payload: unk
  * Returns the branch (immediate path needs it) or null on failure.
  */
 async function startSpawn(q: QueuedSpawn): Promise<string | null> {
+  // Reserve the slot HERE, synchronously, before the first await — see the
+  // comment on `startingCounts` above. Every exit path below must release it
+  // exactly once (the success path releases it right after `spawns.set`
+  // takes over counting it; both failure paths release before returning).
+  reserveSpawnSlot(q.parentKey)
   let wt: Worktree
   try {
     wt = await createWorktree(q.root, worktreesDir(), { label: q.text, id: q.id })
   } catch {
+    releaseSpawnSlot(q.parentKey)
     safeSend(getWindow_, 'agent:event', {
       type: 'spawn-finished',
       projectKey: q.parentSessionKey,
@@ -436,9 +462,13 @@ async function startSpawn(q: QueuedSpawn): Promise<string | null> {
       parentRoot: q.root,
       text: q.text
     })
+    // Now counted via `spawns` itself — release the reservation so it isn't
+    // double-counted by `runningCount`.
+    releaseSpawnSlot(q.parentKey)
     s.send(q.text)
     return wt.branch
   } catch {
+    releaseSpawnSlot(q.parentKey)
     await removeWorktree(q.root, wt, { keepBranch: false })
     safeSend(getWindow_, 'agent:event', {
       type: 'spawn-finished',
