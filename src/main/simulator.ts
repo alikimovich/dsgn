@@ -929,6 +929,12 @@ function spawnMetro(
   onLog: (line: string) => void
 ): Promise<{ pid: number }> {
   return new Promise<{ pid: number }>((resolve, reject) => {
+    // INVARIANT (same as devserver.ts's spawnDevServer): `shell: true` is BY
+    // DESIGN — this is the target project's own launch command and needs the
+    // shell. It stays safe only while the command STRING has exactly two
+    // possible origins: our own literal (`npx expo run:ios`) or a command the
+    // user typed as the override. It must NEVER be built from previewed-page
+    // content, agent output, or strings read out of the target repo's files.
     const child: ChildProcess = spawn(opts.command, {
       cwd: opts.root,
       shell: true,
