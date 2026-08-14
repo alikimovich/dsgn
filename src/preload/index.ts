@@ -64,32 +64,40 @@ import type {
   WorkspaceSnapshot
 } from '../shared/api'
 
+/**
+ * Subscribe to a main→renderer push channel; returns the unsubscribe. Every
+ * `on…` getter on `PraxisApi` used to hand-roll this same 4-line
+ * listener/removeListener pair (~24 times) — forgetting the `removeListener`
+ * in the returned closure was an easy, silent leak. `on<T>(channel)` returns
+ * a ready-made subscribe function so each call site below is a one-liner;
+ * the optional `map` lets a channel whose raw IPC payload isn't quite the
+ * shape the API promises (e.g. `controls:updated`) still be a one-liner.
+ */
+function on<TRaw, T = TRaw>(
+  channel: string,
+  map?: (raw: TRaw) => T
+): (cb: (payload: T) => void) => () => void {
+  return (cb) => {
+    const listener = (_e: IpcRendererEvent, raw: TRaw): void => cb(map ? map(raw) : (raw as unknown as T))
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  }
+}
+
 const api: PraxisApi = {
-  onMenuAction: (cb: (action: string) => void): (() => void) => {
-    const listener = (_e: IpcRendererEvent, action: string): void => cb(action)
-    ipcRenderer.on('menu:action', listener)
-    return () => ipcRenderer.removeListener('menu:action', listener)
-  },
+  onMenuAction: on<string>('menu:action'),
   // Electron 43 dropped File.path; webUtils.getPathForFile recovers a
   // dropped/selected file's real on-disk path (must run in the preload — the
   // File is passed across the contextBridge). Empty string for pathless blobs.
   pathForFile: (file: File): string => webUtils.getPathForFile(file),
   window: {
     isFullscreen: (): Promise<boolean> => ipcRenderer.invoke('window:is-fullscreen'),
-    onFullscreenChange: (cb: (fullscreen: boolean) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, fullscreen: boolean): void => cb(fullscreen)
-      ipcRenderer.on('window:fullscreen', listener)
-      return () => ipcRenderer.removeListener('window:fullscreen', listener)
-    }
+    onFullscreenChange: on<boolean>('window:fullscreen')
   },
   menu: {
     setRecents: (recents: RecentMenuEntry[]): void =>
       ipcRenderer.send('menu:set-recents', recents),
-    onOpenRecent: (cb: (root: string) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, root: string): void => cb(root)
-      ipcRenderer.on('menu:open-recent', listener)
-      return () => ipcRenderer.removeListener('menu:open-recent', listener)
-    },
+    onOpenRecent: on<string>('menu:open-recent'),
     nativeEdit: (cmd: 'undo' | 'redo'): void => ipcRenderer.send('menu:native-edit', cmd)
   },
   preview: {
@@ -99,16 +107,8 @@ const api: PraxisApi = {
     setDragging: (active: boolean): void => ipcRenderer.send('preview:set-dragging', active),
     setSelectMode: (active: boolean): Promise<void> =>
       ipcRenderer.invoke('preview:set-select-mode', active),
-    onElementPicked: (cb: (el: SelectedElement) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, el: SelectedElement): void => cb(el)
-      ipcRenderer.on('preview:element-picked', listener)
-      return () => ipcRenderer.removeListener('preview:element-picked', listener)
-    },
-    onSelectCancelled: (cb: () => void): (() => void) => {
-      const listener = (): void => cb()
-      ipcRenderer.on('preview:select-cancelled', listener)
-      return () => ipcRenderer.removeListener('preview:select-cancelled', listener)
-    },
+    onElementPicked: on<SelectedElement>('preview:element-picked'),
+    onSelectCancelled: on<void>('preview:select-cancelled'),
     setAnnotations: (pins: { id: string; selector: string }[]): void =>
       ipcRenderer.send('preview:set-annotations', pins),
     /** Toggle the in-page iPhone bezel overlay (mobile viewport). */
@@ -118,75 +118,33 @@ const api: PraxisApi = {
     /** Launch progress shown inside the preview (bottom pill); null clears. */
     setStatus: (text: string | null): void => ipcRenderer.send('preview:set-status', text),
     /** Fires when S is pressed inside the focused preview (toggle select). */
-    onToggleSelect: (cb: () => void): (() => void) => {
-      const listener = (): void => cb()
-      ipcRenderer.on('preview:toggle-select', listener)
-      return () => ipcRenderer.removeListener('preview:toggle-select', listener)
-    },
+    onToggleSelect: on<void>('preview:toggle-select'),
     /** Fires when the preview navigates (link clicks, SPA routes) — full URL. */
-    onUrlChanged: (cb: (url: string) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, url: string): void => cb(url)
-      ipcRenderer.on('preview:url-changed', listener)
-      return () => ipcRenderer.removeListener('preview:url-changed', listener)
-    },
+    onUrlChanged: on<string>('preview:url-changed'),
     /** Selection-toolbar actions that resolve in the renderer (code / delete). */
-    onToolbarAction: (cb: (kind: 'code' | 'delete' | 'props') => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, kind: 'code' | 'delete' | 'props'): void => cb(kind)
-      ipcRenderer.on('preview:toolbar-action', listener)
-      return () => ipcRenderer.removeListener('preview:toolbar-action', listener)
-    },
+    onToolbarAction: on<'code' | 'delete' | 'props'>('preview:toolbar-action'),
     /** Snapshot the live preview (freeze-frame under overlay UI). */
     capture: (): Promise<string | null> => ipcRenderer.invoke('preview:capture'),
     /** Fires after the previewed app loads, with whether it's source-stamped. */
-    onReadiness: (cb: (info: { stamps: number }) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, info: { stamps: number }): void => cb(info)
-      ipcRenderer.on('preview:readiness', listener)
-      return () => ipcRenderer.removeListener('preview:readiness', listener)
-    },
-    onTextEdit: (cb: (edit: { source: string; text: string }) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, edit: { source: string; text: string }): void =>
-        cb(edit)
-      ipcRenderer.on('preview:text-edit', listener)
-      return () => ipcRenderer.removeListener('preview:text-edit', listener)
-    },
+    onReadiness: on<{ stamps: number }>('preview:readiness'),
+    onTextEdit: on<{ source: string; text: string }>('preview:text-edit'),
     setCommentMode: (mode: CommentMode): Promise<void> =>
       ipcRenderer.invoke('preview:set-comment-mode', mode),
-    onCommentMode: (cb: (mode: CommentMode) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, mode: CommentMode): void => cb(mode)
-      ipcRenderer.on('preview:comment-mode', listener)
-      return () => ipcRenderer.removeListener('preview:comment-mode', listener)
-    },
-    onComment: (cb: (c: PreviewComment) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, c: PreviewComment): void => cb(c)
-      ipcRenderer.on('preview:comment', listener)
-      return () => ipcRenderer.removeListener('preview:comment', listener)
-    }
+    onCommentMode: on<CommentMode>('preview:comment-mode'),
+    onComment: on<PreviewComment>('preview:comment')
   },
   panel: {
     show: (bounds: { x: number; y: number; width: number; height: number }): void =>
       ipcRenderer.send('panel:show', bounds),
     hide: (): void => ipcRenderer.send('panel:hide'),
     setState: (state: PanelState): void => ipcRenderer.send('panel:state', state),
-    onState: (cb: (state: PanelState) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, state: PanelState): void => cb(state)
-      ipcRenderer.on('panel:state', listener)
-      return () => ipcRenderer.removeListener('panel:state', listener)
-    },
+    onState: on<PanelState>('panel:state'),
     requestState: (): void => ipcRenderer.send('panel:request-state'),
     action: (action: PanelAction): void => ipcRenderer.send('panel:action', action),
-    onAction: (cb: (action: PanelAction) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, action: PanelAction): void => cb(action)
-      ipcRenderer.on('panel:action', listener)
-      return () => ipcRenderer.removeListener('panel:action', listener)
-    },
+    onAction: on<PanelAction>('panel:action'),
     reportSize: (size: { width: number; height: number }): void =>
       ipcRenderer.send('panel:size', size),
-    onSize: (cb: (size: { width: number; height: number }) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, size: { width: number; height: number }): void =>
-        cb(size)
-      ipcRenderer.on('panel:size', listener)
-      return () => ipcRenderer.removeListener('panel:size', listener)
-    }
+    onSize: on<{ width: number; height: number }>('panel:size')
   },
   project: {
     pick: (): Promise<string | null> => ipcRenderer.invoke('project:pick'),
@@ -204,11 +162,7 @@ const api: PraxisApi = {
     stop: (root: string): Promise<void> => ipcRenderer.invoke('devserver:stop', root),
     isRunning: (root: string): Promise<boolean> => ipcRenderer.invoke('devserver:running', root),
     info: (root: string): Promise<DevServerInfo> => ipcRenderer.invoke('devserver:info', root),
-    onLog: (cb: (line: string) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, line: string): void => cb(line)
-      ipcRenderer.on('devserver:log', listener)
-      return () => ipcRenderer.removeListener('devserver:log', listener)
-    }
+    onLog: on<string>('devserver:log')
   },
   git: {
     ensure: (root: string): Promise<BranchResult> => ipcRenderer.invoke('git:ensure', root),
@@ -233,16 +187,8 @@ const api: PraxisApi = {
     // Phase 3: arm/disarm element-select (a tap then becomes a source pick).
     setSelectMode: (active: boolean): Promise<void> =>
       ipcRenderer.invoke('simulator:set-select-mode', active),
-    onLog: (cb: (line: string) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, line: string): void => cb(line)
-      ipcRenderer.on('simulator:log', listener)
-      return () => ipcRenderer.removeListener('simulator:log', listener)
-    },
-    onElementPicked: (cb: (pick: SimElementPick) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, pick: SimElementPick): void => cb(pick)
-      ipcRenderer.on('simulator:element-picked', listener)
-      return () => ipcRenderer.removeListener('simulator:element-picked', listener)
-    }
+    onLog: on<string>('simulator:log'),
+    onElementPicked: on<SimElementPick>('simulator:element-picked')
   },
   props: {
     inspect: (root: string, source: string, text?: string | null): Promise<PropInspection | null> =>
@@ -271,11 +217,7 @@ const api: PraxisApi = {
   },
   layers: {
     read: (): Promise<LayersSnapshot | null> => ipcRenderer.invoke('layers:read'),
-    onChanged: (cb: () => void): (() => void) => {
-      const listener = (): void => cb()
-      ipcRenderer.on('layers:changed', listener)
-      return () => ipcRenderer.removeListener('layers:changed', listener)
-    },
+    onChanged: on<void>('layers:changed'),
     select: (path: number[], fingerprint: LayerFingerprint): void =>
       ipcRenderer.send('layers:select', { path, fingerprint }),
     hover: (path: number[] | null, fingerprint: LayerFingerprint | null): void =>
@@ -298,11 +240,7 @@ const api: PraxisApi = {
       value: string | number | boolean
     ): Promise<StyleEditResult> =>
       ipcRenderer.invoke('controls:apply-literal', root, panelId, paramId, value),
-    onUpdated: (cb: (root: string) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, payload: { root: string }): void => cb(payload.root)
-      ipcRenderer.on('controls:updated', listener)
-      return () => ipcRenderer.removeListener('controls:updated', listener)
-    }
+    onUpdated: on<{ root: string }, string>('controls:updated', (payload) => payload.root)
   },
   source: {
     read: (root: string, source: string): Promise<SourceView | null> =>
@@ -328,11 +266,7 @@ const api: PraxisApi = {
       ipcRenderer.invoke('source:rename-file', root, from, to),
     deleteFile: (root: string, path: string): Promise<FileOpResult> =>
       ipcRenderer.invoke('source:delete-file', root, path),
-    onNavigate: (cb: (source: string) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, source: string): void => cb(source)
-      ipcRenderer.on('editor:navigate', listener)
-      return () => ipcRenderer.removeListener('editor:navigate', listener)
-    }
+    onNavigate: on<string>('editor:navigate')
   },
   edits: {
     undo: (root: string): Promise<UndoResult> => ipcRenderer.invoke('edit:undo', root),
@@ -355,11 +289,7 @@ const api: PraxisApi = {
       ipcRenderer.invoke('annotations:add', root, input),
     remove: (root: string, id: string): Promise<Annotation[]> =>
       ipcRenderer.invoke('annotations:remove', root, id),
-    onPinClick: (cb: (id: string) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, id: string): void => cb(id)
-      ipcRenderer.on('annotations:pin-click', listener)
-      return () => ipcRenderer.removeListener('annotations:pin-click', listener)
-    }
+    onPinClick: on<string>('annotations:pin-click')
   },
   publish: {
     toPr: (root: string, opts: { title: string }): Promise<PublishResult> =>
@@ -454,11 +384,7 @@ const api: PraxisApi = {
     resolveConflict: (): Promise<{ ok: boolean; conflicted: string[]; prompt?: string; error?: string }> =>
       ipcRenderer.invoke('agent:resolve-conflict'),
     discardConflict: (): Promise<{ ok: boolean }> => ipcRenderer.invoke('agent:discard-conflict'),
-    onEvent: (cb: (event: AgentEvent) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, event: AgentEvent): void => cb(event)
-      ipcRenderer.on('agent:event', listener)
-      return () => ipcRenderer.removeListener('agent:event', listener)
-    },
+    onEvent: on<AgentEvent>('agent:event'),
     workspaceSnapshot: (): Promise<WorkspaceSnapshot> =>
       ipcRenderer.invoke('agent:workspace-snapshot')
   },
@@ -494,11 +420,7 @@ const api: PraxisApi = {
       ipcRenderer.invoke('feedback:submit', input)
   },
   update: {
-    onStatus: (cb: (status: UpdateStatus) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, status: UpdateStatus): void => cb(status)
-      ipcRenderer.on('update:status', listener)
-      return () => ipcRenderer.removeListener('update:status', listener)
-    },
+    onStatus: on<UpdateStatus>('update:status'),
     check: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:check'),
     apply: (): Promise<void> => ipcRenderer.invoke('update:apply')
   }
