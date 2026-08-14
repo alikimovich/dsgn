@@ -716,17 +716,6 @@ function createWindow(): void {
   // material is visible — and a main-side setVibrancy can't be ordered against
   // that CSS flip across the process boundary without risking a flash.
 
-  // Keep the native surfaces' base color in step with the OS appearance (the
-  // placeholder HTML re-themes itself via prefers-color-scheme; this handles the
-  // solid fill behind it and the window).
-  nativeTheme.on('updated', () => {
-    const bg = previewBg()
-    // Not on macOS — an opaque window background would paint over the
-    // under-page vibrancy material (the window has none to update there).
-    if (process.platform !== 'darwin') mainWindow?.setBackgroundColor(bg)
-    previewView?.setBackgroundColor(bg)
-  })
-
   // Open external links in the user's browser, never in-app.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -1272,6 +1261,19 @@ app.whenReady().then(() => {
     // .invalidate() would throw an uncaught "Object has been destroyed" on wake.
     const wc = mainWindow?.webContents
     if (wc && !wc.isDestroyed()) wc.invalidate()
+  })
+  // Keep the native surfaces' base color in step with the OS appearance (the
+  // placeholder HTML re-themes itself via prefers-color-scheme; this handles the
+  // solid fill behind it and the window). Registered ONCE here, not in
+  // createWindow — that runs again on every macOS dock re-activate, which would
+  // stack a duplicate listener per reopen. Nothing here is per-window: both
+  // targets are read from the module-level vars at fire time.
+  nativeTheme.on('updated', () => {
+    const bg = previewBg()
+    // Not on macOS — an opaque window background would paint over the
+    // under-page vibrancy material (the window has none to update there).
+    if (process.platform !== 'darwin') mainWindow?.setBackgroundColor(bg)
+    previewView?.setBackgroundColor(bg)
   })
   // File → Open Recent is driven by the renderer's recents store: it pushes the
   // current list, we cap at 8 and rebuild the menu.
