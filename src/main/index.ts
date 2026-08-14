@@ -20,6 +20,36 @@ import type {
   SelectedElement,
   StyleReadResult
 } from '../shared/api'
+// Channel names for the main ⇄ preview-preload conversation. Declared once in
+// shared/ and imported by both ends — see the header there.
+import {
+  LAYERS_CHANGED,
+  LAYERS_HOVER,
+  LAYERS_READ,
+  LAYERS_READ_REPLY,
+  LAYERS_SELECT,
+  LAYERS_SET_WATCH,
+  PREVIEW_CANCELLED,
+  PREVIEW_CLEAR_SELECTED,
+  PREVIEW_COMMENT,
+  PREVIEW_COMMENT_MODE,
+  PREVIEW_PICKED,
+  PREVIEW_PIN_CLICK,
+  PREVIEW_READINESS,
+  PREVIEW_SET_COMMENT_MODE,
+  PREVIEW_SET_FRAME,
+  PREVIEW_SET_MODE,
+  PREVIEW_SET_PINS,
+  PREVIEW_SET_STATUS,
+  PREVIEW_TEXT_EDIT,
+  PREVIEW_TOGGLE_SELECT,
+  PREVIEW_TOOLBAR_ACTION,
+  STYLES_CLEAR_PREVIEW,
+  STYLES_PREVIEW,
+  STYLES_READ,
+  STYLES_READ_REPLY,
+  STYLES_REPLAY
+} from '../shared/preview-channels'
 import { registerAgentIpc } from './agent'
 import { registerAnnotationsIpc } from './annotations'
 import { registerControlsIpc } from './control-panels'
@@ -138,29 +168,6 @@ let frameModeActive = false
 // Same lifecycle as the flags above — preload-local state that dies on every
 // fresh injection, re-armed on did-finish-load below.
 let layersWatchActive = false
-// Channels mirrored in src/preview/preload.ts (the injected preview preload).
-const PREVIEW_SET_MODE = 'praxis:preview:set-select-mode'
-const PREVIEW_PICKED = 'praxis:preview:element-picked'
-const PREVIEW_CANCELLED = 'praxis:preview:select-cancelled'
-const PREVIEW_SET_PINS = 'praxis:preview:set-annotations'
-const PREVIEW_PIN_CLICK = 'praxis:preview:pin-click'
-const PREVIEW_READINESS = 'praxis:preview:readiness'
-const PREVIEW_TEXT_EDIT = 'praxis:preview:text-edit'
-const PREVIEW_SET_COMMENT_MODE = 'praxis:preview:set-comment-mode'
-const PREVIEW_COMMENT_MODE = 'praxis:preview:comment-mode'
-const PREVIEW_COMMENT = 'praxis:preview:comment'
-const PREVIEW_SET_FRAME = 'praxis:preview:set-frame'
-const PREVIEW_TOOLBAR_ACTION = 'praxis:preview:toolbar-action'
-const PREVIEW_CLEAR_SELECTED = 'praxis:preview:clear-selected'
-const PREVIEW_SET_STATUS = 'praxis:preview:set-status'
-const PREVIEW_TOGGLE_SELECT = 'praxis:preview:toggle-select'
-const LAYERS_READ = 'layers:read'
-const LAYERS_READ_REPLY = 'layers:read-reply'
-const LAYERS_CHANGED = 'layers:changed'
-const LAYERS_SELECT = 'layers:select'
-const LAYERS_HOVER = 'layers:hover'
-const LAYERS_SET_WATCH = 'layers:set-watch'
-
 // Launch-status pill text (shown inside the preview); re-pushed after loads.
 let previewStatusText: string | null = null
 
@@ -1034,15 +1041,15 @@ function registerPreviewIpc(): void {
     e.sender === mainWindow?.webContents || e.sender === panelView?.webContents
   ipcMain.on('styles:preview', (e, p: { prop: string; value: string }) => {
     if (!fromMainOrPanel(e)) return
-    previewView?.webContents.send('styles:preview', p)
+    previewView?.webContents.send(STYLES_PREVIEW, p)
   })
   ipcMain.on('styles:clear-preview', (e, p?: { prop?: string }) => {
     if (!fromMainOrPanel(e)) return
-    previewView?.webContents.send('styles:clear-preview', p)
+    previewView?.webContents.send(STYLES_CLEAR_PREVIEW, p)
   })
   ipcMain.on('styles:replay', (e, p: { prop: string; from: string; to: string }) => {
     if (!fromMainOrPanel(e)) return
-    previewView?.webContents.send('styles:replay', p)
+    previewView?.webContents.send(STYLES_REPLAY, p)
   })
 
   // Fresh computed values from the selection. The preview preload is sandboxed
@@ -1056,7 +1063,7 @@ function registerPreviewIpc(): void {
   let styleReadSeq = 0
   const pendingStyleReads = new Map<number, (result: StyleReadResult | null) => void>()
   ipcMain.on(
-    'styles:read-reply',
+    STYLES_READ_REPLY,
     (
       e,
       p: {
@@ -1090,7 +1097,7 @@ function registerPreviewIpc(): void {
           pendingStyleReads.delete(id)
           resolve(result)
         })
-        previewView?.webContents.send('styles:read', { id, props })
+        previewView?.webContents.send(STYLES_READ, { id, props })
       })
     }
   )

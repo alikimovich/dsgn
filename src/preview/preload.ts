@@ -16,42 +16,39 @@
 import { ipcRenderer } from 'electron'
 import type { SelectedElement } from '../shared/api'
 import { FRAME_DATA_URI, FRAME_INSET } from '../shared/iphone-frame'
+// Channels (preview ⇄ main). The strings live in shared/preview-channels.ts —
+// main imports the very same constants, so the two ends can no longer drift.
+// Aliased here to the short names this file has always used.
+import {
+  PREVIEW_CANCELLED as CANCELLED,
+  PREVIEW_CLEAR_SELECTED as CLEAR_SELECTED,
+  PREVIEW_COMMENT as COMMENT,
+  PREVIEW_COMMENT_MODE as COMMENT_MODE,
+  LAYERS_CHANGED,
+  LAYERS_HOVER,
+  LAYERS_READ,
+  LAYERS_READ_REPLY,
+  LAYERS_SELECT,
+  LAYERS_SET_WATCH,
+  PREVIEW_PICKED as PICKED,
+  PREVIEW_PIN_CLICK as PIN_CLICK,
+  PREVIEW_READINESS as READINESS,
+  PREVIEW_SET_COMMENT_MODE as SET_COMMENT_MODE,
+  PREVIEW_SET_FRAME as SET_FRAME,
+  PREVIEW_SET_MODE as SET_MODE,
+  PREVIEW_SET_PINS as SET_PINS,
+  PREVIEW_SET_STATUS as SET_STATUS,
+  STYLES_CLEAR_PREVIEW,
+  STYLES_PREVIEW,
+  STYLES_READ,
+  STYLES_READ_REPLY,
+  STYLES_REPLAY,
+  PREVIEW_TEXT_EDIT as TEXT_EDIT,
+  PREVIEW_TOGGLE_SELECT as TOGGLE_SELECT,
+  PREVIEW_TOOLBAR_ACTION as TOOLBAR_ACTION
+} from '../shared/preview-channels'
 import { buildLayersSnapshot, type LayerFingerprint, resolveLayerElement } from './layers'
 import { specifiedValues, varRefName } from './style-provenance'
-
-// Channels (preview ⇄ main). Kept local — main mirrors these strings.
-const SET_MODE = 'praxis:preview:set-select-mode'
-const PICKED = 'praxis:preview:element-picked'
-const CANCELLED = 'praxis:preview:select-cancelled'
-const SET_PINS = 'praxis:preview:set-annotations'
-const PIN_CLICK = 'praxis:preview:pin-click'
-const READINESS = 'praxis:preview:readiness'
-const TEXT_EDIT = 'praxis:preview:text-edit'
-// Figma-style inline commenting: comment-to-agent (C) and annotation (Y).
-const SET_COMMENT_MODE = 'praxis:preview:set-comment-mode' // renderer → preload
-const COMMENT_MODE = 'praxis:preview:comment-mode' // preload → renderer (keyboard-initiated)
-const COMMENT = 'praxis:preview:comment' // preload → renderer (submitted)
-const SET_FRAME = 'praxis:preview:set-frame' // renderer → preload (mobile bezel overlay)
-const TOOLBAR_ACTION = 'praxis:preview:toolbar-action' // preload → renderer (code/delete)
-const CLEAR_SELECTED = 'praxis:preview:clear-selected' // renderer → preload (pill ×, send)
-const SET_STATUS = 'praxis:preview:set-status' // main → preload (launch progress pill)
-const TOGGLE_SELECT = 'praxis:preview:toggle-select' // preload → renderer (S pressed in preview)
-// Styles panel (island → main → this preload): live inline injection while
-// scrubbing, exact revert, fresh computed reads, transition replay.
-const STYLES_PREVIEW = 'styles:preview' // renderer → preload {prop, value}
-const STYLES_CLEAR_PREVIEW = 'styles:clear-preview' // renderer → preload {prop?}
-const STYLES_READ = 'styles:read' // renderer → preload {id, props}
-const STYLES_READ_REPLY = 'styles:read-reply' // preload → renderer {id, values|null, declaredVars|null, specified|null}
-const STYLES_REPLAY = 'styles:replay' // renderer → preload {prop, from, to}
-// Layers panel: bulk DOM-tree read (request-id round trip, like styles:read),
-// panel-driven select/hover by child-index path, and a watch toggle that arms
-// a MutationObserver only while the panel is open.
-const LAYERS_READ = 'layers:read' // renderer → preload {id}
-const LAYERS_READ_REPLY = 'layers:read-reply' // preload → renderer {id, snapshot}
-const LAYERS_CHANGED = 'layers:changed' // preload → renderer (debounced DOM-mutation ping)
-const LAYERS_SELECT = 'layers:select' // renderer → preload {path, fingerprint}
-const LAYERS_HOVER = 'layers:hover' // renderer → preload {path, fingerprint} | null
-const LAYERS_SET_WATCH = 'layers:set-watch' // renderer → preload boolean
 
 type CommentMode = 'comment' | 'annotate' | null
 

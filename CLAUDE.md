@@ -189,6 +189,11 @@ src/
                     never tell "is" from "coincidentally equals". Threaded
                     through `styles:read` as `declaredVars`
   shared/api.ts     the IPC contract — single source of truth for cross-process types
+  shared/preview-channels.ts  the raw channel NAMES for the one IPC surface api.ts
+                    can't type: main ⇄ the sandboxed preview preload (no
+                    contextBridge there, so it's bare `ipcRenderer` strings).
+                    Imported by BOTH ends (main + src/preview/preload.ts) —
+                    never re-declare one of these channels locally
   shared/token-match.ts  which design tokens may be offered for a css property
                     and which one a computed value IS. Pure + used by BOTH main
                     (re-validating a pick) and the island (chips + picker)
