@@ -67,6 +67,7 @@ const UNIT = [
   'tw-classes',
   'tw-styles',
   'token-match',
+  'style-tokens',
   'layers-move',
   'inline-style',
   'css-values',

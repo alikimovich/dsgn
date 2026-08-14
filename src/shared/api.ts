@@ -90,6 +90,17 @@ export interface ProjectIcon {
   dataUrl: string
 }
 
+/** Result of `project:create` (scaffold a minimal Vite+React app, git init,
+ *  install deps). `warning` = created, but a non-fatal step failed and the
+ *  user must be told now (today: `git init` / the first commit — see
+ *  scaffold.ts); it can be set alongside `ok: true`. */
+export interface ProjectCreateResult {
+  ok: boolean
+  root?: string
+  error?: string
+  warning?: string
+}
+
 export interface RunningDevServer {
   url: string
   pid: number
@@ -125,6 +136,14 @@ export interface SimDevice {
   udid: string
   name: string
   runtime: string
+}
+
+/** A tapped simulator element, resolved to its RN source when the testID
+ *  stamp is present. `source` is null when the project isn't set up for
+ *  select (no stamp found) — not every pick resolves. */
+export interface SimElementPick {
+  source: string | null
+  tag: string
 }
 
 /**
@@ -182,6 +201,12 @@ export interface QuestionSpec {
 export interface QuestionRequest {
   id: string
   questions: QuestionSpec[]
+  /** The chat session this question belongs to — same value as the emitting
+   *  `AgentEvent.projectKey` (the project's own key for its default chat, or
+   *  `${projectKey}#…` for an additional/resumed chat). Lets the renderer keep
+   *  a backgrounded chat's cards out of whichever chat is on screen, instead of
+   *  a single un-keyed global list. */
+  sessionKey: string
 }
 
 /**
@@ -202,6 +227,8 @@ export interface PermissionRequest {
   displayName?: string
   /** A single-line summary of the most relevant input (path / command / pattern). */
   detail?: string
+  /** The chat session this request belongs to — see `QuestionRequest.sessionKey`. */
+  sessionKey: string
 }
 
 /**
@@ -1094,9 +1121,12 @@ export interface UpdateStatus {
 
 /** The surface exposed on `window.api` by the preload bridge. */
 export interface PraxisApi {
-  /** Subscribe to native-menu (Actions/File) commands: 'reload' | 'stop' | 'select' |
+  /** Subscribe to native-menu commands: 'reload' | 'stop' | 'select' |
    *  'open-project' | 'new-project' | 'clear-recents' | 'viewport:desktop' |
-   *  'viewport:mobile'. Returns an unsubscribe. */
+   *  'viewport:mobile' | 'undo' | 'redo' | 'settings' | 'logs' | 'toggle-chat' |
+   *  'publish'. Returns an unsubscribe. (Undo/Redo only reach here when a focused
+   *  text field ISN'T claiming the accelerator — see `buildAppMenu`'s
+   *  `editCommand` in main/index.ts.) */
   onMenuAction: (cb: (action: string) => void) => () => void
   /** Recover a dropped/selected file's absolute on-disk path (Electron's
    *  `webUtils.getPathForFile`, run in the preload). Returns '' for a file with
@@ -1201,11 +1231,7 @@ export interface PraxisApi {
     /** Save-dialog for a folder to create (New Project…). Null when cancelled. */
     pickNew: () => Promise<string | null>
     /** Scaffold a minimal Vite+React app there, git init, install deps. */
-    /** `warning` = created, but a non-fatal step failed and the user must be told
-     *  now (today: `git init` / the first commit — see scaffold.ts). */
-    create: (
-      root: string
-    ) => Promise<{ ok: boolean; root?: string; error?: string; warning?: string }>
+    create: (root: string) => Promise<ProjectCreateResult>
   }
   devServer: {
     start: (opts: {
@@ -1248,9 +1274,7 @@ export interface PraxisApi {
     /** Phase 3: arm/disarm element-select (a tap becomes a source pick). */
     setSelectMode: (active: boolean) => Promise<void>
     onLog: (cb: (line: string) => void) => () => void
-    /** A tapped simulator element, resolved to its RN source when the testID
-     * stamp is present (null source → project not set up for select). */
-    onElementPicked: (cb: (pick: { source: string | null; tag: string }) => void) => () => void
+    onElementPicked: (cb: (pick: SimElementPick) => void) => () => void
   }
   props: {
     /**

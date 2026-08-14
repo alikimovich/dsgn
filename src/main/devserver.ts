@@ -300,6 +300,14 @@ function spawnDevServer(
   onLog: (line: string) => void
 ): Promise<RunningDevServer> {
   return new Promise<RunningDevServer>((resolve, reject) => {
+    // INVARIANT: `shell: true` is BY DESIGN — this launches the target project's
+    // own dev server, and such a command needs the shell for `&&`, env prefixes
+    // and PATH lookup. It stays safe only while the command STRING has exactly
+    // two possible origins: our own detection literals (`<pm> run dev|start`,
+    // `npx expo start`) or a command the user typed as the custom-command
+    // override. It must NEVER be built from previewed-page content, agent output,
+    // or strings read out of the target repo's files — a repo would then execute
+    // arbitrary shell just by being opened, before the user runs anything.
     const child = spawn(opts.command, {
       cwd: opts.root,
       shell: true,

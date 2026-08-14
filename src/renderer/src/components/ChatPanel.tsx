@@ -427,8 +427,8 @@ export default function ChatPanel(): React.JSX.Element {
   const setLayersOpen = useLayersPanel((s) => s.setOpen);
   const inspection = useSelection((s) => s.inspection);
   const inspecting = useSelection((s) => s.inspecting);
-  const { mode: permissionMode, pending, removeRequest, setMode } = usePermissions();
-  const questions = useQuestions((s) => s.pending);
+  const { mode: permissionMode, pending: allPending, removeRequest, setMode } = usePermissions();
+  const allQuestions = useQuestions((s) => s.pending);
   const removeQuestion = useQuestions((s) => s.removeRequest);
   const { list: notes, focusedId, setList: setNotes } = useAnnotations();
   const tokens = useTokens();
@@ -446,6 +446,20 @@ export default function ChatPanel(): React.JSX.Element {
   // follow the user into whichever chat they switch to. Switching away parks the
   // text; switching back finds it again; a chat never typed in opens blank.
   const activeChatKey = useChat((s) => s.activeKey);
+  // Permission/question cards are keyed by the session that raised them (see
+  // `PermissionRequest.sessionKey` / `QuestionRequest.sessionKey`) — a backgrounded
+  // chat's turn can still hit a gated tool call or AskUserQuestion while another
+  // chat is on screen, and its card must stay attached to ITS chat rather than
+  // rendering wherever the user happens to be looking. ChatPanel is mounted once
+  // for the whole app, so this filter is what keeps the two from crossing.
+  const pending = useMemo(
+    () => allPending.filter((p) => p.sessionKey === activeChatKey),
+    [allPending, activeChatKey],
+  );
+  const questions = useMemo(
+    () => allQuestions.filter((q) => q.sessionKey === activeChatKey),
+    [allQuestions, activeChatKey],
+  );
   const input = useComposerDrafts((s) => draftText(s, activeChatKey));
   const attachments = useComposerDrafts((s) => draftAttachments(s, activeChatKey));
   // `useState`-shaped setters (value or updater) so every call site below reads

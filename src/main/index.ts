@@ -8,17 +8,23 @@ import {
   nativeImage,
   nativeTheme,
   powerMonitor,
+  session,
   shell,
   WebContentsView,
   webContents
 } from 'electron'
 import { join } from 'path'
-import type {
-  MoveNodeRequest,
-  RecentMenuEntry,
-  SelectedElement,
-  StyleReadResult
-} from '../shared/api'
+import type { RecentMenuEntry } from '../shared/api'
+// Channel names for the main ⇄ preview-preload conversation. Declared once in
+// shared/ and imported by both ends — see the header there.
+import {
+  LAYERS_SET_WATCH,
+  PREVIEW_SET_COMMENT_MODE,
+  PREVIEW_SET_FRAME,
+  PREVIEW_SET_MODE,
+  PREVIEW_SET_PINS,
+  PREVIEW_SET_STATUS
+} from '../shared/preview-channels'
 import { registerAgentIpc } from './agent'
 import { registerAnnotationsIpc } from './annotations'
 import { registerControlsIpc } from './control-panels'
@@ -30,8 +36,7 @@ import { listProjectFiles } from './file-tree'
 import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
 import { registerGithubIpc } from './github'
 import { registerMediaProtocol, registerMediaScheme } from './media'
-import { applyMoveNode } from './move-node'
-import { registerPreviewSource } from './preview-state'
+import { type PreviewIpcHost, type PreviewState, registerPreviewIpc } from './preview-ipc'
 import { readProjectIcon } from './project-icon'
 import { registerPropsIpc } from './props'
 import { createProject } from './scaffold'
@@ -119,60 +124,37 @@ if (!app.requestSingleInstanceLock()) {
   })
 }
 
+// Session partition for the previewed app — see previewSession() below. Never
+// the default session (which the trusted Praxis windows use).
+const PREVIEW_PARTITION = 'persist:praxis-preview'
+
 let previewView: WebContentsView | null = null
-let previewUrl: string | null = null
-let previewRetries = 0
-// v2 select mode: tracked here so it survives preview navigations (the injected
-// preload re-runs fresh on each load and must be re-armed).
-let selectModeActive = false
-let commentModeActive: 'comment' | 'annotate' | null = null
-// Mobile viewport: draw the iPhone bezel INSIDE the preview page (pointer-events
-// none) so it overlays the app's screen corners yet passes clicks/selection through.
-let frameModeActive = false
-// Layers panel: whether the renderer wants the preload's MutationObserver armed.
-// Same lifecycle as the flags above — preload-local state that dies on every
-// fresh injection, re-armed on did-finish-load below.
-let layersWatchActive = false
-// Channels mirrored in src/preview/preload.ts (the injected preview preload).
-const PREVIEW_SET_MODE = 'praxis:preview:set-select-mode'
-const PREVIEW_PICKED = 'praxis:preview:element-picked'
-const PREVIEW_CANCELLED = 'praxis:preview:select-cancelled'
-const PREVIEW_SET_PINS = 'praxis:preview:set-annotations'
-const PREVIEW_PIN_CLICK = 'praxis:preview:pin-click'
-const PREVIEW_READINESS = 'praxis:preview:readiness'
-const PREVIEW_TEXT_EDIT = 'praxis:preview:text-edit'
-const PREVIEW_SET_COMMENT_MODE = 'praxis:preview:set-comment-mode'
-const PREVIEW_COMMENT_MODE = 'praxis:preview:comment-mode'
-const PREVIEW_COMMENT = 'praxis:preview:comment'
-const PREVIEW_SET_FRAME = 'praxis:preview:set-frame'
-const PREVIEW_TOOLBAR_ACTION = 'praxis:preview:toolbar-action'
-const PREVIEW_CLEAR_SELECTED = 'praxis:preview:clear-selected'
-const PREVIEW_SET_STATUS = 'praxis:preview:set-status'
-const PREVIEW_TOGGLE_SELECT = 'praxis:preview:toggle-select'
-const LAYERS_READ = 'layers:read'
-const LAYERS_READ_REPLY = 'layers:read-reply'
-const LAYERS_CHANGED = 'layers:changed'
-const LAYERS_SELECT = 'layers:select'
-const LAYERS_HOVER = 'layers:hover'
-const LAYERS_SET_WATCH = 'layers:set-watch'
 
-// Launch-status pill text (shown inside the preview); re-pushed after loads.
-let previewStatusText: string | null = null
-
-// Latest annotation pins, re-pushed to the preview after each navigation.
-let annotationPins: { id: string; selector: string }[] = []
-
-// Renderer's last-reported preview slot rect. Module-scope (not local to
-// registerPreviewIpc) so resetStalePreview can zero it too.
-let lastPreviewBounds = { x: 0, y: 0, width: 0, height: 0, radius: 0 }
-
-// The renderer asked the native preview hidden (split-drag, or the freeze-frame
-// path under an overlay that must paint above it — dropdowns, the session-review
-// modal). While set, a completing preview:load must NOT unhide the view: native
-// views always paint over DOM, so it would punch straight through the open
-// overlay (e.g. a project launch finishing while the user reads a past chat).
-// Visibility returns when the renderer releases the hide (set-dragging false).
-let previewHiddenByRenderer = false
+/**
+ * Preview state shared with preview-ipc.ts (which owns the handlers that write
+ * most of it). It lives out here because the VIEW lives out here: the
+ * did-fail-load retry, the did-finish-load re-arm and resetStalePreview all
+ * read it. Notably:
+ *
+ * - `selectMode`/`commentMode`/`frameMode`/`layersWatch`/`pins`/`statusText`
+ *   are preload-local state that dies on every navigation (the injected preload
+ *   re-runs fresh), so they're remembered here and re-pushed on did-finish-load.
+ * - `hiddenByRenderer` is a split-drag or freeze-frame overlay asking the native
+ *   view to stay hidden; a completing preview:load must not override it, or the
+ *   native view punches straight through the open overlay.
+ */
+const preview: PreviewState = {
+  url: null,
+  retries: 0,
+  bounds: { x: 0, y: 0, width: 0, height: 0, radius: 0 },
+  hiddenByRenderer: false,
+  selectMode: false,
+  commentMode: null,
+  frameMode: false,
+  layersWatch: false,
+  statusText: null,
+  pins: []
+}
 
 // Chromium error codes worth retrying — the dev server is up but not yet serving.
 const TRANSIENT_LOAD_ERRORS = new Set([-324, -102, -101, -105, -106, -109])
@@ -223,6 +205,50 @@ function isLocalPreviewUrl(url: string): boolean {
   } catch {
     return false
   }
+}
+
+/** http(s) origin of a URL, or null for anything else (data:, about:, malformed). */
+function webOrigin(url: string | null): string | null {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Page-initiated navigation policy for the preview (will-navigate + will-redirect).
+ *
+ * Only the origin main itself put there is allowed. "Any localhost port" is NOT
+ * good enough: the previewed page is untrusted content, and our preload — which
+ * can select elements, read styles and post them back over IPC — rides along
+ * into whatever it navigates to. Steering it at a sibling local service (another
+ * project's dev server, a database admin UI, an OAuth callback listener) would
+ * hand that service's DOM to the same machinery. Main drives every legitimate
+ * change of origin through `preview:load`, and a programmatic `loadURL` does not
+ * fire will-navigate, so pinning costs us nothing.
+ */
+function isAllowedPreviewNavigation(url: string): boolean {
+  const pinned = webOrigin(preview.url)
+  return pinned !== null && webOrigin(url) === pinned
+}
+
+/**
+ * The previewed app runs in its OWN session, never the app's default one.
+ * Permission grants, service workers, cache and storage therefore can't cross
+ * the trust boundary between the user's project and Praxis's own windows. The
+ * partition is persistent so a project's localStorage/cookies survive a restart
+ * the way they would in a browser. Deny-by-default on permissions: a
+ * live-preview pane needs no camera, mic, geolocation, notifications or
+ * clipboard-read, and the request never reaches a user who could judge it.
+ */
+function previewSession(): Electron.Session {
+  const s = session.fromPartition(PREVIEW_PARTITION)
+  s.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+  s.setPermissionCheckHandler(() => false)
+  return s
 }
 
 /** Open a URL in the user's browser, but only for safe web/mail schemes. */
@@ -452,7 +478,6 @@ function buildAppMenu(): void {
 // (= above) the preview, running the same renderer bundle with ?praxisPanel=1 —
 // that entry renders just the PropPanel and syncs state/actions over panel:*.
 let panelView: WebContentsView | null = null
-let panelState: unknown = null
 
 function ensurePanelView(): WebContentsView {
   if (panelView) return panelView
@@ -488,6 +513,9 @@ function ensurePreviewView(): WebContentsView {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // Untrusted content gets its own session, with every browser permission
+      // denied (preload injection is unaffected — it's per-webPreferences).
+      session: previewSession(),
       // Inject the select-mode overlay into the previewed app.
       preload: join(__dirname, '../preload/preview.js')
     }
@@ -505,7 +533,7 @@ function ensurePreviewView(): WebContentsView {
   // DevTools (so the user can inspect their web app's DOM + console). Only for a
   // real web preview, not the placeholder or the simulator's streamed frame.
   wc.on('context-menu', (_e, params) => {
-    if (!previewUrl || !/^https?:/.test(previewUrl)) return
+    if (!preview.url || !/^https?:/.test(preview.url)) return
     // Always open DevTools DETACHED (its own window). The preview is a child
     // WebContentsView, so a docked panel crams itself into the view's bounds —
     // tiny and clipped, especially in the mobile (390px) viewport.
@@ -531,43 +559,51 @@ function ensurePreviewView(): WebContentsView {
     if (!isLocalPreviewUrl(url)) openExternalSafe(url)
     return { action: 'deny' }
   })
-  wc.on('will-navigate', (e, url) => {
-    if (isLocalPreviewUrl(url)) return
-    // A page-initiated data:/blob: navigation would replace the preview with
-    // attacker HTML that still has our preload injected — block it outright.
+  // Page-initiated navigation, both flavours: `will-navigate` covers the click /
+  // location-assign, `will-redirect` the server-driven 3xx it can turn into —
+  // which does NOT re-fire will-navigate, so guarding only the first leaves a
+  // one-hop redirect (`<a href="/go">` → 302 to anywhere) as a way around it.
+  const guardNavigation = (e: Electron.Event, url: string): void => {
+    if (isAllowedPreviewNavigation(url)) return
+    // Anything else — another origin, another local port, or a page-initiated
+    // data:/blob: URL that would replace the preview with attacker HTML while
+    // our preload stays injected — is blocked here and, if it's an ordinary web
+    // link, handed to the user's browser instead.
     e.preventDefault()
     openExternalSafe(url)
-  })
+  }
+  wc.on('will-navigate', guardNavigation)
+  wc.on('will-redirect', guardNavigation)
 
   // Retry transient failures: fast while the dev server is coming up, then a
   // slow indefinite poll — a server that dies mid-session (crash, manual kill)
   // can come back minutes later, and the preview must self-heal rather than
   // park on Chromium's error page until the project is reopened. Only fires
-  // for the current previewUrl, so an idle/placeholder view never polls.
+  // for the current preview.url, so an idle/placeholder view never polls.
   wc.on('did-fail-load', (_e, errorCode, _desc, validatedURL, isMainFrame) => {
-    if (!isMainFrame || !previewUrl || !sameUrl(validatedURL, previewUrl)) return
+    if (!isMainFrame || !preview.url || !sameUrl(validatedURL, preview.url)) return
     if (!TRANSIENT_LOAD_ERRORS.has(errorCode)) return
-    previewRetries++
-    const delay = previewRetries > 40 ? 3000 : 400
-    setTimeout(() => previewUrl && previewView?.webContents.loadURL(previewUrl), delay)
+    preview.retries++
+    const delay = preview.retries > 40 ? 3000 : 400
+    setTimeout(() => preview.url && previewView?.webContents.loadURL(preview.url), delay)
   })
 
   // Once the intended URL loads, reset the budget so it's per-outage not per-session.
   // The preload re-ran on this fresh page, so re-arm select mode if it was on —
   // but only on the real preview page, never the "no project" placeholder.
   wc.on('did-finish-load', () => {
-    if (previewUrl && sameUrl(wc.getURL(), previewUrl)) {
-      previewRetries = 0
-      if (selectModeActive) wc.send(PREVIEW_SET_MODE, true)
-      if (commentModeActive) wc.send(PREVIEW_SET_COMMENT_MODE, commentModeActive)
-      if (frameModeActive) wc.send(PREVIEW_SET_FRAME, true)
-      if (layersWatchActive) wc.send(LAYERS_SET_WATCH, true)
+    if (preview.url && sameUrl(wc.getURL(), preview.url)) {
+      preview.retries = 0
+      if (preview.selectMode) wc.send(PREVIEW_SET_MODE, true)
+      if (preview.commentMode) wc.send(PREVIEW_SET_COMMENT_MODE, preview.commentMode)
+      if (preview.frameMode) wc.send(PREVIEW_SET_FRAME, true)
+      if (preview.layersWatch) wc.send(LAYERS_SET_WATCH, true)
       // Only re-send pins when there are some — an empty push would make the
       // preload build (and inject) the overlay host for nothing.
-      if (annotationPins.length) wc.send(PREVIEW_SET_PINS, annotationPins)
+      if (preview.pins.length) wc.send(PREVIEW_SET_PINS, preview.pins)
     }
     // The launch-status pill must survive placeholder (re)loads mid-launch.
-    if (previewStatusText) wc.send(PREVIEW_SET_STATUS, previewStatusText)
+    if (preview.statusText) wc.send(PREVIEW_SET_STATUS, preview.statusText)
   })
 
   // Keep the renderer's URL bar in sync with where the preview actually is
@@ -591,7 +627,7 @@ function ensurePreviewView(): WebContentsView {
  * (which normally zeros this out) never runs across a hard navigation, so a
  * fresh renderer would otherwise boot on the Welcome screen with a stale
  * preview floating on top of it. Deliberately does NOT load the placeholder URL
- * or clear `previewUrl` — the page stays warm so a reattaching renderer's
+ * or clear `preview.url` — the page stays warm so a reattaching renderer's
  * `preview:load` (which already does `setVisible(true)`) comes back instantly
  * instead of a fresh navigation. Guarded with `previewView?.` so the very first
  * window load (before the preview view exists) is a no-op.
@@ -599,17 +635,35 @@ function ensurePreviewView(): WebContentsView {
 function resetStalePreview(): void {
   previewView?.setVisible(false)
   previewView?.setBounds({ x: 0, y: 0, width: 0, height: 0 })
-  lastPreviewBounds = { x: 0, y: 0, width: 0, height: 0, radius: 0 }
+  preview.bounds = { x: 0, y: 0, width: 0, height: 0, radius: 0 }
   // The overlay that requested a hide died with the old renderer document —
   // don't let its stale intent block the reattaching renderer's preview:load.
-  previewHiddenByRenderer = false
-  // Same flags `preview:reset` clears (index.ts ~484-496) — keeps a stale mode
+  preview.hiddenByRenderer = false
+  // Same flags `preview:reset` clears (preview-ipc.ts) — keeps a stale mode
   // from silently re-arming via did-finish-load once a project reattaches.
-  selectModeActive = false
-  commentModeActive = null
-  frameModeActive = false
-  layersWatchActive = false
-  annotationPins = []
+  preview.selectMode = false
+  preview.commentMode = null
+  preview.frameMode = false
+  preview.layersWatch = false
+  preview.pins = []
+}
+
+/**
+ * What preview-ipc.ts is allowed to reach back into. It owns the HANDLERS; this
+ * module owns the window and the two native views, so everything view-shaped is
+ * an accessor rather than a shared binding — `previewView`/`panelView` are
+ * re-created after a window close, and a captured reference would be a dead one.
+ */
+const previewIpcHost: PreviewIpcHost = {
+  state: preview,
+  ensurePreviewView,
+  getPreviewView: () => previewView,
+  ensurePanelView,
+  getPanelView: () => panelView,
+  getMainWindow: () => mainWindow,
+  sendToMain,
+  isLocalPreviewUrl,
+  placeholderUrl: PLACEHOLDER_HTML
 }
 
 function createWindow(): void {
@@ -656,17 +710,6 @@ function createWindow(): void {
   // material is visible — and a main-side setVibrancy can't be ordered against
   // that CSS flip across the process boundary without risking a flash.
 
-  // Keep the native surfaces' base color in step with the OS appearance (the
-  // placeholder HTML re-themes itself via prefers-color-scheme; this handles the
-  // solid fill behind it and the window).
-  nativeTheme.on('updated', () => {
-    const bg = previewBg()
-    // Not on macOS — an opaque window background would paint over the
-    // under-page vibrancy material (the window has none to update there).
-    if (process.platform !== 'darwin') mainWindow?.setBackgroundColor(bg)
-    previewView?.setBackgroundColor(bg)
-  })
-
   // Open external links in the user's browser, never in-app.
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -710,8 +753,8 @@ function createWindow(): void {
     mainWindow = null
     previewView = null
     panelView = null
-    previewUrl = null
-    lastPreviewBounds = { x: 0, y: 0, width: 0, height: 0, radius: 0 }
+    preview.url = null
+    preview.bounds = { x: 0, y: 0, width: 0, height: 0, radius: 0 }
   })
 
   loadRenderer()
@@ -795,363 +838,11 @@ function registerEditorIpc(): void {
   })
 }
 
-function registerPreviewIpc(): void {
-  // Let the in-process agent tools (backends/claude.ts) observe the user's live
-  // preview without importing this module (would be a cycle). getUrl reports the
-  // preview's CURRENT location (SPA navigations included) but null for the
-  // placeholder/empty state; capture snapshots the current frame.
-  registerPreviewSource({
-    getUrl: () => {
-      const url = previewView?.webContents.getURL()
-      return url && /^https?:/.test(url) ? url : null
-    },
-    capture: async () => (await previewView?.webContents.capturePage()) ?? null
-  })
-
-  // Apply the renderer's slot rect (PreviewPane already lays out around the
-  // floating prop panel's strip, viewport-aware).
-  const applyBounds = (): void => {
-    const view = ensurePreviewView()
-    view.setBounds({
-      x: Math.round(lastPreviewBounds.x),
-      y: Math.round(lastPreviewBounds.y),
-      width: Math.max(0, Math.round(lastPreviewBounds.width)),
-      height: Math.round(lastPreviewBounds.height)
-    })
-    // Round the native view's corners: the card's inner radius in desktop
-    // viewport, the iPhone screen's in mobile (both supplied by the renderer).
-    view.setBorderRadius(Math.round(lastPreviewBounds.radius || 0))
-  }
-
-  // Renderer reports where the preview rectangle is, in CSS pixels (== DIP).
-  ipcMain.on(
-    'preview:set-bounds',
-    (
-      _e,
-      bounds: {
-        x: number
-        y: number
-        width: number
-        height: number
-        radius?: number
-      }
-    ) => {
-      lastPreviewBounds = { ...bounds, radius: bounds.radius ?? 0 }
-      applyBounds()
-    }
-  )
-
-  // Mobile viewport toggles the in-page iPhone bezel overlay (click pass-through).
-  ipcMain.on('preview:set-frame', (_e, active: boolean) => {
-    frameModeActive = !!active
-    previewView?.webContents.send(PREVIEW_SET_FRAME, frameModeActive)
-  })
-
-  ipcMain.handle('preview:load', (_e, url: string) => {
-    if (!isLocalPreviewUrl(url)) return
-    previewUrl = url
-    previewRetries = 0
-    const view = ensurePreviewView()
-    // Recover from any LEAKED hide (a renderer bug) — a fresh load should be
-    // visible. But an ACTIVE hide (previewHiddenByRenderer: the review modal /
-    // a dropdown's freeze-frame is up) must win, or a load completing under it
-    // pops the native view over the open overlay; set-dragging(false) restores
-    // visibility when the overlay closes.
-    if (!previewHiddenByRenderer) view.setVisible(true)
-    view.webContents.loadURL(url)
-  })
-
-  ipcMain.handle('preview:reset', () => {
-    previewUrl = null
-    previewRetries = 0
-    // No app to select in on the placeholder — keep main's flags honest so none
-    // of them silently re-arm the overlay/frame/pins on a later load (the
-    // did-finish-load re-arm above reads these). PreviewPane re-reports the
-    // frame on the next open, so zeroing it here is safe. (Renderer disarms too.)
-    selectModeActive = false
-    commentModeActive = null
-    frameModeActive = false
-    layersWatchActive = false
-    annotationPins = []
-    ensurePreviewView().webContents.loadURL(PLACEHOLDER_HTML)
-  })
-
-  // Hide the native view during a split-drag (renderer keeps mouse events) or
-  // under a freeze-frame overlay; remember the intent so preview:load respects it.
-  ipcMain.on('preview:set-dragging', (_e, active: boolean) => {
-    previewHiddenByRenderer = active
-    previewView?.setVisible(!active)
-  })
-
-  // Freeze-frame support: snapshot the live preview so renderer UI (e.g. the
-  // branch dropdown) can overlay a pixel-identical <img> while the native view
-  // hides beneath it — the preview appears to stay put, but the DOM wins.
-  ipcMain.handle('preview:capture', async (): Promise<string | null> => {
-    try {
-      const img = await previewView?.webContents.capturePage()
-      return img && !img.isEmpty() ? img.toDataURL() : null
-    } catch {
-      return null
-    }
-  })
-
-  // v2 select mode: renderer → preview (arm/disarm the overlay).
-  ipcMain.handle('preview:set-select-mode', (_e, active: boolean) => {
-    selectModeActive = active
-    if (active) commentModeActive = null // mutually exclusive with comment/annotate
-    previewView?.webContents.send(PREVIEW_SET_MODE, active)
-  })
-
-  // preview → renderer relays. Only trust events from the preview's webContents.
-  ipcMain.on(PREVIEW_PICKED, (e, el: SelectedElement) => {
-    if (e.sender !== previewView?.webContents) return
-    sendToMain('preview:element-picked', el)
-  })
-  ipcMain.on(PREVIEW_CANCELLED, (e) => {
-    if (e.sender !== previewView?.webContents) return
-    selectModeActive = false
-    sendToMain('preview:select-cancelled')
-  })
-
-  // Selection-toolbar actions that need the renderer (code drawer / delete turn);
-  // comment/annotate are handled entirely inside the preview's composer.
-  ipcMain.on(PREVIEW_TOOLBAR_ACTION, (e, kind: string) => {
-    if (e.sender !== previewView?.webContents) return
-    if (kind !== 'code' && kind !== 'delete' && kind !== 'props') return
-    sendToMain('preview:toolbar-action', kind)
-  })
-  // Renderer dropped the selection (pill ×, message sent) → hide the toolbar.
-  ipcMain.on('preview:clear-selected', () => {
-    previewView?.webContents.send(PREVIEW_CLEAR_SELECTED)
-  })
-
-  // S pressed while the preview has focus → the renderer runs its toggle.
-  ipcMain.on(PREVIEW_TOGGLE_SELECT, (e) => {
-    if (e.sender !== previewView?.webContents) return
-    sendToMain('preview:toggle-select')
-  })
-
-  // Launch progress, drawn INSIDE the preview (bottom-center pill) instead of a
-  // window-top banner. null clears it.
-  ipcMain.on('preview:set-status', (_e, text: string | null) => {
-    previewStatusText = typeof text === 'string' && text.trim() ? text.slice(0, 300) : null
-    previewView?.webContents.send(PREVIEW_SET_STATUS, previewStatusText)
-  })
-
-  // ── Floating prop-panel plumbing (renderer ⇄ panel view, via main) ──────────
-  const fromMainWindow = (e: Electron.IpcMainEvent): boolean => e.sender === mainWindow?.webContents
-  ipcMain.on('panel:show', (e, b: { x: number; y: number; width: number; height: number }) => {
-    if (!fromMainWindow(e)) return
-    const v = ensurePanelView()
-    v.setBounds({
-      x: Math.round(b.x),
-      y: Math.round(b.y),
-      width: Math.max(0, Math.round(b.width)),
-      height: Math.max(0, Math.round(b.height))
-    })
-    v.setVisible(true)
-  })
-  ipcMain.on('panel:hide', (e) => {
-    if (!fromMainWindow(e)) return
-    panelView?.setVisible(false)
-  })
-  ipcMain.on('panel:state', (e, state: unknown) => {
-    if (!fromMainWindow(e)) return
-    panelState = state
-    panelView?.webContents.send('panel:state', state)
-  })
-  // Island → "I'm listening, send me what you have". The first setState always
-  // predates the view (show creates it), so without this pull the island's very
-  // first render would have nothing to draw. Same channel as the pushes, so the
-  // reply can never overtake a newer state.
-  ipcMain.on('panel:request-state', (e) => {
-    if (e.sender !== panelView?.webContents) return
-    if (panelState) e.sender.send('panel:state', panelState)
-  })
-  // Panel → main renderer: user actions (close/dock/seed/…) and content height.
-  ipcMain.on('panel:action', (e, action: unknown) => {
-    if (e.sender !== panelView?.webContents) return
-    sendToMain('panel:action', action)
-  })
-  ipcMain.on('panel:size', (e, size: { width: number; height: number }) => {
-    if (e.sender !== panelView?.webContents) return
-    sendToMain('panel:size', size)
-  })
-
-  // ── Styles tab: live-injection relays + computed-style reads (v10) ──────────
-  // The style controls live in the island (panelView), but the main renderer may
-  // also drive them — accept either sender, relay into the preview's preload.
-  const fromMainOrPanel = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
-    e.sender === mainWindow?.webContents || e.sender === panelView?.webContents
-  ipcMain.on('styles:preview', (e, p: { prop: string; value: string }) => {
-    if (!fromMainOrPanel(e)) return
-    previewView?.webContents.send('styles:preview', p)
-  })
-  ipcMain.on('styles:clear-preview', (e, p?: { prop?: string }) => {
-    if (!fromMainOrPanel(e)) return
-    previewView?.webContents.send('styles:clear-preview', p)
-  })
-  ipcMain.on('styles:replay', (e, p: { prop: string; from: string; to: string }) => {
-    if (!fromMainOrPanel(e)) return
-    previewView?.webContents.send('styles:replay', p)
-  })
-
-  // Fresh computed values from the selection. The preview preload is sandboxed
-  // (no contextBridge; executeJavaScript can't reach its isolated world), so
-  // reads are a request-id round trip over IPC: send `styles:read` {id, props},
-  // await the matching `styles:read-reply` {id, values, declaredVars}. A 500ms
-  // timeout guards a dead/navigating preview — null means no preview / no
-  // selection / timeout. `declaredVars` is the proof half (see
-  // `preview/style-provenance.ts`) that lets the panel tell a property's value
-  // IS a token from it merely equalling one.
-  let styleReadSeq = 0
-  const pendingStyleReads = new Map<number, (result: StyleReadResult | null) => void>()
-  ipcMain.on(
-    'styles:read-reply',
-    (
-      e,
-      p: {
-        id?: unknown
-        values?: Record<string, string> | null
-        declaredVars?: Record<string, string | null> | null
-        specified?: Record<string, string> | null
-      }
-    ) => {
-      if (e.sender !== previewView?.webContents) return
-      const resolve = typeof p?.id === 'number' ? pendingStyleReads.get(p.id) : undefined
-      resolve?.(
-        p.values
-          ? { values: p.values, declaredVars: p.declaredVars ?? {}, specified: p.specified ?? {} }
-          : null
-      )
-    }
-  )
-  ipcMain.handle(
-    'styles:read',
-    (e, props: string[]): Promise<StyleReadResult | null> | null => {
-      if (!fromMainOrPanel(e) || !previewView || !Array.isArray(props)) return null
-      const id = ++styleReadSeq
-      return new Promise((resolve) => {
-        const timer = setTimeout(() => {
-          pendingStyleReads.delete(id)
-          resolve(null)
-        }, 500)
-        pendingStyleReads.set(id, (result) => {
-          clearTimeout(timer)
-          pendingStyleReads.delete(id)
-          resolve(result)
-        })
-        previewView?.webContents.send('styles:read', { id, props })
-      })
-    }
-  )
-
-  // v3 annotation pins: renderer pushes the list → preview; clicks come back.
-  ipcMain.on('preview:set-annotations', (_e, pins: { id: string; selector: string }[]) => {
-    annotationPins = Array.isArray(pins) ? pins : []
-    previewView?.webContents.send(PREVIEW_SET_PINS, annotationPins)
-  })
-  ipcMain.on(PREVIEW_PIN_CLICK, (e, id: string) => {
-    if (e.sender !== previewView?.webContents) return
-    sendToMain('annotations:pin-click', id)
-  })
-
-  // Readiness probe (stamp count) → renderer, to drive the setup offer.
-  ipcMain.on(PREVIEW_READINESS, (e, info: { stamps: number }) => {
-    if (e.sender !== previewView?.webContents) return
-    sendToMain('preview:readiness', info)
-  })
-
-  // Inline text edit committed in the preview → renderer (which applies it).
-  ipcMain.on(PREVIEW_TEXT_EDIT, (e, edit: { source: string; text: string }) => {
-    if (e.sender !== previewView?.webContents) return
-    sendToMain('preview:text-edit', edit)
-  })
-
-  // Inline commenting (C/Y): renderer arms the mode → preview.
-  ipcMain.handle('preview:set-comment-mode', (_e, mode: 'comment' | 'annotate' | null) => {
-    commentModeActive = mode
-    if (mode) selectModeActive = false // mutually exclusive with select
-    previewView?.webContents.send(PREVIEW_SET_COMMENT_MODE, mode)
-  })
-  // Preview echoes keyboard-initiated mode changes → renderer (toolbar mirror).
-  ipcMain.on(PREVIEW_COMMENT_MODE, (e, mode: 'comment' | 'annotate' | null) => {
-    if (e.sender !== previewView?.webContents) return
-    commentModeActive = mode
-    sendToMain('preview:comment-mode', mode)
-  })
-  // A submitted comment/annotation (element + text) → renderer (agent vs pin).
-  ipcMain.on(
-    PREVIEW_COMMENT,
-    (
-      e,
-      payload: {
-        kind: 'comment' | 'annotate'
-        el: SelectedElement
-        text: string
-      }
-    ) => {
-      if (e.sender !== previewView?.webContents) return
-      sendToMain('preview:comment', payload)
-    }
-  )
-
-  // ── Layers panel ─────────────────────────────────────────────────────────
-  const fromMainForLayers = (e: Electron.IpcMainEvent | Electron.IpcMainInvokeEvent): boolean =>
-    e.sender === mainWindow?.webContents
-
-  // Bulk DOM-tree read: request-id round trip, same shape as styles:read — the
-  // preview preload is sandboxed, so a bulk read of its isolated world can only
-  // ever be this kind of message-passing round trip, never executeJavaScript.
-  let layersReadSeq = 0
-  const pendingLayersReads = new Map<number, (snapshot: unknown) => void>()
-  ipcMain.on(LAYERS_READ_REPLY, (e, p: { id?: unknown; snapshot?: unknown }) => {
-    if (e.sender !== previewView?.webContents) return
-    const resolve = typeof p?.id === 'number' ? pendingLayersReads.get(p.id) : undefined
-    resolve?.(p?.snapshot ?? null)
-  })
-  ipcMain.handle('layers:read', (e): Promise<unknown> | null => {
-    if (!fromMainForLayers(e) || !previewView) return null
-    const id = ++layersReadSeq
-    return new Promise((resolve) => {
-      const timer = setTimeout(() => {
-        pendingLayersReads.delete(id)
-        resolve(null)
-      }, 800)
-      pendingLayersReads.set(id, (snapshot) => {
-        clearTimeout(timer)
-        pendingLayersReads.delete(id)
-        resolve(snapshot)
-      })
-      previewView?.webContents.send(LAYERS_READ, { id })
-    })
-  })
-  ipcMain.on('layers:select', (e, p: { path: number[]; fingerprint: unknown }) => {
-    if (!fromMainForLayers(e)) return
-    previewView?.webContents.send(LAYERS_SELECT, p)
-  })
-  ipcMain.on('layers:hover', (e, p: { path: number[]; fingerprint: unknown } | null) => {
-    if (!fromMainForLayers(e)) return
-    previewView?.webContents.send(LAYERS_HOVER, p)
-  })
-  ipcMain.on('layers:set-watch', (e, on: boolean) => {
-    if (!fromMainForLayers(e)) return
-    layersWatchActive = !!on
-    previewView?.webContents.send(LAYERS_SET_WATCH, layersWatchActive)
-  })
-  // Debounced structural-change ping from the preload → renderer (the renderer
-  // decides whether/when to re-`layers:read`).
-  ipcMain.on(LAYERS_CHANGED, (e) => {
-    if (e.sender !== previewView?.webContents) return
-    sendToMain('layers:changed')
-  })
-  // Drag-to-reorder: writes real source for a same-parent sibling move;
-  // anything ambiguous reports `needsAgent` instead (see move-node.ts).
-  ipcMain.handle('layers:move', (e, root: string, req: MoveNodeRequest) => {
-    if (!fromMainForLayers(e)) return null
-    return applyMoveNode(root, req)
-  })
-
+/**
+ * Project pickers + the per-project favicon. Not preview plumbing (that lives in
+ * preview-ipc.ts) — these need the main WINDOW, to parent their native dialogs.
+ */
+function registerProjectIpc(): void {
   ipcMain.handle('project:pick', async (): Promise<string | null> => {
     if (!mainWindow) return null
     const res = await dialog.showOpenDialog(mainWindow, {
@@ -1213,6 +904,19 @@ app.whenReady().then(() => {
     const wc = mainWindow?.webContents
     if (wc && !wc.isDestroyed()) wc.invalidate()
   })
+  // Keep the native surfaces' base color in step with the OS appearance (the
+  // placeholder HTML re-themes itself via prefers-color-scheme; this handles the
+  // solid fill behind it and the window). Registered ONCE here, not in
+  // createWindow — that runs again on every macOS dock re-activate, which would
+  // stack a duplicate listener per reopen. Nothing here is per-window: both
+  // targets are read from the module-level vars at fire time.
+  nativeTheme.on('updated', () => {
+    const bg = previewBg()
+    // Not on macOS — an opaque window background would paint over the
+    // under-page vibrancy material (the window has none to update there).
+    if (process.platform !== 'darwin') mainWindow?.setBackgroundColor(bg)
+    previewView?.setBackgroundColor(bg)
+  })
   // File → Open Recent is driven by the renderer's recents store: it pushes the
   // current list, we cap at 8 and rebuild the menu.
   ipcMain.on('menu:set-recents', (_e, recents: RecentMenuEntry[]) => {
@@ -1232,7 +936,8 @@ app.whenReady().then(() => {
     if (cmd === 'undo') mainWindow.webContents.undo()
     else if (cmd === 'redo') mainWindow.webContents.redo()
   })
-  registerPreviewIpc()
+  registerPreviewIpc(previewIpcHost)
+  registerProjectIpc()
   registerEditorIpc()
   registerDevServerIpc(() => mainWindow)
   registerSimulatorIpc(() => mainWindow)
