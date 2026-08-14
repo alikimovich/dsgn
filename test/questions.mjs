@@ -37,6 +37,7 @@ try {
   await win.evaluate(() => {
     window.__praxisQuestions.getState().addRequest({
       id: 'q_single',
+      sessionKey: window.__praxisStore.getState().activeKey,
       questions: [
         {
           header: 'Approach',
@@ -70,6 +71,7 @@ try {
   await win.evaluate(() => {
     window.__praxisQuestions.getState().addRequest({
       id: 'q_multi',
+      sessionKey: window.__praxisStore.getState().activeKey,
       questions: [
         {
           header: 'Features',
@@ -101,6 +103,7 @@ try {
   await win.evaluate(() => {
     window.__praxisQuestions.getState().addRequest({
       id: 'q_skip',
+      sessionKey: window.__praxisStore.getState().activeKey,
       questions: [
         {
           header: 'Style',
@@ -123,6 +126,7 @@ try {
   await win.evaluate(() => {
     window.__praxisQuestions.getState().addRequest({
       id: 'q_resolved',
+      sessionKey: window.__praxisStore.getState().activeKey,
       questions: [
         {
           header: 'Copy',
@@ -151,6 +155,7 @@ try {
   await win.evaluate(() => {
     window.__praxisQuestions.getState().addRequest({
       id: 'q_wizard',
+      sessionKey: window.__praxisStore.getState().activeKey,
       questions: [
         {
           header: 'Layout',

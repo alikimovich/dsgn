@@ -470,6 +470,25 @@ async function pumpQueue(parentKey: string): Promise<void> {
   }
 }
 
+/** Which live session (any project, active or backgrounded) is holding this
+ *  pending permission id? A backgrounded chat keeps streaming/prompting while
+ *  the renderer shows a different project, so the id can't be assumed to
+ *  belong to `activeSession()`. */
+function findSessionWithPending(id: string): ProviderSession | undefined {
+  for (const s of sessions.values()) {
+    if (s.pending.has(id)) return s
+  }
+  return undefined
+}
+
+/** Same lookup, for a pending AskUserQuestion id. */
+function findSessionWithQuestion(id: string): ProviderSession | undefined {
+  for (const s of sessions.values()) {
+    if (s.pendingQuestions?.has(id)) return s
+  }
+  return undefined
+}
+
 /** Settle a pending prompt and tell the renderer to drop its card. */
 function resolvePending(s: ProviderSession, id: string, behavior: 'allow' | 'deny'): void {
   const p = s.pending.get(id)
@@ -902,8 +921,14 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     }
   })
 
+  // A permission card can belong to a BACKGROUNDED chat (its turn kept running
+  // while the user switched away) — the renderer now shows every live session's
+  // cards, not just the active one's, so the id must be looked up across ALL
+  // sessions rather than just `activeSession()`. Falling back to the active
+  // session first is a cheap common-case shortcut; the full scan below is the
+  // actual fix (a session backing a stale id silently no-ops in resolvePending).
   ipcMain.handle('agent:respond-permission', async (_e, id: string, behavior: 'allow' | 'deny') => {
-    const session = activeSession()
+    const session = findSessionWithPending(id)
     if (session) resolvePending(session, id, behavior)
   })
 
@@ -912,7 +937,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
   ipcMain.handle(
     'agent:respond-question',
     async (_e, id: string, answers: QuestionAnswers | null) => {
-      const session = activeSession()
+      const session = findSessionWithQuestion(id)
       if (session) resolveQuestion(session, id, answers)
     }
   )

@@ -182,6 +182,12 @@ export interface QuestionSpec {
 export interface QuestionRequest {
   id: string
   questions: QuestionSpec[]
+  /** The chat session this question belongs to — same value as the emitting
+   *  `AgentEvent.projectKey` (the project's own key for its default chat, or
+   *  `${projectKey}#…` for an additional/resumed chat). Lets the renderer keep
+   *  a backgrounded chat's cards out of whichever chat is on screen, instead of
+   *  a single un-keyed global list. */
+  sessionKey: string
 }
 
 /**
@@ -202,6 +208,8 @@ export interface PermissionRequest {
   displayName?: string
   /** A single-line summary of the most relevant input (path / command / pattern). */
   detail?: string
+  /** The chat session this request belongs to — see `QuestionRequest.sessionKey`. */
+  sessionKey: string
 }
 
 /**

@@ -1183,7 +1183,7 @@ async function startSession(
             return { behavior: 'deny', message: 'Session no longer active.' }
           }
           const id = opts.toolUseID || `${key}:q${++permCounter}`
-          const request: QuestionRequest = { id, questions }
+          const request: QuestionRequest = { id, questions, sessionKey: emitKey }
           return await new Promise((resolve) => {
             const cleanup = (): void => {
               pendingQuestions.delete(id)
@@ -1242,7 +1242,8 @@ async function startSession(
           toolName,
           title: opts.title || `Allow ${toolName}?`,
           ...(opts.displayName ? { displayName: opts.displayName } : {}),
-          ...(toolDetail(toolName, toolInput) ? { detail: toolDetail(toolName, toolInput)! } : {})
+          ...(toolDetail(toolName, toolInput) ? { detail: toolDetail(toolName, toolInput)! } : {}),
+          sessionKey: emitKey
         }
         return await new Promise((resolve) => {
           const cleanup = (): void => {
