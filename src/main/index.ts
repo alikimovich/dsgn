@@ -8,6 +8,7 @@ import {
   nativeImage,
   nativeTheme,
   powerMonitor,
+  session,
   shell,
   WebContentsView,
   webContents
@@ -119,6 +120,10 @@ if (!app.requestSingleInstanceLock()) {
   })
 }
 
+// Session partition for the previewed app — see previewSession() below. Never
+// the default session (which the trusted Praxis windows use).
+const PREVIEW_PARTITION = 'persist:praxis-preview'
+
 let previewView: WebContentsView | null = null
 let previewUrl: string | null = null
 let previewRetries = 0
@@ -223,6 +228,50 @@ function isLocalPreviewUrl(url: string): boolean {
   } catch {
     return false
   }
+}
+
+/** http(s) origin of a URL, or null for anything else (data:, about:, malformed). */
+function webOrigin(url: string | null): string | null {
+  if (!url) return null
+  try {
+    const u = new URL(url)
+    return u.protocol === 'http:' || u.protocol === 'https:' ? u.origin : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Page-initiated navigation policy for the preview (will-navigate + will-redirect).
+ *
+ * Only the origin main itself put there is allowed. "Any localhost port" is NOT
+ * good enough: the previewed page is untrusted content, and our preload — which
+ * can select elements, read styles and post them back over IPC — rides along
+ * into whatever it navigates to. Steering it at a sibling local service (another
+ * project's dev server, a database admin UI, an OAuth callback listener) would
+ * hand that service's DOM to the same machinery. Main drives every legitimate
+ * change of origin through `preview:load`, and a programmatic `loadURL` does not
+ * fire will-navigate, so pinning costs us nothing.
+ */
+function isAllowedPreviewNavigation(url: string): boolean {
+  const pinned = webOrigin(previewUrl)
+  return pinned !== null && webOrigin(url) === pinned
+}
+
+/**
+ * The previewed app runs in its OWN session, never the app's default one.
+ * Permission grants, service workers, cache and storage therefore can't cross
+ * the trust boundary between the user's project and Praxis's own windows. The
+ * partition is persistent so a project's localStorage/cookies survive a restart
+ * the way they would in a browser. Deny-by-default on permissions: a
+ * live-preview pane needs no camera, mic, geolocation, notifications or
+ * clipboard-read, and the request never reaches a user who could judge it.
+ */
+function previewSession(): Electron.Session {
+  const s = session.fromPartition(PREVIEW_PARTITION)
+  s.setPermissionRequestHandler((_wc, _permission, callback) => callback(false))
+  s.setPermissionCheckHandler(() => false)
+  return s
 }
 
 /** Open a URL in the user's browser, but only for safe web/mail schemes. */
@@ -488,6 +537,9 @@ function ensurePreviewView(): WebContentsView {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // Untrusted content gets its own session, with every browser permission
+      // denied (preload injection is unaffected — it's per-webPreferences).
+      session: previewSession(),
       // Inject the select-mode overlay into the previewed app.
       preload: join(__dirname, '../preload/preview.js')
     }
@@ -531,13 +583,21 @@ function ensurePreviewView(): WebContentsView {
     if (!isLocalPreviewUrl(url)) openExternalSafe(url)
     return { action: 'deny' }
   })
-  wc.on('will-navigate', (e, url) => {
-    if (isLocalPreviewUrl(url)) return
-    // A page-initiated data:/blob: navigation would replace the preview with
-    // attacker HTML that still has our preload injected — block it outright.
+  // Page-initiated navigation, both flavours: `will-navigate` covers the click /
+  // location-assign, `will-redirect` the server-driven 3xx it can turn into —
+  // which does NOT re-fire will-navigate, so guarding only the first leaves a
+  // one-hop redirect (`<a href="/go">` → 302 to anywhere) as a way around it.
+  const guardNavigation = (e: Electron.Event, url: string): void => {
+    if (isAllowedPreviewNavigation(url)) return
+    // Anything else — another origin, another local port, or a page-initiated
+    // data:/blob: URL that would replace the preview with attacker HTML while
+    // our preload stays injected — is blocked here and, if it's an ordinary web
+    // link, handed to the user's browser instead.
     e.preventDefault()
     openExternalSafe(url)
-  })
+  }
+  wc.on('will-navigate', guardNavigation)
+  wc.on('will-redirect', guardNavigation)
 
   // Retry transient failures: fast while the dev server is coming up, then a
   // slow indefinite poll — a server that dies mid-session (crash, manual kill)
