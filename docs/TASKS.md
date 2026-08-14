@@ -10,6 +10,34 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Architecture + security review fixes (2026-08-14, user-requested) — SHIPPED
+
+- [x] **Preview hardening.** ✅ 2026-08-14 — untrusted preview moved to its own
+      `persist:praxis-preview` partition with deny-all permission handlers;
+      `will-redirect` guarded like `will-navigate`; navigation pinned to the
+      loaded dev-server origin (was: any localhost port); `shell:true`
+      invariants documented at both spawn sites. See PROGRESS 2026-08-14.
+- [x] **Background chats' permission/question cards were dead.** ✅ 2026-08-14 —
+      cards now carry `sessionKey` and render only in their own chat; main
+      resolves responses across ALL sessions instead of only the active one.
+- [x] **Cross-boundary mirrors made single-source.** ✅ 2026-08-14 — layer types
+      import from `shared/api.ts`; preview channel names in
+      `shared/preview-channels.ts`; style-prop allowlist in
+      `shared/style-props.ts` with a `satisfies` check on the renderer meta;
+      `SimElementPick`/`ProjectCreateResult` named and drift-fixed.
+- [x] **Lifecycle fixes.** ✅ 2026-08-14 — `nativeTheme` listener registered
+      once (was leaking per dock re-activate); spawn cap reserved synchronously
+      (was racy under concurrent `pumpQueue`).
+- [x] **Size/duplication.** ✅ 2026-08-14 — `preview-ipc.ts` extracted from
+      `index.ts` (1263 → 968) with a shared `requestReply` helper; preload's 24
+      subscribe wrappers → one `on<T>()` factory; new `test/style-tokens.mjs`
+      unit test.
+- [ ] **Deferred splits (each its own PR):** `App.tsx` (2194 lines, 31
+      useEffects), `store.ts` (1755 — ~25 stores + helpers + test handles),
+      `ChatPanel.tsx` (1704 — composer vs message list), and `props.ts` (1330 —
+      extract the shared source-file plumbing used by styles/move-node/controls
+      into a `source.ts`).
+
 ## A project's favicon leads its rail row (2026-08-12, user-requested) — SHIPPED
 
 - [x] **Show the project's own favicon instead of the folder icon.** ✅ 2026-08-12
