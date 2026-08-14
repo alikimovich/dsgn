@@ -31,6 +31,7 @@ import type {
   PermissionMode,
   PraxisApi,
   PreviewComment,
+  ProjectCreateResult,
   ProjectIcon,
   ProjectMemory,
   PropEdit,
@@ -48,6 +49,7 @@ import type {
   SessionRecord,
   SetupProbe,
   SetupResult,
+  SimElementPick,
   SimPreflight,
   SourceView,
   SourceWriteResult,
@@ -191,8 +193,7 @@ const api: PraxisApi = {
     detect: (root: string): Promise<DetectedProject> => ipcRenderer.invoke('project:detect', root),
     icon: (root: string): Promise<ProjectIcon | null> => ipcRenderer.invoke('project:icon', root),
     pickNew: (): Promise<string | null> => ipcRenderer.invoke('project:pick-new'),
-    create: (root: string): Promise<{ ok: boolean; root?: string; error?: string }> =>
-      ipcRenderer.invoke('project:create', root)
+    create: (root: string): Promise<ProjectCreateResult> => ipcRenderer.invoke('project:create', root)
   },
   devServer: {
     start: (opts: {
@@ -237,9 +238,8 @@ const api: PraxisApi = {
       ipcRenderer.on('simulator:log', listener)
       return () => ipcRenderer.removeListener('simulator:log', listener)
     },
-    onElementPicked: (cb: (pick: { source: string; tag: string }) => void): (() => void) => {
-      const listener = (_e: IpcRendererEvent, pick: { source: string; tag: string }): void =>
-        cb(pick)
+    onElementPicked: (cb: (pick: SimElementPick) => void): (() => void) => {
+      const listener = (_e: IpcRendererEvent, pick: SimElementPick): void => cb(pick)
       ipcRenderer.on('simulator:element-picked', listener)
       return () => ipcRenderer.removeListener('simulator:element-picked', listener)
     }
