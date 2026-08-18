@@ -224,7 +224,7 @@ try {
   assert(dead === 0, `persisted-but-dead workspace stays on Welcome, got ${dead} project(s)`)
 
   console.log(
-    'RESTORE-RELOAD OK — seed guard + streaming tail, live reattach seeds chat, Main survives close/open, dead workspace no-wedge'
+    'RESTORE-RELOAD OK — seed guard + streaming tail, live reattach seeds chat, close archives Main to History, dead workspace no-wedge'
   )
 } catch (err) {
   console.error('RESTORE-RELOAD FAILED:', err?.message ?? err)
