@@ -77,11 +77,13 @@ export const chatModelLabel = (
 
 /** This chat's settings out of a project entry (structurally typed so this module
  *  stays free of the store's `ProjectEntry`). Missing entries are legacy workspace
- *  data and safely use the defaults. */
+ *  data and safely use `fallback` (Claude sentinels, or the user's preferred
+ *  default — last-used / Settings). */
 export const chatAgentSettingsFor = (
   entry: { chatSettings?: Record<string, ChatAgentSettings> },
-  sessionKey: string
-): ChatAgentSettings => ({ ...defaultChatAgentSettings(), ...entry.chatSettings?.[sessionKey] })
+  sessionKey: string,
+  fallback: ChatAgentSettings = defaultChatAgentSettings()
+): ChatAgentSettings => ({ ...fallback, ...entry.chatSettings?.[sessionKey] })
 
 /**
  * The model id a turn should actually carry, or undefined for "use the account

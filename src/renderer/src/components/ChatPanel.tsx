@@ -33,6 +33,7 @@ import {
   useWorkspace,
   usePropsIsland,
 } from "../store";
+import { recordLastUsedSettings } from "../preferred-model";
 import {
   defaultChoiceFor,
   providerOptions,
@@ -1082,6 +1083,7 @@ export default function ChatPanel(): React.JSX.Element {
     useWorkspace.getState().patchEntry(entry.key, {
       chatSettings: { ...entry.chatSettings, [sessionKey]: settings },
     });
+    recordLastUsedSettings(settings);
     return { sessionKey, settings };
   };
 

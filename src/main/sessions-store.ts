@@ -1,4 +1,4 @@
-import { mkdirSync, readdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SessionRecord } from '../shared/api'
 
@@ -13,7 +13,12 @@ import type { SessionRecord } from '../shared/api'
  */
 export interface SessionStore {
   save: (rec: SessionRecord) => void
+  /** Persist this as the project's current Main thread, replacing any previous
+   *  Main slot so a relaunch restores one conversation rather than stacking them. */
+  saveMain: (rec: SessionRecord) => void
   list: (projectKey: string) => SessionRecord[]
+  /** Newest `slot: 'main'` record for a project, if any. */
+  currentMain: (projectKey: string) => SessionRecord | null
   get: (id: string) => SessionRecord | null
   remove: (id: string) => void
 }
@@ -53,17 +58,31 @@ export function createSessionStore(baseDir: string): SessionStore {
     if (!SAFE_ID.test(rec.id)) throw new Error(`unsafe session id: ${rec.id}`)
     ensureDir()
     writeFileSync(fileFor(rec.id), JSON.stringify(rec), 'utf8')
-    // Prune the oldest beyond the per-project cap (by startedAt).
-    const mine = readAll()
-      .filter((r) => r.projectKey === rec.projectKey)
+    // Prune the oldest History records beyond the per-project cap. The current
+    // Main slot is the live thread, not History — never drop it to make room.
+    const history = readAll()
+      .filter((r) => r.projectKey === rec.projectKey && r.slot !== 'main')
       .sort((a, b) => b.startedAt - a.startedAt)
-    for (const stale of mine.slice(MAX_PER_PROJECT)) remove(stale.id)
+    for (const stale of history.slice(MAX_PER_PROJECT)) remove(stale.id)
+  }
+
+  const saveMain = (rec: SessionRecord): void => {
+    rec.slot = 'main'
+    for (const old of readAll().filter(
+      (r) => r.projectKey === rec.projectKey && r.slot === 'main' && r.id !== rec.id
+    )) {
+      remove(old.id)
+    }
+    save(rec)
   }
 
   const list = (projectKey: string): SessionRecord[] =>
     readAll()
       .filter((r) => r.projectKey === projectKey)
       .sort((a, b) => b.startedAt - a.startedAt)
+
+  const currentMain = (projectKey: string): SessionRecord | null =>
+    list(projectKey).find((r) => r.slot === 'main') ?? null
 
   const get = (id: string): SessionRecord | null => {
     if (!SAFE_ID.test(id)) return null
@@ -83,5 +102,5 @@ export function createSessionStore(baseDir: string): SessionStore {
     }
   }
 
-  return { save, list, get, remove }
+  return { save, saveMain, list, currentMain, get, remove }
 }
