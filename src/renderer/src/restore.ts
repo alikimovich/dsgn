@@ -18,9 +18,9 @@ import {
  * but the fresh renderer has no in-memory state and would land on Welcome. This
  * reattaches the UI to whatever is still live in main, repainting chat transcripts;
  * and when main has nothing (a real relaunch), auto-reopens the last praxis-launched
- * project. Main's last thread is restored in place by `agent:open-project` (the
- * transcript plus a Claude SDK resume when one exists) — it is no longer dumped
- * into History and reopened as a secondary chat.
+ * project. A relaunch archives the previous Main into History and starts a blank
+ * Main; continue is History → Resume. A renderer-only reload reattaches the live
+ * session in place (main never tore it down).
  *
  * Reuses App's own `attempt`/`applyProject` (passed in) rather than duplicating
  * the open/switch flows — they already handle dev-server recovery, stale-completion
@@ -149,8 +149,8 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
       // of (a persisted launchSpec). Attached-server / never-launched entries can't
       // be relaunched meaningfully and are left in recents for the user to reopen.
       await deps.attempt(activePersisted.root)
-      // Main is restored in place by open-project (transcript + Claude resume).
-      // Ghost sessionKeys from the previous run aren't live; pin the rail on Main.
+      // Fresh Main after relaunch (previous thread is a History row). Ghost
+      // sessionKeys from the previous run aren't live; pin the rail on Main.
       if (useSession.getState().projectRoot === activePersisted.root) {
         const key = activePersisted.key
         useWorkspace.getState().patchEntry(key, {

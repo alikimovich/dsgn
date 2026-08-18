@@ -1246,8 +1246,8 @@ export default function App(): React.JSX.Element {
       setRetry(null)
     }
     // Reopen the agent session if it was LRU-suspended; else just re-activate it.
-    // Suspending persists Main to disk, so the reopen restores that thread (Claude
-    // resumes the SDK session; other backends at least restore the transcript).
+    // Suspending archives Main into History, so the reopen starts a blank thread
+    // (continue via History → Resume). Drop stale slices from the previous run.
     if (await window.api.agent.isOpen(target.root)) {
       void window.api.agent.setActive(target.root, target.activeSessionKey ?? target.key)
     } else {
@@ -1257,18 +1257,20 @@ export default function App(): React.JSX.Element {
           target.key,
           preferredChatAgentSettings()
         )
-        const opened = await window.api.agent.openProject(
-          target.root,
-          agentOptionsFor(mainSettings)
-        )
-        useWorkspace.getState().patchEntry(target.key, {
-          chatSettings: { ...target.chatSettings, [target.key]: mainSettings }
-        })
-        if (opened.transcript.length) {
-          useChat.getState().hydrate(target.key, messagesFromTranscript(opened.transcript))
+        await window.api.agent.openProject(target.root, agentOptionsFor(mainSettings))
+        for (const sk of target.sessionKeys ?? [target.key]) {
+          useChat.getState().clearChat(sk)
         }
-        if (opened.title) useChat.getState().setTitle(target.key, opened.title)
-        useLog.getState().append(`Reopened ${target.name}'s agent (was suspended).`)
+        useWorkspace.getState().patchEntry(target.key, {
+          chatSettings: { ...target.chatSettings, [target.key]: mainSettings },
+          sessionKeys: [target.key],
+          activeSessionKey: target.key
+        })
+        useChat.getState().setActiveChat(target.key)
+        void useHistory.getState().load(target.root)
+        useLog
+          .getState()
+          .append(`Reopened ${target.name} with a fresh Main; previous chat is in History.`)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         useLog.getState().append(`Couldn't reopen ${target.name}'s agent: ${message}`, 'error')

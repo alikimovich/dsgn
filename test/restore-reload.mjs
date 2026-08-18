@@ -13,6 +13,7 @@
  *      append to — no double render.
  *   B. Reattach: a live main session + persisted workspace, hard-reload the
  *      renderer, and assert the project + its chat transcript come back.
+ *   B2. Close then reopen: previous Main is a History row; live Main is empty.
  *   C. Resilience: a persisted-but-DEAD workspace (nothing live in main, no
  *      launchSpec) stays on Welcome instead of wedging.
  *
@@ -167,7 +168,7 @@ try {
   const dom = await win.textContent('.pane--chat')
   assert(dom.includes('hello from before the reload'), 'seeded transcript renders in the chat DOM')
 
-  // ── B2. Full teardown then reopen must restore Main, not dump it to History ─
+  // ── B2. Full teardown then reopen archives Main to History, starts blank ──
   await win.evaluate((f) => window.api.agent.closeProject(f), fixture)
   await win.evaluate((f) => window.api.agent.openProject(f), fixture)
   const reopened = await win.evaluate((k) => {
@@ -180,14 +181,14 @@ try {
   }, key)
   const historyAfterReopen = await win.evaluate((f) => window.api.sessions.list(f), fixture)
   assert(
-    reopened === 'hello from before the reload',
-    `reopen restores Main's transcript, got "${reopened}"`
+    reopened == null,
+    `reopen starts a blank Main, got "${reopened}"`
   )
   assert(
-    !historyAfterReopen.some((r) =>
+    historyAfterReopen.some((r) =>
       r.transcript.some((t) => t.text === 'hello from before the reload')
     ),
-    'restored Main must not also appear as a History row'
+    'closed Main must appear as a History row'
   )
 
   // ── C. A persisted-but-dead workspace must not wedge the app ─────────────────

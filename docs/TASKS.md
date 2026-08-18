@@ -17,11 +17,14 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       remembers the last picker choice (any chat) and Settings → Models can pin
       a specific model instead. Existing chats keep their own `chatSettings`.
       See PROGRESS 2026-08-18.
-- [x] **Main keeps its thread across quit/relaunch.** ✅ 2026-08-18 — closing or
-      quitting persists Main as `slot: 'main'` (hidden from History). The next
-      `open-project` restores the transcript in place and resumes the Claude SDK
-      session when it can. **Clear context** is still what archives it into
-      History. `test/agent-history.mjs`, `test/restore-reload.mjs`.
+- [x] **Main keeps its thread across quit/relaunch.** ✅ 2026-08-18 — shipped as
+      restore-in-place (`slot: 'main'`), then superseded the same day: closed
+      Main is now a History row so reopen can start from new. See next item.
+- [x] **Closed Main is a History row (continue or start new).** ✅ 2026-08-18 —
+      quit/close/LRU archive Main like any other chat. Next `open-project` starts
+      a blank Main. Continue is History → Resume; start new is typing in empty
+      Main. Renderer-only reload still reattaches the live session. Dropped
+      `slot` / `saveMain`. `test/agent-history.mjs`, `test/restore-reload.mjs`.
 
 ## A project's favicon leads its rail row (2026-08-12, user-requested) — SHIPPED
 

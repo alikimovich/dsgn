@@ -4,10 +4,10 @@
  * persisted on teardown, and listable afterward:
  *
  *   open A, tag branch, send a prompt   → user message recorded synchronously
- *   close A                             → session persisted as the current Main slot
- *   sessions.list(A)                    → empty (Main is not History)
- *   open A again                        → workspace snapshot paints the same transcript
- *   clearMainContext                    → that thread is archived into History
+ *   close A                             → session persisted as a History row
+ *   sessions.list(A)                    → that conversation
+ *   open A again                        → live Main is empty (start from new)
+ *   sessions.list(A)                    → previous Main still in History
  *   sessions.get(id) / remove(id)       → round-trip + cleanup
  *
  * Run with: bun run test:agenthistory
@@ -55,37 +55,11 @@ try {
   await win.evaluate((p) => window.api.agent.closeProject(p), A)
   await new Promise((r) => setTimeout(r, 200))
 
-  // Closed Main is the current thread, not a History row.
+  // Closed Main is a History row (continue via Resume; reopen starts a blank Main).
   const afterClose = await list(A)
-  assert(
-    afterClose.filter((r) => !before.has(r.id)).length === 0,
-    `closed Main must not appear in History, got ${afterClose.filter((r) => !before.has(r.id)).length}`
-  )
-
-  // Reopen restores that thread onto Main.
-  await win.evaluate((p) => window.api.agent.openProject(p), A)
-  const snap = await win.evaluate(() => window.api.agent.workspaceSnapshot())
-  const live = snap.projects
-    .find((p) => p.root === A)
-    ?.chats.find((c) => !c.sessionKey.includes('#'))
-  assert(live, 'reopen restores a live Main chat')
-  assert(
-    live.record.transcript.some((t) => t.role === 'user' && t.text === 'make the header blue'),
-    'reopened Main keeps the prompt'
-  )
-  assert(
-    live.record.branch === 'praxis/history-test',
-    `branch tag survived reopen (got ${live.record.branch})`
-  )
-
-  // Clear context archives it into History.
-  const cleared = await win.evaluate((p) => window.api.agent.clearMainContext(p), A)
-  assert(cleared.ok, `clearMainContext ok (got ${cleared.error ?? 'ok'})`)
-  await new Promise((r) => setTimeout(r, 200))
-  const after = await list(A)
-  const fresh = after.filter((r) => !before.has(r.id))
-  assert(fresh.length === 1, `expected exactly one archived record, got ${fresh.length}`)
-  const rec = fresh[0]
+  const archived = afterClose.filter((r) => !before.has(r.id))
+  assert(archived.length === 1, `closed Main must appear in History, got ${archived.length}`)
+  const rec = archived[0]
   assert(rec.branch === 'praxis/history-test', `branch tag persisted (got ${rec.branch})`)
   assert(typeof rec.endedAt === 'number', 'endedAt set on teardown')
   assert(rec.projectKey && rec.projectRoot === A, 'project identity recorded')
@@ -93,7 +67,23 @@ try {
     rec.transcript.some((t) => t.role === 'user' && t.text === 'make the header blue'),
     'user prompt captured in transcript'
   )
-  assert(!rec.slot, 'archived Main is no longer the current slot')
+
+  // Reopen starts a blank Main; the previous thread stays in History.
+  await win.evaluate((p) => window.api.agent.openProject(p), A)
+  const snap = await win.evaluate(() => window.api.agent.workspaceSnapshot())
+  const live = snap.projects
+    .find((p) => p.root === A)
+    ?.chats.find((c) => !c.sessionKey.includes('#'))
+  assert(live, 'reopen starts a live Main chat')
+  assert(
+    !live.record.transcript.some((t) => t.role === 'user' && t.text === 'make the header blue'),
+    'reopened Main is empty (previous thread is History, not restored in place)'
+  )
+  const afterReopen = await list(A)
+  assert(
+    afterReopen.some((r) => r.id === rec.id),
+    'previous Main remains a History row after reopen'
+  )
 
   // get() round-trips by id; remove() cleans up.
   const byId = await get(rec.id)
@@ -101,7 +91,7 @@ try {
   await remove(rec.id)
   assert((await get(rec.id)) === null, 'sessions.remove deletes the record')
 
-  console.log('AGENT-HISTORY OK — Main persists across close/open, clear archives to History')
+  console.log('AGENT-HISTORY OK — closed Main is History; reopen starts a blank Main')
 } catch (err) {
   console.error('AGENT-HISTORY FAILED:', err?.message ?? err)
   process.exitCode = 1

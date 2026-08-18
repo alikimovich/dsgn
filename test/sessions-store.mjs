@@ -68,17 +68,6 @@ try {
   ok(c[0].id === 'c59', 'newest survives prune')
   ok(!c.some((r) => r.id === 'c0'), 'oldest pruned away')
 
-  // Main slot is not History: saveMain replaces the previous Main, list still
-  // includes it (filtering is the IPC/History layer), and prune never drops it.
-  store.saveMain(rec('m1', '/p/m', 1))
-  store.saveMain(rec('m2', '/p/m', 2))
-  ok(store.get('m1') === null, 'a new Main slot replaces the previous one')
-  const main = store.currentMain('/p/m')
-  ok(main && main.id === 'm2' && main.slot === 'main', 'currentMain is the latest Main slot')
-  for (let i = 0; i < 60; i++) store.save(rec(`h${i}`, '/p/m', 3000 + i))
-  ok(store.get('m2') && store.get('m2').slot === 'main', 'prune never drops the Main slot')
-  ok(store.list('/p/m').filter((r) => r.slot !== 'main').length === 50, 'history still caps at 50')
-
   // Unsafe ids are rejected on save and ignored on get/remove (id → filename).
   let threw = false
   try {

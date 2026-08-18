@@ -265,10 +265,10 @@ const cleanTitle = (t: unknown): string =>
   typeof t === 'string' ? t.replace(/\s+/g, ' ').trim().slice(0, 120) : ''
 
 /** Tear down a session: stop it emitting, deny its prompts, provider teardown,
- * then persist it. `main` keeps it as the project's current Main thread (restored
- * in place on the next open); `history` archives it as a previous agent; `none`
- * skips disk (the conversation is being transferred onto a replacement session). */
-function closeSession(s: ProviderSession, persist: 'main' | 'history' | 'none' = 'history'): void {
+ * then persist it. `history` archives it as a previous agent (Resume from the
+ * rail continues it); `none` skips disk (the conversation is being transferred
+ * onto a replacement session — model-switch restart). */
+function closeSession(s: ProviderSession, persist: 'history' | 'none' = 'history'): void {
   s.dispose()
   ;[...s.pending.keys()].forEach((id) => resolvePending(s, id, 'deny'))
   // Release any unanswered questions so their SDK callbacks unblock (dismiss).
@@ -282,12 +282,7 @@ function closeSession(s: ProviderSession, persist: 'main' | 'history' | 'none' =
     if (persist === 'none') return
     if (s.record.transcript.some((t) => t.role === 'user')) {
       s.record.endedAt = Date.now()
-      if (persist === 'main') {
-        store().saveMain(s.record)
-      } else {
-        delete s.record.slot
-        store().save(s.record)
-      }
+      store().save(s.record)
     }
   } catch {
     // history is non-critical; never let it interfere with session lifecycle
@@ -510,12 +505,12 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     const prior = opening.get(key)
     const run = (async (): Promise<OpenProjectResult> => {
       if (prior) await prior.catch(() => {})
-      // Replacing a live Main persists it as the current thread so this open (or
-      // a later relaunch) can restore it, instead of dumping it into History.
+      // Replacing a live Main archives it into History so this open starts a
+      // blank thread. Continue is History → Resume, not restore-in-place.
       const existing = sessions.get(key)
       if (existing) {
         const terminal = runningKeys.has(key) ? 'failed' : 'success'
-        closeSession(existing, 'main')
+        closeSession(existing, 'history')
         sessions.delete(key)
         memoryRevisionBySession.delete(key)
         runningKeys.delete(key)
@@ -523,37 +518,21 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
         // so the fresh worktree's captureBase includes the old chat's merged output.
         await releaseChat(key, terminal)
       }
-      const priorMain = store().currentMain(key)
-      const resumeSessionId = priorMain?.sdkSessionId
       // Isolated chats run in a private `praxis/chat-<id>` worktree (repo roots only);
       // isolatedCwd returns the live root otherwise. adoptSession re-stamps the record
       // back to the live project so history/reattach see it under the real root.
       const cwd = await isolatedCwd(root, key)
-      const start = (resume?: string): Promise<ProviderSession> =>
-        pickProvider(options).startSession(
-          cwd,
-          options,
-          getWindow,
-          contextWithMemory(root, key, {
-            emitKey: key,
-            liveRoot: root,
-            onEvent: interactiveEvents(key),
-            ...(resume ? { resumeSessionId: resume } : {})
-          })
-        )
-      let s: ProviderSession
-      try {
-        s = await start(resumeSessionId)
-      } catch (err) {
-        // A stale Claude resume id shouldn't block opening the project — fall
-        // back to a fresh provider thread and still paint the saved transcript.
-        if (!resumeSessionId) throw err
-        s = await start()
-      }
+      const s = await pickProvider(options).startSession(
+        cwd,
+        options,
+        getWindow,
+        contextWithMemory(root, key, {
+          emitKey: key,
+          liveRoot: root,
+          onEvent: interactiveEvents(key)
+        })
+      )
       adoptSession(key, s.record, root)
-      if (priorMain) seedFromRecord(s.record, priorMain, { reuseId: true })
-      s.record.endedAt = null
-      if (priorMain?.title) s.emit({ type: 'title', title: priorMain.title })
       sessions.set(key, s)
       // Only claim the active slot if the renderer still wants this project active.
       // A later open/set-active for a different project moved `intendedKey` on, and
@@ -604,7 +583,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
       const s = sessions.get(sk)
       if (s) {
         const terminal = runningKeys.has(sk) ? 'failed' : 'success'
-        closeSession(s, sk === key ? 'main' : 'history')
+        closeSession(s, 'history')
         sessions.delete(sk)
         memoryRevisionBySession.delete(sk)
         runningKeys.delete(sk)
@@ -701,7 +680,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     root: string,
     sessionKey: string,
     options: AgentOptions = {},
-    how: { persist: 'main' | 'history' | 'none'; seed: boolean } = { persist: 'none', seed: true }
+    how: { persist: 'history' | 'none'; seed: boolean } = { persist: 'none', seed: true }
   ): Promise<{ ok: boolean; error?: string }> => {
     const key = projectKey(root)
     if (!sessionKeysForProject(key).includes(sessionKey)) {
@@ -750,7 +729,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     ): Promise<{ ok: boolean; error?: string }> => restartChatSession(root, sessionKey, options)
   )
 
-  // Main is a stable project slot, not an infinitely growing provider thread.
+  // Main is a stable project role, not an infinitely growing provider thread.
   // Clearing archives its current transcript through closeSession(), then starts
   // a fresh provider context under the SAME projectKey with the same model/posture.
   // Project memory is loaded again by restartChatSession and remains untouched.
@@ -860,7 +839,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
       const s = sessions.get(sessionKey)
       if (s) {
         const terminal = runningKeys.has(sessionKey) ? 'failed' : 'success'
-        closeSession(s, sessionKey === key ? 'main' : 'history')
+        closeSession(s, 'history')
         sessions.delete(sessionKey)
         memoryRevisionBySession.delete(sessionKey)
         runningKeys.delete(sessionKey)
@@ -1204,12 +1183,9 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
   )
 
   // Persisted history ("previous agents", v5-D). Lists past runs (the live session
-  // is persisted only on teardown, so it isn't here).
-  ipcMain.handle('sessions:list', (_e, root: string) =>
-    store()
-      .list(projectKey(root))
-      .filter((r) => r.slot !== 'main')
-  )
+  // is persisted only on teardown, so it isn't here). Closed Main is a row like
+  // any other — Resume continues it; a new open starts a blank Main.
+  ipcMain.handle('sessions:list', (_e, root: string) => store().list(projectKey(root)))
   ipcMain.handle('sessions:get', (_e, id: string) => store().get(id))
   ipcMain.handle('sessions:rename', (_e, id: string, title: string) => {
     const name = cleanTitle(title)
@@ -1298,8 +1274,8 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
 
   // Don't leave any backend subprocess running after praxis quits.
   app.on('before-quit', () => {
-    for (const [sessionKey, s] of sessions) {
-      closeSession(s, sessionKey === s.record.projectKey ? 'main' : 'history')
+    for (const s of sessions.values()) {
+      closeSession(s, 'history')
     }
     sessions.clear()
     memoryRevisionBySession.clear()

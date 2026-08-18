@@ -2,6 +2,24 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-18 — Closed Main becomes a History row (continue or start new)
+
+Follow-up to the same-day Main-persistence work: restoring the thread *in place*
+on reopen left no way to start from new. Closing a project (or quitting, or
+LRU-suspending) now archives Main the same way secondaries always were — a
+History row. The next `open-project` starts a blank Main with a new provider
+thread. Continue is History → Resume (Claude, when `sdkSessionId` is present);
+start new is typing in empty Main. Renderer-only reload still reattaches the
+live in-memory session (main never tore it down).
+
+Dropped `SessionRecord.slot`, `saveMain`, and `currentMain`. `sessions:list` no
+longer hides a Main slot. LRU return clears stale zustand slices so the empty
+Main isn't painted from the previous run. Did **not** bring back
+`resumeMostRecent` (that auto-opened History as a live secondary).
+
+`test/agent-history.mjs` and `test/restore-reload.mjs` B2 cover close → History
++ empty reopen; B (renderer reload) still asserts live reattach.
+
 ## 2026-08-18 — Last-used / Settings default model, and Main that survives reload
 
 User request: the picker always fell back to Claude, and Main came back empty

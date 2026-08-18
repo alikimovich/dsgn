@@ -2,11 +2,13 @@
 
 Each open project has one stable **Main** chat (`sessionKey === projectKey(root)`). Main
 is pinned first in the rail and cannot be closed like a secondary chat. Closing the
-project or quitting Praxis persists that thread as Main's current slot, and the next
-open restores it in place (the transcript always; a Claude SDK resume when the
-record carries `sdkSessionId`). **Project memory → Clear context** is what archives
-the current Main transcript into History and starts a fresh provider context under
-the same stable key.
+project or quitting Praxis archives that thread into History (same as a secondary
+chat). The next open starts a blank Main with a new provider thread. Continue the
+previous conversation from History → Resume (Claude-only: the record must carry
+`sdkSessionId`). Type in empty Main to start new. **Project memory → Clear context**
+still archives a *live* Main the same way, without closing the project.
+A renderer-only reload (main process still live) reattaches the in-memory session
+in place — that is not a reopen.
 
 Project memory is deliberately separate from chat history and repository state:
 
