@@ -10,6 +10,19 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Default model + Main surviving reload (2026-08-18, user-requested) — SHIPPED
+
+- [x] **New chats follow last-used, or a Settings default.** ✅ 2026-08-18 —
+      Claude is no longer hardcoded as the only fallback. `preferred-model.ts`
+      remembers the last picker choice (any chat) and Settings → Models can pin
+      a specific model instead. Existing chats keep their own `chatSettings`.
+      See PROGRESS 2026-08-18.
+- [x] **Main keeps its thread across quit/relaunch.** ✅ 2026-08-18 — closing or
+      quitting persists Main as `slot: 'main'` (hidden from History). The next
+      `open-project` restores the transcript in place and resumes the Claude SDK
+      session when it can. **Clear context** is still what archives it into
+      History. `test/agent-history.mjs`, `test/restore-reload.mjs`.
+
 ## A project's favicon leads its rail row (2026-08-12, user-requested) — SHIPPED
 
 - [x] **Show the project's own favicon instead of the folder icon.** ✅ 2026-08-12

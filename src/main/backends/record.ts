@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { basename } from 'node:path'
 import type { SessionRecord } from '../../shared/api'
-import { EDIT_TOOLS, describeTool } from './tools'
+import { describeTool, EDIT_TOOLS } from './tools'
 
 /**
  * Builds a `SessionRecord` (v5-D "previous agents") as a provider session works,
@@ -66,4 +66,29 @@ export function createRecordCapture(root: string, projectKey: string): RecordCap
       record.sdkSessionId = id
     }
   }
+}
+
+/**
+ * Copy a past record's conversation onto a freshly started live record so the
+ * UI (and a later persist) keep the thread. `reuseId` keeps the same history
+ * file (Main restore / in-place restart); leave it off when the source record
+ * should stay in History on its own (v9 resume).
+ */
+export function seedFromRecord(
+  live: SessionRecord,
+  from: SessionRecord,
+  opts: { reuseId?: boolean } = {}
+): void {
+  if (from.transcript.length && live.transcript.length === 0) {
+    live.transcript.push(...from.transcript.map((t) => ({ ...t })))
+  }
+  if (from.title) live.title = from.title
+  live.startedAt = from.startedAt
+  if (from.filesTouched?.length && live.filesTouched.length === 0) {
+    live.filesTouched = [...from.filesTouched]
+  }
+  if (from.branch && !live.branch) live.branch = from.branch
+  if (from.prUrl && !live.prUrl) live.prUrl = from.prUrl
+  if (from.sdkSessionId && !live.sdkSessionId) live.sdkSessionId = from.sdkSessionId
+  if (opts.reuseId) live.id = from.id
 }

@@ -1,4 +1,4 @@
-import type { LiveProjectSnapshot, SessionRecord } from '../../shared/api'
+import type { LiveProjectSnapshot } from '../../shared/api'
 import {
   type ChatAgentSettings,
   chatAgentSettingsFromOptions,
@@ -18,19 +18,19 @@ import {
  * but the fresh renderer has no in-memory state and would land on Welcome. This
  * reattaches the UI to whatever is still live in main, repainting chat transcripts;
  * and when main has nothing (a real relaunch), auto-reopens the last praxis-launched
- * project and resumes its most recent chat from disk.
+ * project. Main's last thread is restored in place by `agent:open-project` (the
+ * transcript plus a Claude SDK resume when one exists) — it is no longer dumped
+ * into History and reopened as a secondary chat.
  *
- * Reuses App's own `attempt`/`applyProject`/`resumeRecord` (passed in) rather than
- * duplicating the open/switch/resume flows — they already handle dev-server
- * recovery, stale-completion guards, and history/token/annotation loading.
+ * Reuses App's own `attempt`/`applyProject` (passed in) rather than duplicating
+ * the open/switch flows — they already handle dev-server recovery, stale-completion
+ * guards, and history/token/annotation loading.
  */
 export interface RestoreDeps {
   /** App.attempt — full open path (detect → dev server → preview → agent). */
   attempt: (root: string) => Promise<void>
   /** App.applyProject — no-relaunch switch onto an already-live project. */
   applyProject: (target: ProjectEntry) => Promise<void>
-  /** App.resumeRecord — hand a past on-disk session back to a live SDK query. */
-  resumeRecord: (record: SessionRecord) => Promise<void>
 }
 
 // Guard against a double invocation (React StrictMode double-mounts effects in
@@ -64,9 +64,7 @@ const minimalEntry = (lp: LiveProjectSnapshot): ProjectEntry => ({
  *  didn't, so anything the two disagree on is stale on the renderer's side (and a
  *  stale mode is one the toolbar would then misreport for the rest of the chat). */
 const liveChatSettings = (lp: LiveProjectSnapshot): Record<string, ChatAgentSettings> =>
-  Object.fromEntries(
-    lp.chats.map((c) => [c.sessionKey, chatAgentSettingsFromOptions(c.options)])
-  )
+  Object.fromEntries(lp.chats.map((c) => [c.sessionKey, chatAgentSettingsFromOptions(c.options)]))
 
 export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
   if (started) return
@@ -151,10 +149,15 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
       // of (a persisted launchSpec). Attached-server / never-launched entries can't
       // be relaunched meaningfully and are left in recents for the user to reopen.
       await deps.attempt(activePersisted.root)
-      // Then resume its most recent resumable chat so the transcript comes back
-      // (only if the reopen actually took — attempt surfaces its own errors).
+      // Main is restored in place by open-project (transcript + Claude resume).
+      // Ghost sessionKeys from the previous run aren't live; pin the rail on Main.
       if (useSession.getState().projectRoot === activePersisted.root) {
-        await resumeMostRecent(activePersisted.root, deps)
+        const key = activePersisted.key
+        useWorkspace.getState().patchEntry(key, {
+          sessionKeys: [key],
+          activeSessionKey: key
+        })
+        useChat.getState().setActiveChat(key)
       }
     }
     // else: nothing live and the last project isn't praxis-launched → stay on Welcome.
@@ -167,18 +170,5 @@ export async function restoreWorkspace(deps: RestoreDeps): Promise<void> {
     } catch {
       /* best effort */
     }
-  }
-}
-
-/** Resume the newest on-disk chat for a project (Claude-backend records only —
- *  `sdkSessionId` is the resume marker; comment spawns are excluded). */
-async function resumeMostRecent(root: string, deps: RestoreDeps): Promise<void> {
-  try {
-    const records = await window.api.sessions.list(root) // newest first
-    const rec = records.find((r) => r.kind !== 'comment' && r.sdkSessionId)
-    if (rec) await deps.resumeRecord(rec)
-  } catch {
-    // No resumable record (e.g. a non-Claude backend) — plain reopen is acceptable;
-    // the history stays in the rail for a manual resume.
   }
 }

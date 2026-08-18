@@ -26,6 +26,9 @@ import {
   DEFAULT_PROVIDER,
   type ModelSelection
 } from './chat-settings'
+import { preferredChatAgentSettings } from './preferred-model'
+
+const bootChatSettings = preferredChatAgentSettings()
 
 // The per-chat agent choices + their AgentOptions mappings live in their own
 // (pure, unit-testable) module; re-exported here so importers keep one entry point.
@@ -526,9 +529,11 @@ interface SessionState {
 }
 
 export const useSession = create<SessionState>((set) => ({
-  model: DEFAULT_MODEL,
-  effort: 'high',
-  provider: DEFAULT_PROVIDER,
+  model: bootChatSettings.model,
+  modelId: bootChatSettings.modelId,
+  effort: bootChatSettings.effort,
+  provider: bootChatSettings.provider,
+  connectionId: bootChatSettings.connectionId,
   slashCommands: [],
   authNeeded: false,
   codexAuthNeeded: false,
@@ -1314,11 +1319,9 @@ interface PermissionState {
 }
 
 export const usePermissions = create<PermissionState>((set) => ({
-  // Auto mode by default — the SDK's model classifier approves/denies each tool
-  // call; only the ones it flags as risky fall through to praxis's canUseTool card.
-  // No prompts for routine work, dangerous ops still surface, and canUseTool still
-  // runs (so the .praxis/ sidecar guard + AskUserQuestion card stay in force).
-  mode: 'auto',
+  // Mirrors the boot chat's posture (last-used or the Settings default). Auto is
+  // still the fallback inside preferredChatAgentSettings when nothing is stored.
+  mode: bootChatSettings.permissionMode,
   pending: [],
   setMode: (mode) => set({ mode }),
   addRequest: (request) =>

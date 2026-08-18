@@ -2,6 +2,39 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-18 — Last-used / Settings default model, and Main that survives reload
+
+User request: the picker always fell back to Claude, and Main came back empty
+after a relaunch (the previous thread sitting in History as a different row).
+
+**Default model.** New chats with no stored settings used to call
+`defaultChatAgentSettings()` (Claude, always). That's now a fallback behind
+`preferred-model.ts`: the product default is **last used** — whichever model
+the user last picked in any chat, persisted in `praxis:preferred-model` next
+to the workspace snapshot. Settings → Models & Providers has a "Default model"
+select: Last used, or a specific model from the live catalog. A pinned pick
+does not forget last-used, so flipping back is instant. Existing chats still
+own their `chatSettings`; this only fills in a chat that has none (first
+project of a session, a Main that was never configured).
+
+**Main persistence.** `closeSession` used to write every torn-down thread into
+History, and a relaunch started a blank Main then `resumeMostRecent`'d that
+record as a *secondary* chat. Main is now a slot: quit/close/`open-project`
+replacement saves `slot: 'main'` (and replaces any previous Main file);
+`sessions:list` / the rail History section omit it; the next `open-project`
+seeds the live record from that slot and, when a Claude `sdkSessionId` is
+present, resumes the SDK session under the same `projectKey`. Codex/gateway
+still can't resume the provider thread (see `docs/PROVIDERS.md`) but the
+transcript is back on Main instead of lost. **Project memory → Clear context**
+archives without `slot` so the conversation becomes a normal previous agent,
+then starts a fresh Main. Model-switch restart seeds the replacement record
+instead of dumping the thread into History.
+
+`test/preferred-model.mjs` (unit) covers last-used vs fixed resolve;
+`test/sessions-store.mjs` covers the Main slot + prune exemption;
+`test/agent-history.mjs` and `test/restore-reload.mjs` close/reopen Main
+through real IPC.
+
 ## 2026-08-12 — A project's own favicon leads its rail row
 
 User request: a project with a favicon should show it in the sidebar instead of

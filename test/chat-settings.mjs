@@ -100,6 +100,12 @@ const eq = (actual, expected, msg) =>
   const entry = { chatSettings: { k: { ...defaultChatAgentSettings(), permissionMode: 'default' } } }
   eq(chatAgentSettingsFor(entry, 'k').permissionMode, 'default', "a stored chat's mode wins")
   eq(chatAgentSettingsFor(entry, 'other').permissionMode, 'auto', 'another chat is unaffected')
+  const preferred = { ...defaultChatAgentSettings(), provider: 'codex', model: 'gpt' }
+  eq(
+    chatAgentSettingsFor({}, 'k', preferred).provider,
+    'codex',
+    'a missing chat uses the caller fallback (last-used / Settings), not hardcoded Claude'
+  )
 }
 
 // ── Resume is Claude-only ───────────────────────────────────────────────────

@@ -202,9 +202,10 @@ src/
                     components/styles/  the Styles tab's rows + controls
                     (ScrubInput, ColorControl, BezierEditor, TokenPicker)
                     SettingsDialog.tsx + ProviderForm.tsx  the v10 Settings dialog
-                    (Models & Providers): add a connection, probe its catalog, tick
-                    models. providers-store.ts is its zustand slice (kept OUT of the
-                    already-oversized store.ts)
+                    (Models & Providers): default model (last-used or a fixed pick),
+                    add a connection, probe its catalog, tick models.
+                    preferred-model.ts is the pure last-used/fixed resolver (kept
+                    OUT of store.ts). providers-store.ts is the connections slice.
                     composer-drafts.ts  the composer's unsent text + attachments,
                     keyed by chat (ChatPanel is mounted once for the whole app, so
                     component state would follow the user into the next chat)

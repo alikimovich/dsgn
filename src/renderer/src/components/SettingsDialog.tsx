@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -10,15 +10,26 @@ import {
 } from '@/components/ui/dialog'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { ProviderConnection } from '../../../shared/api'
-import { useProviders } from '../providers-store'
+import {
+  LAST_USED_VALUE,
+  type PreferredModelState,
+  preferredSelectValue,
+  readPreferredModelState,
+  setFixedPreference,
+  setLastUsedMode,
+  settingsFromChoice,
+  writePreferredModelState
+} from '../preferred-model'
+import { providerOptions, useProviders } from '../providers-store'
 import { openWithPreviewFreeze, usePreviewFreeze } from '../store'
 import ProviderForm from './ProviderForm'
 
 /**
  * App settings (Cmd+, from the app menu, or the model picker's "Manage
- * providers…"). Tabbed so more panes can land later; v10 ships just
- * "Models & Providers": the saved `ProviderConnection`s, and the add/edit form
- * (ProviderForm) that owns the key-bearing state.
+ * providers…"). Tabbed so more panes can land later. "Models & Providers"
+ * holds the default-model pick (last-used, or a specific catalog entry) plus
+ * the saved `ProviderConnection`s and the add/edit form (ProviderForm) that
+ * owns the key-bearing state.
  *
  * The form is MOUNTED only while it's open — leaving it unmounts the component
  * holding the typed API key, which is what guarantees the key never outlives the
@@ -28,6 +39,9 @@ export default function SettingsDialog(): React.JSX.Element {
   const open = useProviders((s) => s.settingsOpen)
   const setOpen = useProviders((s) => s.setSettingsOpen)
   const connections = useProviders((s) => s.connections)
+  const choices = useProviders((s) => s.choices)
+  const providers = useMemo(() => providerOptions(choices), [choices])
+  const [preferred, setPreferred] = useState<PreferredModelState>(readPreferredModelState)
 
   /** null = the list; 'new' = adding; a connection = editing that one. */
   const [editing, setEditing] = useState<ProviderConnection | 'new' | null>(null)
@@ -58,7 +72,23 @@ export default function SettingsDialog(): React.JSX.Element {
     setConfirmDelete(null)
     setError(null)
     void useProviders.getState().refresh()
+    setPreferred(readPreferredModelState())
   }, [shown])
+
+  const onPreferredChange = (value: string): void => {
+    const current = readPreferredModelState()
+    if (value === LAST_USED_VALUE) {
+      const next = setLastUsedMode(current)
+      writePreferredModelState(next)
+      setPreferred(next)
+      return
+    }
+    const choice = choices.find((c) => c.value === value)
+    if (!choice) return
+    const next = setFixedPreference(current, settingsFromChoice(choice))
+    writePreferredModelState(next)
+    setPreferred(next)
+  }
 
   const remove = async (id: string): Promise<void> => {
     setConfirmDelete(null)
@@ -78,8 +108,9 @@ export default function SettingsDialog(): React.JSX.Element {
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Praxis’s own Claude and Codex seats sign in with your subscription. Add a connection to
-            run chats against another OpenAI-compatible endpoint with your own API key.
+            Praxis’s own Claude and Codex seats sign in with your subscription. Pick a default model
+            for new chats, or add a connection to run against another OpenAI-compatible endpoint
+            with your own API key.
           </DialogDescription>
         </DialogHeader>
 
@@ -98,6 +129,34 @@ export default function SettingsDialog(): React.JSX.Element {
               />
             ) : (
               <>
+                <div className="flex flex-col gap-1.5">
+                  <label htmlFor="preferred-model" className="font-medium">
+                    Default model
+                  </label>
+                  <select
+                    id="preferred-model"
+                    aria-label="Default model for new chats"
+                    className="h-8 w-full rounded-md border border-input bg-transparent px-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                    value={preferredSelectValue(preferred)}
+                    onChange={(e) => onPreferredChange(e.target.value)}
+                  >
+                    <option value={LAST_USED_VALUE}>Last used</option>
+                    {providers.map((group) => (
+                      <optgroup key={group.key} label={group.label}>
+                        {group.models.map((c) => (
+                          <option key={c.value} value={c.value}>
+                            {c.label}
+                          </option>
+                        ))}
+                      </optgroup>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">
+                    {preferred.mode === 'fixed'
+                      ? 'New chats and a first-open Main use this model. Existing chats keep their own.'
+                      : 'New chats follow the last model you picked in any chat.'}
+                  </p>
+                </div>
                 {connections.length === 0 ? (
                   <p className="text-muted-foreground">
                     No connections yet. The built-in Claude and Codex models stay available either

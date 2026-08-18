@@ -167,6 +167,29 @@ try {
   const dom = await win.textContent('.pane--chat')
   assert(dom.includes('hello from before the reload'), 'seeded transcript renders in the chat DOM')
 
+  // ── B2. Full teardown then reopen must restore Main, not dump it to History ─
+  await win.evaluate((f) => window.api.agent.closeProject(f), fixture)
+  await win.evaluate((f) => window.api.agent.openProject(f), fixture)
+  const reopened = await win.evaluate((k) => {
+    return window.api.agent.workspaceSnapshot().then((snap) => {
+      const chat = snap.projects
+        .find((p) => p.projectKey === k)
+        ?.chats.find((c) => c.sessionKey === k)
+      return chat?.record.transcript.find((t) => t.role === 'user')?.text ?? null
+    })
+  }, key)
+  const historyAfterReopen = await win.evaluate((f) => window.api.sessions.list(f), fixture)
+  assert(
+    reopened === 'hello from before the reload',
+    `reopen restores Main's transcript, got "${reopened}"`
+  )
+  assert(
+    !historyAfterReopen.some((r) =>
+      r.transcript.some((t) => t.text === 'hello from before the reload')
+    ),
+    'restored Main must not also appear as a History row'
+  )
+
   // ── C. A persisted-but-dead workspace must not wedge the app ─────────────────
   await win.evaluate((f) => window.api.agent.closeProject(f), fixture)
   await win.evaluate(() => {
@@ -200,7 +223,7 @@ try {
   assert(dead === 0, `persisted-but-dead workspace stays on Welcome, got ${dead} project(s)`)
 
   console.log(
-    'RESTORE-RELOAD OK — seed guard + streaming tail, live reattach seeds chat, dead workspace no-wedge'
+    'RESTORE-RELOAD OK — seed guard + streaming tail, live reattach seeds chat, Main survives close/open, dead workspace no-wedge'
   )
 } catch (err) {
   console.error('RESTORE-RELOAD FAILED:', err?.message ?? err)
