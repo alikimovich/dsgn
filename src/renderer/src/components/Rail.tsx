@@ -62,8 +62,8 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
  * OWN expanded/collapsed state (`chatsCollapsed`, persisted with the entry), so
  * switching projects leaves the others exactly as the user left them — the
  * chevron is the only thing that folds a project away. An expanded project shows
- * a flat, left-aligned list of its chats: first its live/open chats (the one on
- * screen highlighted — only the active project can have one), then its
+ * a flat, left-aligned list of its chats: **New chat**, then its live/open chats
+ * (the one on screen highlighted — only the active project can have one), then its
  * **previous chats** (v5-D persisted sessions, one row per chat with a trailing
  * "time ago"). Clicking any chat of a non-active project switches to that
  * project as well. Chat names are
@@ -76,9 +76,10 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
  * Where the per-project controls live: the project ROW carries the two things
  * that act on the project itself — the memory brain and × — both hover-only, so
  * a project at rest is just its folder and name. "New chat" is not a row glyph:
- * it's a full-width button under the chat list, because it appends to that list.
- * The previous-chats section is an accordion — its "History n" heading unfolds
- * the list (CLOSED by default, session-only state, same as "Show N more").
+ * it's a full-width button at the top of the chat list, so starting a thread is
+ * the first action and Main sits under it. The previous-chats section is an
+ * accordion — its "History n" heading unfolds the list (CLOSED by default,
+ * session-only state, same as "Show N more").
  *
  * Everything in a project's block shares one indent grid: the folder glyph, the
  * chat status dots, the "New chat" +, and the History chevron all centre on the
@@ -315,6 +316,18 @@ export default function Rail({
                 {expanded && (
                   <div className="rail__project-body">
                     <div className="rail__section-label">Chats</div>
+                    {/* "New chat" is the first action in the list — start a thread
+                        without scrolling past Main and every live secondary. */}
+                    <button
+                      type="button"
+                      className="rail__new-chat"
+                      onClick={() => onNewChat(p.key)}
+                      aria-label={`Start another chat for ${p.name}`}
+                      title="Start another chat for this project"
+                    >
+                      <Plus className="size-3.5" aria-hidden="true" />
+                      <span>New chat</span>
+                    </button>
                     <ul className="rail__chats" aria-label={`${p.name}'s live chats`}>
                       {live.map((sk, row) => {
                         const main = sk === p.key
@@ -394,20 +407,6 @@ export default function Rail({
                         )
                       })}
                     </ul>
-
-                    {/* "New chat" reads as the last item of the chat list rather
-                        than a header glyph — it's how you ADD to the list above,
-                        so it sits directly under it. */}
-                    <button
-                      type="button"
-                      className="rail__new-chat"
-                      onClick={() => onNewChat(p.key)}
-                      aria-label={`Start another chat for ${p.name}`}
-                      title="Start another chat for this project"
-                    >
-                      <Plus className="size-3.5" aria-hidden="true" />
-                      <span>New chat</span>
-                    </button>
 
                     {past.length > 0 && (
                       <>

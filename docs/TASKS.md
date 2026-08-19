@@ -66,14 +66,17 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       and survives a Main reset; the old transcript is archived into History.
 - [x] **Sort the rail's per-project controls by what they act on.** ✅ 2026-08-09 —
       project memory is a brain action on the project row (× is hover-only now),
-      "New chat" is a full-width button under the chat list it appends to, and
-      History folds as an accordion. See PROGRESS 2026-08-09.
+      "New chat" is a full-width button (moved above Main on 2026-08-19), and
+      History folds as an accordion. See PROGRESS 2026-08-09 / 2026-08-19.
 - [x] **Put the whole rail block on one indent grid.** ✅ 2026-08-09 — the "New chat"
       + and the History chevron moved into the same 16px glyph slot as the folder and
       the status dots (labels all at 31px); row actions became a hover overlay so
       every row's model/time ends on one trailing edge instead of Main's running 34px
       further right; History now starts folded and the memory brain is hover-revealed
       like ×. See PROGRESS 2026-08-09.
+- [x] **Move "+ New chat" above Main.** ✅ 2026-08-19 — starting a thread is the first
+      action in the Chats section; Main and secondaries follow. Alignment grid is
+      unchanged. `test/rail-chat-status.mjs`. See PROGRESS 2026-08-19.
 - [ ] **Suggest memory updates from conversation decisions.** Keep this reviewable:
       propose additions/removals in the memory editor instead of silently rewriting
       standing project context.

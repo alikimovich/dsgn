@@ -1125,13 +1125,13 @@ body.is-fullscreen .sidebar-toggle {
 }
 
 /* v9 multi-chat — "New chat" starts another live chat for this project. It sits
-   under the chat list as a full-width quiet row (it appends to that list), and
-   shares the chat rows' box exactly — same full width, same 8px padding, same
-   7px gap — so its + lands on the status-dot column and its label at the names'
-   31px indent instead of a further-right line of its own. */
+   at the top of the chat list as a full-width quiet row (start a thread without
+   scrolling past Main), and shares the chat rows' box exactly — same full width,
+   same 8px padding, same 7px gap — so its + lands on the status-dot column and
+   its label at the names' 31px indent instead of a further-right line of its own. */
 .rail__new-chat {
     width: 100%;
-    margin: 1px 0 0;
+    margin: 0 0 1px;
     display: flex;
     align-items: center;
     gap: 7px;

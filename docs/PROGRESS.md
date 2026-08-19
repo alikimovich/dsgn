@@ -2,6 +2,15 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-19 — "+ New chat" sits above Main
+
+User request: the rail's New chat action lived under the live list, so starting
+a thread meant scrolling past Main and every secondary. It now sits at the top
+of the Chats section — first action, then Main, then the other live chats,
+then History. Same full-width quiet row, same 16px glyph / 31px label grid.
+`test/rail-chat-status.mjs` asserts document order (New chat before the list,
+Main first in the list) plus the existing alignment checks.
+
 ## 2026-08-18 — Last-used / Settings default model, and Main that survives reload
 
 User request: the picker always fell back to Claude, and Main came back empty

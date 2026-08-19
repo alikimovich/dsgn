@@ -113,7 +113,26 @@ try {
     { timeout: 3000 }
   )
 
-  // Main is pinned first; secondary chats render newest-first. History is separate.
+  // Main is pinned first in the live list; New chat sits above that list.
+  const aboveMain = await win.evaluate(() => {
+    const body = document.querySelector('.rail__item--active .rail__project-body')
+    const neu = body?.querySelector('.rail__new-chat')
+    const chats = body?.querySelector('.rail__chats')
+    const first = chats?.querySelector(':scope > .rail__chat-item .rail__chat-name')?.textContent
+    return {
+      newBeforeList: !!(
+        neu &&
+        chats &&
+        (neu.compareDocumentPosition(chats) & Node.DOCUMENT_POSITION_FOLLOWING)
+      ),
+      first
+    }
+  })
+  if (!aboveMain.newBeforeList)
+    throw new Error('New chat must sit above the live chat list (above Main)')
+  if (aboveMain.first !== 'Main')
+    throw new Error(`first live chat expected Main, got ${aboveMain.first}`)
+
   const seen = await win.evaluate(() =>
     [...document.querySelectorAll('.rail__chats > .rail__chat-item')].map((li) => ({
       name: li.querySelector('.rail__chat-name')?.textContent ?? '',
