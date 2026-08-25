@@ -2,6 +2,22 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-24 — Closing the launch terminal no longer causes endless error dialogs
+
+Stopping a development launch could close its PTY while Electron was still winding
+down. The next `console` write then emitted `EIO` (or `EPIPE` on other Unix systems)
+as an uncaught exception. Praxis's global exception backstop tried to log that error
+to the same dead stream, creating another `EIO` and another native error dialog in an
+unbounded loop.
+
+`src/main/terminal-streams.ts` now installs narrow error guards on stdout and stderr:
+write-side `EIO`/`EPIPE` from a vanished terminal are absorbed, while every other
+stream failure is rethrown for the existing crash reporter. The guards are installed
+before main-process startup work. `test/terminal-streams.mjs` covers macOS `EIO`,
+Unix `EPIPE`, and proves unrelated write/read errors still surface. Verified:
+`bun run typecheck`, the complete 58-test unit tier, and an isolated Electron smoke
+launch all pass.
+
 ## 2026-08-18 — Cross-origin iframes can navigate without escaping the preview
 
 Electron 43 reports both `will-navigate` and `will-redirect` through an event-details

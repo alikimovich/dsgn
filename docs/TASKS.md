@@ -10,6 +10,14 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
+
+- [x] **Stop the endless `write EIO` dialog loop after the launch terminal closes.** ✅
+      2026-08-24 — stdout/stderr now absorb only write-side `EIO`/`EPIPE` from a
+      vanished PTY before those errors reach the global crash reporter and get
+      logged recursively. Other stream errors still surface.
+      `test/terminal-streams.mjs` covers the classifier and guard behavior.
+
 ## Cross-origin iframe navigation (2026-08-18, user-reported) — SHIPPED
 
 - [x] **Let iframe redirects load without weakening the pinned preview origin.** ✅

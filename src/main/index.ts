@@ -43,8 +43,14 @@ import { createProject } from './scaffold'
 import { registerSetupIpc } from './setup'
 import { registerSimulatorIpc } from './simulator'
 import { registerStylesIpc } from './styles'
+import { installTerminalStreamGuards } from './terminal-streams'
 import { registerTokensIpc } from './tokens'
 import { registerUpdateIpc } from './update-ipc'
+
+// When a development terminal closes, its PTY can disappear before Electron
+// finishes shutting down. Absorb only that stream-level EIO/EPIPE so it cannot
+// recurse through the uncaught-exception reporter below.
+installTerminalStreamGuards()
 
 // Product name — drives the macOS app menu label and the About panel. Set at
 // module load (before app is ready) so the menu bar reads "Praxis", not "Electron".
