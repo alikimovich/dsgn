@@ -1,6 +1,7 @@
 import { ipcMain } from 'electron'
 import { readFile } from 'fs/promises'
 import type { PropEditResult, StyleEdit, StyleEditResult } from '../shared/api'
+import { STYLE_PROPS as STYLE_PROP_LIST } from '../shared/style-props'
 import { classNameStringNode, commitEdit, findElementAtLine, resolveSource } from './props'
 import { type ResolvedTokenRef, resolveTokenRef, tokenClassRewrite } from './style-tokens'
 import { looksTailwind } from './tw-styles'
@@ -32,25 +33,12 @@ import { applyStyleEditSvelte } from './styles-svelte'
  */
 
 /**
- * The fixed v1 editable property set. This is main's own copy — the renderer's
- * `css-values.ts` `STYLE_PROP_META` table mirrors it (minus its read-only
- * `font-family`/`display` chips), but main can't import renderer code, so the
- * two lists are kept in sync by hand. Anything else is rejected before any
- * file is read.
+ * The fixed v1 editable property set — the canonical list now lives in
+ * `shared/style-props.ts` (both main and the renderer's `css-values.ts`
+ * `STYLE_PROP_META` table derive from it, so the two can't drift apart by
+ * hand again). Anything else is rejected before any file is read.
  */
-export const STYLE_PROPS: ReadonlySet<string> = new Set([
-  // layout
-  'padding-top', 'padding-right', 'padding-bottom', 'padding-left',
-  'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
-  'gap',
-  // appearance
-  'color', 'background-color', 'border-radius', 'opacity',
-  // typography
-  'font-size', 'font-weight', 'line-height', 'letter-spacing',
-  // transition
-  'transition-property', 'transition-duration', 'transition-delay',
-  'transition-timing-function'
-])
+export const STYLE_PROPS: ReadonlySet<string> = new Set(STYLE_PROP_LIST)
 
 /**
  * A css value we're willing to splice into source: non-empty, bounded, and free

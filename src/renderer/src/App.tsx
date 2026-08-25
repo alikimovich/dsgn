@@ -855,12 +855,15 @@ export default function App(): React.JSX.Element {
     // (Keeping the previous project warm needs no snapshot here — its entry is kept
     // current as its url/branch change: open, restart, and branch-rename all patch it.)
     // Opening (or re-opening) a project starts fresh: a pick from the previous
-    // repo points at a file that may not exist in the new one. Disarm + clear,
-    // and drop any permission cards left over from the previous session.
+    // repo points at a file that may not exist in the new one. Disarm the selection
+    // here; permission/question cards are now keyed by `sessionKey` and filtered per
+    // chat (ChatPanel), so they no longer need a blanket clear on every open — a
+    // torn-down previous session's cards are dropped individually when main's
+    // `closeSession` resolves its pending prompts (below, and in the reopen path
+    // inside `agent:open-project`), and a kept-warm background chat's cards simply
+    // stay pending, out of sight until its chat is shown again.
     setSelectMode(false)
     setSelected(null)
-    usePermissions.getState().clearPending()
-    useQuestions.getState().clearPending()
     useSession.getState().setProjectRoot(null)
     useSession.getState().setBranch(null)
     useDiagnosis.getState().setCurrent(null)

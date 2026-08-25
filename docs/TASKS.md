@@ -10,6 +10,14 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
+
+- [x] **Stop the endless `write EIO` dialog loop after the launch terminal closes.** ✅
+      2026-08-24 — stdout/stderr now absorb only write-side `EIO`/`EPIPE` from a
+      vanished PTY before those errors reach the global crash reporter and get
+      logged recursively. Other stream errors still surface.
+      `test/terminal-streams.mjs` covers the classifier and guard behavior.
+
 ## Default model + Main surviving reload (2026-08-18, user-requested) — SHIPPED
 
 - [x] **New chats follow last-used, or a Settings default.** ✅ 2026-08-18 —
@@ -22,6 +30,45 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       `open-project` restores the transcript in place and resumes the Claude SDK
       session when it can. **Clear context** is still what archives it into
       History. `test/agent-history.mjs`, `test/restore-reload.mjs`.
+
+## Cross-origin iframe navigation (2026-08-18, user-reported) — SHIPPED
+
+- [x] **Let iframe redirects load without weakening the pinned preview origin.** ✅
+      2026-08-18 — `will-navigate` / `will-redirect` now use Electron 43's
+      `details.url` and `details.isMainFrame`; subframes proceed untouched while the
+      main frame remains pinned to the exact origin and port. Preview popup requests
+      are denied silently because `setWindowOpenHandler` exposes no reliable
+      user-activation signal. `test/preview-iframe-navigation.mjs` covers a
+      cross-origin iframe 302, the no-external-open invariant during mount, and a
+      blocked/externalized top-level navigation to the iframe's localhost port.
+
+## Architecture + security review fixes (2026-08-14, user-requested) — SHIPPED
+
+- [x] **Preview hardening.** ✅ 2026-08-14 — untrusted preview moved to its own
+      `persist:praxis-preview` partition with deny-all permission handlers;
+      `will-redirect` guarded like `will-navigate`; navigation pinned to the
+      loaded dev-server origin (was: any localhost port); `shell:true`
+      invariants documented at both spawn sites. See PROGRESS 2026-08-14.
+- [x] **Background chats' permission/question cards were dead.** ✅ 2026-08-14 —
+      cards now carry `sessionKey` and render only in their own chat; main
+      resolves responses across ALL sessions instead of only the active one.
+- [x] **Cross-boundary mirrors made single-source.** ✅ 2026-08-14 — layer types
+      import from `shared/api.ts`; preview channel names in
+      `shared/preview-channels.ts`; style-prop allowlist in
+      `shared/style-props.ts` with a `satisfies` check on the renderer meta;
+      `SimElementPick`/`ProjectCreateResult` named and drift-fixed.
+- [x] **Lifecycle fixes.** ✅ 2026-08-14 — `nativeTheme` listener registered
+      once (was leaking per dock re-activate); spawn cap reserved synchronously
+      (was racy under concurrent `pumpQueue`).
+- [x] **Size/duplication.** ✅ 2026-08-14 — `preview-ipc.ts` extracted from
+      `index.ts` (1263 → 968) with a shared `requestReply` helper; preload's 24
+      subscribe wrappers → one `on<T>()` factory; new `test/style-tokens.mjs`
+      unit test.
+- [ ] **Deferred splits (each its own PR):** `App.tsx` (2194 lines, 31
+      useEffects), `store.ts` (1755 — ~25 stores + helpers + test handles),
+      `ChatPanel.tsx` (1704 — composer vs message list), and `props.ts` (1330 —
+      extract the shared source-file plumbing used by styles/move-node/controls
+      into a `source.ts`).
 
 ## A project's favicon leads its rail row (2026-08-12, user-requested) — SHIPPED
 

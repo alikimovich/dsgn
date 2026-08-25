@@ -268,7 +268,10 @@ try {
       toolName: 'Bash',
       title: 'Allow Bash?',
       displayName: 'Run command',
-      detail: 'npm run build'
+      detail: 'npm run build',
+      // Cards are keyed to the chat that raised them (ChatPanel filters by
+      // `sessionKey === activeChatKey`) — match whatever chat is on screen.
+      sessionKey: window.__praxisStore.getState().activeKey
     })
   })
   await win.waitForSelector('.perm', { timeout: 5000 })

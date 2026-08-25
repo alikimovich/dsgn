@@ -2,6 +2,107 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-24 — Closing the launch terminal no longer causes endless error dialogs
+
+Stopping a development launch could close its PTY while Electron was still winding
+down. The next `console` write then emitted `EIO` (or `EPIPE` on other Unix systems)
+as an uncaught exception. Praxis's global exception backstop tried to log that error
+to the same dead stream, creating another `EIO` and another native error dialog in an
+unbounded loop.
+
+`src/main/terminal-streams.ts` now installs narrow error guards on stdout and stderr:
+write-side `EIO`/`EPIPE` from a vanished terminal are absorbed, while every other
+stream failure is rethrown for the existing crash reporter. The guards are installed
+before main-process startup work. `test/terminal-streams.mjs` covers macOS `EIO`,
+Unix `EPIPE`, and proves unrelated write/read errors still surface. Verified:
+`bun run typecheck`, the complete 58-test unit tier, and an isolated Electron smoke
+launch all pass.
+
+## 2026-08-18 — Cross-origin iframes can navigate without escaping the preview
+
+Electron 43 reports both `will-navigate` and `will-redirect` through an event-details
+object, and redirects can belong to subframes. The preview guard still read the
+deprecated positional URL and applied the pinned-origin policy to every redirect, so
+a cross-origin iframe's 302 was cancelled and handed to `shell.openExternal`. The
+guard now reads `details.url` / `details.isMainFrame`: subframe navigation and
+redirects proceed untouched, while main-frame navigation remains pinned to the exact
+loaded origin (including port) and safe HTTP/HTTPS/mailto escapes are externalized.
+
+Popup creation is kept separate from frame navigation. Electron's
+`setWindowOpenHandler` details do not expose a trustworthy user-activation signal, so
+the preview denies popup requests silently instead of externalizing automatic
+`window.open` calls during iframe initialization. A new Electron regression runs a
+static preview and iframe server on separate local origins, follows a real 302 to
+render content in the child frame, spies on `shell.openExternal`, and then proves a
+top-level attempt to navigate to the iframe server's different localhost port is
+still blocked/externalized. Verified: `bun run typecheck:node`, `bun run build`, and
+`test/preview-iframe-navigation.mjs` pass. The new test and package manifest pass
+Biome; the repo-wide `bun run lint` still reports the existing baseline diagnostics
+in unrelated and previously nonconforming files.
+
+## 2026-08-14 — Architecture + security review, and the fixes it produced
+
+A full review of the codebase (architecture and security, two independent
+passes) found no confirmed exploit — the core boundaries held up: the preview
+preload exposes nothing to the untrusted page (no contextBridge), preview→main
+relays validate `e.sender`, secrets never leave main, every renderer/agent path
+is re-validated. What it did find became twelve fixes, all landed on this
+branch (PR #217):
+
+**Security hardening.** The untrusted preview view now runs on its own
+`persist:praxis-preview` session partition with deny-all
+`setPermissionRequestHandler`/`setPermissionCheckHandler` — previewed content
+could previously request geolocation/notifications/clipboard under Electron
+defaults, and shared permission grants/service workers/cache with the trusted
+windows. Navigation policy tightened twice: `will-redirect` now shares the
+`will-navigate` guard (3xx redirects bypassed it), and the allowed target is
+the SAME ORIGIN main last loaded, not "any localhost port" — an untrusted page
+can no longer steer the preview (preload attached) onto a sibling local
+service. One behavior change with teeth: a dev server answering a cross-origin
+redirect now opens externally instead of being followed. The two `shell:true`
+spawn sites (devserver, simulator) carry their invariant in a comment now:
+command strings come from framework detection or the user, never file/page
+content.
+
+**The real bug: background chats' permission cards were dead.** Permission/
+question cards were pooled globally in the renderer and rendered into whichever
+chat was on screen, while main resolved responses only against
+`activeSession()` — so a backgrounded turn's card appeared under the wrong
+chat and its Allow/Deny silently no-oped (`resolvePending` on the wrong
+session), wedging the tool call. Now: `PermissionRequest`/`QuestionRequest`
+carry `sessionKey`, ChatPanel filters to its own chat, and main scans every
+live session's pending maps. The blanket `clearPending()` on switch is gone —
+per-id resolved events from `closeSession` already handle real teardown.
+
+**Drift-proofing the mirrors.** Three hand-maintained cross-boundary copies
+became single sources: `LayerNode`/`LayersSnapshot`/`LayerFingerprint` (preview
+redeclared them) now import from `shared/api.ts`; the ~20 preview IPC channel
+names live once in `shared/preview-channels.ts`; the Styles-panel property
+allowlist is `shared/style-props.ts`, with the renderer's `STYLE_PROP_META`
+`satisfies`-checked against it so a one-sided addition fails typecheck. Two
+already-drifted preload types got named and fixed (`SimElementPick` had lost
+`source: string | null`; `ProjectCreateResult` had lost `warning?`).
+
+**Lifecycle + size.** `nativeTheme.on('updated')` moved out of
+`createWindow()` (it leaked a listener per macOS dock re-activate) into
+`whenReady`. The spawn cap could be overshot by concurrent `pumpQueue` racers
+passing the check before any registration landed — a `startingCounts`
+reservation taken synchronously (before `startSpawn`'s first await) closes it.
+`registerPreviewIpc` (~400 lines) left `index.ts` for `preview-ipc.ts`
+(1263 → 968), collapsing the twin style-read/layers-read pending-maps into one
+`requestReply` helper; preload's 24 copies of the subscribe/unsubscribe wrapper
+became an `on<T>()` factory (507 → 429). New `test/style-tokens.mjs` covers the
+pure token re-resolution (it re-validates island-supplied picks — security-
+relevant, previously only exercised transitively via `style-edit`); unblocking
+it required `tokens.ts` to import electron as a namespace, since the named
+`ipcMain` import fails to link under plain bun.
+
+Deliberately deferred (each deserves its own PR): splitting `App.tsx` (2194),
+`store.ts` (1755), `ChatPanel.tsx` (1704), and extracting `props.ts`'s shared
+source-file plumbing into a `source.ts`. Verified per commit:
+`bun run typecheck` clean, unit tier green (sandbox skips `devserver-net` —
+it can't bind sockets), electron tier under `xvfb-run` 55/56 with the one
+failure (`editor-search`) reproduced at the base commit, so pre-existing.
 ## 2026-08-18 — Last-used / Settings default model, and Main that survives reload
 
 User request: the picker always fell back to Claude, and Main came back empty
