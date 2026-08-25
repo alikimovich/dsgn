@@ -44,6 +44,7 @@ const UNIT = [
   'diag-cache',
   'diag-rules',
   'sessions-store',
+  'preferred-model',
   'project-memory',
   'providers-store',
   'model-catalog',

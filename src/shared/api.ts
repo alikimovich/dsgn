@@ -476,12 +476,26 @@ export interface SessionRecord {
   /** A detached comment spawn (v8 F1), vs the interactive project chat. */
   kind?: 'comment'
   /**
+   * The project's current Main thread, persisted on quit/close so a relaunch
+   * restores it in place instead of starting a blank Main and listing the
+   * conversation under History. `sessions:list` / the rail History section omit
+   * this slot; **Project memory → Clear context** archives it as a normal
+   * previous agent (no `slot`) and starts a fresh Main.
+   */
+  slot?: 'main'
+  /**
    * The Claude Agent SDK's own resumable session id (v9 resume), captured off
    * the `system`/init message. Only the Claude backend sets this (Codex/Gemini
    * have no equivalent primitive wired up) — its presence is what the "Resume"
    * affordance gates on, since it doubles as a Claude-backend marker.
    */
   sdkSessionId?: string
+}
+
+/** What `agent:open-project` hands back so the renderer can paint Main. */
+export interface OpenProjectResult {
+  transcript: SessionTranscriptEntry[]
+  title?: string
 }
 
 /**
@@ -1442,7 +1456,7 @@ export interface PraxisApi {
     uninstall: (root: string) => Promise<SetupResult>
   }
   agent: {
-    openProject: (root: string, options?: AgentOptions) => Promise<void>
+    openProject: (root: string, options?: AgentOptions) => Promise<OpenProjectResult>
     /** Close a project's agent session (single-active teardown / rail close). */
     closeProject: (root: string) => Promise<void>
     /**
@@ -1594,7 +1608,8 @@ export interface PraxisApi {
   }
   /** Persisted agent-session history ("previous agents") — v5-D. */
   sessions: {
-    /** Past sessions for a project, newest first (excludes the live one). */
+    /** Past sessions for a project, newest first. Excludes the live session and
+     *  the current Main slot (that's restored in place, not listed as History). */
     list: (root: string) => Promise<SessionRecord[]>
     get: (id: string) => Promise<SessionRecord | null>
     /** Rename a past session (rail inline rename). `ok:false` for an unknown

@@ -26,6 +26,7 @@ import type {
   ModelChoice,
   MoveNodeRequest,
   MoveNodeResult,
+  OpenProjectResult,
   PanelAction,
   PanelState,
   PermissionMode,
@@ -308,7 +309,7 @@ const api: PraxisApi = {
     uninstall: (root: string): Promise<SetupResult> => ipcRenderer.invoke('setup:uninstall', root)
   },
   agent: {
-    openProject: (root: string, options?: AgentOptions): Promise<void> =>
+    openProject: (root: string, options?: AgentOptions): Promise<OpenProjectResult> =>
       ipcRenderer.invoke('agent:open-project', root, options),
     closeProject: (root: string): Promise<void> =>
       ipcRenderer.invoke('agent:close-project', root),

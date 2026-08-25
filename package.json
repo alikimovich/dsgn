@@ -103,6 +103,7 @@
     "test:project-memory-ui": "electron-vite build && node test/project-memory-ui.mjs",
     "test:providerseam": "electron-vite build && node test/provider-seam.mjs",
     "test:sessionstore": "bun test/sessions-store.mjs",
+    "test:preferred-model": "bun test/preferred-model.mjs",
     "test:project-memory": "bun test/project-memory.mjs",
     "test:project-icon": "bun test/project-icon.mjs",
     "test:providers": "bun test/providers-store.mjs",

@@ -53,6 +53,7 @@ import {
   type ProjectEntry
 } from './store'
 import { projectKey } from '../../shared/projectKey'
+import { preferredChatAgentSettings } from './preferred-model'
 import { controlsPrompt } from './lib/controls-prompt'
 import { restoreWorkspace, type RestoreDeps } from './restore'
 import { Code2, Maximize2, Minimize2, MonitorSmartphone, PanelLeft } from 'lucide-react'
@@ -883,6 +884,12 @@ export default function App(): React.JSX.Element {
     // as if the error belonged to it. A fresh chat slice + active rail entry
     // means any failure below renders in this project's own (empty) space.
     const key = projectKey(root)
+    const preferred = preferredChatAgentSettings()
+    const existing = useWorkspace.getState().projects.find((p) => p.key === key)
+    const chatSettings = existing
+      ? chatAgentSettingsFor(existing, key, preferred)
+      : preferred
+    useSession.getState().setChatAgentSettings(chatSettings)
     const initialName = root.split('/').filter(Boolean).pop() ?? root
     useWorkspace.getState().openOrActivate(root, { name: initialName })
     useChat.getState().clearChat(key)
@@ -981,8 +988,7 @@ export default function App(): React.JSX.Element {
       log.append('Preview loaded')
       // The choices on screen when the project was opened become this chat's own
       // (persisted below, so a later switch back restores what main actually runs).
-      const chatSettings = chatAgentSettingsFromSession(useSession.getState())
-      await window.api.agent.openProject(root, agentOptionsFor(chatSettings))
+      const opened = await window.api.agent.openProject(root, agentOptionsFor(chatSettings))
       log.append(`Agent session started (cwd ${root})`)
       useSession.getState().setProjectRoot(root)
       // v5: track the open project in the workspace + show its (per-project) chat,
@@ -1000,6 +1006,10 @@ export default function App(): React.JSX.Element {
       // Start this project's chat fresh — clear any slice a trailing event from a
       // prior session may have resurrected, then show it.
       useChat.getState().clearChat(projectKey(root))
+      if (opened.transcript.length) {
+        useChat.getState().hydrate(projectKey(root), messagesFromTranscript(opened.transcript))
+      }
+      if (opened.title) useChat.getState().setTitle(projectKey(root), opened.title)
       useChat.getState().setActiveChat(projectKey(root))
       // Detect this repo's design tokens (manifest → tailwind → CSS vars).
       // Guard against a project switch racing a slow scan — only apply if `root`
@@ -1215,7 +1225,11 @@ export default function App(): React.JSX.Element {
     // v9 multi-chat: restore whichever of THIS project's own sessionKeys (default,
     // or an additional/resumed chat) was last active, not always the plain default.
     useChat.getState().setActiveChat(target.activeSessionKey ?? target.key)
-    const chatSettings = chatAgentSettingsFor(target, target.activeSessionKey ?? target.key)
+    const chatSettings = chatAgentSettingsFor(
+      target,
+      target.activeSessionKey ?? target.key,
+      preferredChatAgentSettings()
+    )
     useSession.getState().setChatAgentSettings(chatSettings)
     useSession.getState().setProjectRoot(target.root)
     useSession.getState().setBranch(target.branch)
@@ -1235,25 +1249,29 @@ export default function App(): React.JSX.Element {
       setRetry(null)
     }
     // Reopen the agent session if it was LRU-suspended; else just re-activate it.
-    // The reopened session starts fresh — suspending closes the SDK subprocess, so
-    // its conversation context is gone (the visible transcript is kept for
-    // reference). Await the reopen so a follow-up send can't race a half-created
-    // session, and surface a clear note instead of failing silently.
+    // Suspending persists Main to disk, so the reopen restores that thread (Claude
+    // resumes the SDK session; other backends at least restore the transcript).
     if (await window.api.agent.isOpen(target.root)) {
       void window.api.agent.setActive(target.root, target.activeSessionKey ?? target.key)
     } else {
       try {
-        // Reopen under THIS chat's own settings (just restored into the toolbar
-        // above), not whatever the outgoing project happened to be running.
-        await window.api.agent.openProject(target.root, agentOptionsFor(chatSettings))
-        // The reopened session is the project's default chat — record its posture
-        // under that key so the toolbar and main stay in step.
+        const mainSettings = chatAgentSettingsFor(
+          target,
+          target.key,
+          preferredChatAgentSettings()
+        )
+        const opened = await window.api.agent.openProject(
+          target.root,
+          agentOptionsFor(mainSettings)
+        )
         useWorkspace.getState().patchEntry(target.key, {
-          chatSettings: { ...target.chatSettings, [target.key]: chatSettings }
+          chatSettings: { ...target.chatSettings, [target.key]: mainSettings }
         })
-        useLog
-          .getState()
-          .append(`Reopened ${target.name}'s agent (was suspended — prior context cleared).`)
+        if (opened.transcript.length) {
+          useChat.getState().hydrate(target.key, messagesFromTranscript(opened.transcript))
+        }
+        if (opened.title) useChat.getState().setTitle(target.key, opened.title)
+        useLog.getState().append(`Reopened ${target.name}'s agent (was suspended).`)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         useLog.getState().append(`Couldn't reopen ${target.name}'s agent: ${message}`, 'error')
@@ -1334,7 +1352,11 @@ export default function App(): React.JSX.Element {
     }
     // A new chat starts with the choices visible on the chat it was created
     // from. Later picker changes stay isolated to the new sessionKey.
-    const chatSettings = chatAgentSettingsFor(entry, entry.activeSessionKey ?? entry.key)
+    const chatSettings = chatAgentSettingsFor(
+      entry,
+      entry.activeSessionKey ?? entry.key,
+      preferredChatAgentSettings()
+    )
     const res = await window.api.agent.newChat(entry.root, agentOptionsFor(chatSettings))
     if (!res.ok || !res.sessionKey) {
       useLog.getState().append(res.error ?? 'Could not start another chat.', 'error')
@@ -1371,7 +1393,9 @@ export default function App(): React.JSX.Element {
       return
     }
     useChat.getState().setActiveChat(sessionKey)
-    useSession.getState().setChatAgentSettings(chatAgentSettingsFor(entry, sessionKey))
+    useSession.getState().setChatAgentSettings(
+      chatAgentSettingsFor(entry, sessionKey, preferredChatAgentSettings())
+    )
     void window.api.agent.setActive(entry.root, sessionKey)
   }
 
@@ -1658,7 +1682,7 @@ export default function App(): React.JSX.Element {
 
   // Boot restore reuses these App closures (reattach / auto-reopen / resume). Kept
   // on a ref so the once-on-mount effect always sees the current ones.
-  restoreDepsRef.current = { attempt, applyProject, resumeRecord }
+  restoreDepsRef.current = { attempt, applyProject }
 
   // Let the composer's select button (ChatPanel) drive the same toggle — via the
   // ref so it always hits the current closure (previewKind routing included).
