@@ -2,6 +2,28 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-18 — Cross-origin iframes can navigate without escaping the preview
+
+Electron 43 reports both `will-navigate` and `will-redirect` through an event-details
+object, and redirects can belong to subframes. The preview guard still read the
+deprecated positional URL and applied the pinned-origin policy to every redirect, so
+a cross-origin iframe's 302 was cancelled and handed to `shell.openExternal`. The
+guard now reads `details.url` / `details.isMainFrame`: subframe navigation and
+redirects proceed untouched, while main-frame navigation remains pinned to the exact
+loaded origin (including port) and safe HTTP/HTTPS/mailto escapes are externalized.
+
+Popup creation is kept separate from frame navigation. Electron's
+`setWindowOpenHandler` details do not expose a trustworthy user-activation signal, so
+the preview denies popup requests silently instead of externalizing automatic
+`window.open` calls during iframe initialization. A new Electron regression runs a
+static preview and iframe server on separate local origins, follows a real 302 to
+render content in the child frame, spies on `shell.openExternal`, and then proves a
+top-level attempt to navigate to the iframe server's different localhost port is
+still blocked/externalized. Verified: `bun run typecheck:node`, `bun run build`, and
+`test/preview-iframe-navigation.mjs` pass. The new test and package manifest pass
+Biome; the repo-wide `bun run lint` still reports the existing baseline diagnostics
+in unrelated and previously nonconforming files.
+
 ## 2026-08-14 — Architecture + security review, and the fixes it produced
 
 A full review of the codebase (architecture and security, two independent

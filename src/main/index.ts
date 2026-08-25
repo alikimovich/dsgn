@@ -219,7 +219,7 @@ function webOrigin(url: string | null): string | null {
 }
 
 /**
- * Page-initiated navigation policy for the preview (will-navigate + will-redirect).
+ * Main-frame navigation policy for the preview (will-navigate + will-redirect).
  *
  * Only the origin main itself put there is allowed. "Any localhost port" is NOT
  * good enough: the previewed page is untrusted content, and our preload — which
@@ -552,25 +552,32 @@ function ensurePreviewView(): WebContentsView {
     ]).popup()
   })
 
-  // The previewed app is untrusted-ish: keep it on its own local origin, and
-  // never hand it a URL scheme the OS could act on (file:/smb:/custom protocol
-  // handlers). Only web + mail links escape to the user's browser.
-  wc.setWindowOpenHandler(({ url }) => {
-    if (!isLocalPreviewUrl(url)) openExternalSafe(url)
+  // Popup creation is separate from normal main/subframe navigation. Electron's
+  // HandlerDetails has no trustworthy user-activation signal, so an automatic
+  // window.open during iframe initialization cannot be distinguished safely from
+  // a user-triggered one here. Deny popup creation silently; same-context
+  // top-level links still reach the guard below and safe web/mail URLs escape.
+  wc.setWindowOpenHandler(() => {
     return { action: 'deny' }
   })
-  // Page-initiated navigation, both flavours: `will-navigate` covers the click /
+  // Main-frame navigation, both flavours: `will-navigate` covers the click /
   // location-assign, `will-redirect` the server-driven 3xx it can turn into —
   // which does NOT re-fire will-navigate, so guarding only the first leaves a
   // one-hop redirect (`<a href="/go">` → 302 to anywhere) as a way around it.
-  const guardNavigation = (e: Electron.Event, url: string): void => {
-    if (isAllowedPreviewNavigation(url)) return
+  // Subframe navigation/redirects are intentionally untouched: cross-origin
+  // iframes belong inside the preview and do not replace its pinned main frame.
+  const guardNavigation = (
+    details: Electron.Event<
+      Electron.WebContentsWillNavigateEventParams | Electron.WebContentsWillRedirectEventParams
+    >
+  ): void => {
+    if (!details.isMainFrame || isAllowedPreviewNavigation(details.url)) return
     // Anything else — another origin, another local port, or a page-initiated
     // data:/blob: URL that would replace the preview with attacker HTML while
     // our preload stays injected — is blocked here and, if it's an ordinary web
     // link, handed to the user's browser instead.
-    e.preventDefault()
-    openExternalSafe(url)
+    details.preventDefault()
+    openExternalSafe(details.url)
   }
   wc.on('will-navigate', guardNavigation)
   wc.on('will-redirect', guardNavigation)

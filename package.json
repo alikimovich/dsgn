@@ -31,6 +31,7 @@
     "test:smoke": "electron-vite build && node test/smoke.mjs",
     "test:menu": "electron-vite build && node test/menu-recents.mjs",
     "test:preview": "electron-vite build && node test/open-preview.mjs",
+    "test:preview-iframe": "electron-vite build && node test/preview-iframe-navigation.mjs",
     "test:mobileframe": "electron-vite build && node test/mobile-frame.mjs",
     "test:viewport": "electron-vite build && node test/viewport-per-project.mjs",
     "test:chat-hide": "electron-vite build && node test/chat-hide.mjs",

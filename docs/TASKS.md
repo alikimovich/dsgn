@@ -10,6 +10,17 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Cross-origin iframe navigation (2026-08-18, user-reported) — SHIPPED
+
+- [x] **Let iframe redirects load without weakening the pinned preview origin.** ✅
+      2026-08-18 — `will-navigate` / `will-redirect` now use Electron 43's
+      `details.url` and `details.isMainFrame`; subframes proceed untouched while the
+      main frame remains pinned to the exact origin and port. Preview popup requests
+      are denied silently because `setWindowOpenHandler` exposes no reliable
+      user-activation signal. `test/preview-iframe-navigation.mjs` covers a
+      cross-origin iframe 302, the no-external-open invariant during mount, and a
+      blocked/externalized top-level navigation to the iframe's localhost port.
+
 ## Architecture + security review fixes (2026-08-14, user-requested) — SHIPPED
 
 - [x] **Preview hardening.** ✅ 2026-08-14 — untrusted preview moved to its own

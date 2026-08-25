@@ -114,6 +114,7 @@ const ELECTRON = [
   'composer-draft',
   'restore-reload',
   'preview-location',
+  'preview-iframe-navigation',
   'feedback-dialog',
   'connect-dialog',
   'html-text-edit',
