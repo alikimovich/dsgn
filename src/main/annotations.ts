@@ -7,6 +7,7 @@ import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
 import { buildPublishMessage } from '../shared/publish-message'
 import { enclosingRepoRoot, ensureBranch } from './git'
+import { publishConflictFiles, pushReconciledBranch, withPublishLock } from './publish-reconcile'
 import { aheadOfBase, changedSince, defaultBase } from './publish-scope'
 
 /**
@@ -81,6 +82,28 @@ function removeAnnotation(root: string, id: string): Promise<Annotation[]> {
 async function git(root: string, args: string[]): Promise<string> {
   const { stdout } = await execFileP('git', args, { cwd: root, maxBuffer: 10 * 1024 * 1024 })
   return stdout.trim()
+}
+
+function conflictResult(files: string[], recoveryRefs: string[] = []): PublishResult {
+  return {
+    ok: false,
+    error:
+      `Publish paused because local and remote changes overlap in ${files.length} ` +
+      `${files.length === 1 ? 'file' : 'files'}. Resolve each file, commit the merge, then Publish again.`,
+    conflictFiles: files,
+    recoveryRefs
+  }
+}
+
+async function lockedPublish(
+  root: string,
+  task: () => Promise<PublishResult>
+): Promise<PublishResult> {
+  try {
+    return await withPublishLock(root, task)
+  } catch (error) {
+    return { ok: false, error: error instanceof Error ? error.message : String(error) }
+  }
 }
 
 async function publishToPr(root: string, opts: { title: string }): Promise<PublishResult> {
@@ -167,7 +190,8 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
 }
 
 /**
- * Full "Publish": commit every change on the current praxis/* branch → push →
+ * Full "Publish": commit every change on the current praxis/* branch → reconcile
+ * its remote counterpart without rewriting either history → push →
  * create (or reuse) a PR → squash-merge it into the default branch (deleting the
  * remote branch) → check out the default branch and pull → delete the merged
  * local branch → start a fresh same-named praxis/* branch off the updated base to
@@ -186,6 +210,8 @@ async function shipToMain(
     return { ok: false, error: 'Not a git repository.' }
   }
   if (branch === 'HEAD') return { ok: false, error: 'Detached HEAD — check out a branch first.' }
+  const existingConflicts = await publishConflictFiles(root)
+  if (existingConflicts.length) return conflictResult(existingConflicts)
   // Default branch (main/master), from origin/HEAD; fall back to main.
   const base = await defaultBase(root)
   if (branch === base) {
@@ -250,8 +276,13 @@ async function shipToMain(
     if (!staged && ahead === '0') {
       return { ok: false, error: `Nothing to publish — no changes since ${base}.` }
     }
-    // 2. Push the branch.
-    await git(root, ['push', '-u', 'origin', branch])
+    // 2. Fetch, preserve both tips, reconcile the remote branch, then push.
+    // If another publisher advances it between fetch and push, retry the same
+    // reconciliation a bounded number of times. A content conflict stays in the
+    // worktree so the user can resolve each file — never choose ours/theirs
+    // globally and never rewrite a shared branch.
+    const pushed = await pushReconciledBranch(root, branch)
+    if (!pushed.ok) return conflictResult(pushed.files, pushed.recoveryRefs)
     // 3. Create the PR, or reuse an existing one for this branch.
     let url = ''
     try {
@@ -336,9 +367,9 @@ export function registerAnnotationsIpc(): void {
   )
   ipcMain.handle('annotations:remove', (_e, root: string, id: string) => removeAnnotation(root, id))
   ipcMain.handle('publish:to-pr', (_e, root: string, opts: { title: string }) =>
-    publishToPr(root, opts)
+    lockedPublish(root, () => publishToPr(root, opts))
   )
   ipcMain.handle('publish:ship', (_e, root: string, summary?: string[], mode?: 'merge' | 'pr') =>
-    shipToMain(root, summary ?? [], mode ?? 'merge')
+    lockedPublish(root, () => shipToMain(root, summary ?? [], mode ?? 'merge'))
   )
 }

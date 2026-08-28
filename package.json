@@ -72,6 +72,7 @@
     "test:devnet": "bun test/devserver-net.mjs",
     "test:xcode": "bun test/xcode.mjs",
     "test:git": "bun test/git.mjs",
+    "test:publish-reconcile": "bun test/publish-reconcile.mjs",
     "test:sidecar-migrate": "bun test/sidecar-migrate.mjs",
     "test:update": "bun test/update.mjs",
     "test:praxis-cli": "bun test/praxis-cli.mjs",

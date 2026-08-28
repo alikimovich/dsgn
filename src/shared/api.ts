@@ -1017,6 +1017,10 @@ export interface PublishResult {
   /** The fresh praxis/* branch created to continue on (publish.ship). */
   branch?: string
   error?: string
+  /** Per-file merge conflicts left for explicit resolution; never auto-resolved. */
+  conflictFiles?: string[]
+  /** Local refs preserving the pre-reconciliation tips. */
+  recoveryRefs?: string[]
 }
 
 /**

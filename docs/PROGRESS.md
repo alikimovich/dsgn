@@ -2,6 +2,34 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-27 — Publish reconciles a moved remote branch without rewriting history
+
+A reused work branch could diverge from `origin/praxis/*`: Publish committed the
+local work and immediately pushed, so Git rejected it even though both histories
+were valid. The concrete report was `about-me`'s `praxis/main`, where the remote
+tip had been rewritten independently and Praxis had continued committing locally.
+
+`src/main/publish-reconcile.ts` now owns the shared-branch landing step. One publish
+holds a canonical-path, per-repository lock across commit, reconciliation, PR, merge,
+and cleanup. Before every push it fetches/prunes origin and writes local recovery refs
+for the current local and remote tips. An ancestor remote pushes normally; an ancestor
+local fast-forwards; diverged histories get an explicit `--no-ff` merge. No path uses
+force, rebase, reset, or a global ours/theirs choice. If the remote moves after fetch,
+the rejected push triggers at most two more fetch/reconcile attempts.
+
+Overlapping content pauses Publish with Git's merge state intact. `PublishResult`
+carries the exact conflict files and recovery refs, and the publish log opens with a
+per-file resolution checklist instead of only the raw Git error. A second Publish
+cannot accidentally stage conflict markers: existing unmerged paths are detected
+before `git add -A`.
+
+`test/publish-reconcile.mjs` uses real bare repositories and peer clones to cover a
+missing branch, local ahead, local behind, clean divergence, content conflict, a
+remote that advances from a `pre-push` race, and lock release. The longer-term removal
+of permanent shared work branches remains tracked in TASKS: publish unique
+`praxis/publish/<session-id>` branches from fresh `origin/<base>` snapshots. Verified:
+`bun run typecheck` and the complete `bun run test` suite (117/117) pass.
+
 ## 2026-08-24 — Closing the launch terminal no longer causes endless error dialogs
 
 Stopping a development launch could close its PTY while Electron was still winding

@@ -40,6 +40,7 @@ const UNIT = [
   'devserver-net',
   'xcode',
   'git',
+  'publish-reconcile',
   'sidecar-migrate',
   'diag-cache',
   'diag-rules',

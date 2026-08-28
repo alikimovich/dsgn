@@ -10,6 +10,24 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Remote publish reconciliation (2026-08-27, user-reported)
+
+- [x] **Preserve and reconcile both work-branch histories before push.** ✅
+      2026-08-27 — Publish now holds a per-repository lock, fetches/prunes origin,
+      records recovery refs for both tips, chooses normal push vs fast-forward vs
+      explicit merge from ancestry, and retries a remote-moved rejection at most
+      three total attempts. Conflicts pause with their exact files and never use
+      force/rebase/reset or a blanket ours/theirs strategy. Existing conflicts are
+      refused before staging. `test/publish-reconcile.mjs` covers the full graph
+      matrix plus a real push race.
+- [ ] **Replace permanent work-branch publishing with unique publish branches.**
+      Build each `praxis/publish/<session-id>` from a freshly fetched
+      `origin/<base>`, apply the session's squashed changes there, open/merge its
+      PR, delete the temporary branch, and seed the next chat from the newly
+      fetched base. This removes cross-session branch-name collisions entirely;
+      it needs a deliberate migration for current PR-only mode and existing open
+      PRs rather than being hidden inside the rejection repair.
+
 ## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
 
 - [x] **Stop the endless `write EIO` dialog loop after the launch terminal closes.** ✅
