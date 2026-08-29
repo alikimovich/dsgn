@@ -11,6 +11,7 @@
         "@codemirror/lang-html": "^6.4.11",
         "@codemirror/lang-javascript": "^6.2.5",
         "@codemirror/search": "^6.7.1",
+        "@modelcontextprotocol/sdk": "^1.29.0",
         "@openai/codex-sdk": "^0.146.0",
         "@pierre/trees": "^1.0.0-beta.5",
         "@replit/codemirror-lang-svelte": "^6.0.0",

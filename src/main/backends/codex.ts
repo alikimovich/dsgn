@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { join } from 'node:path'
 import { promisify } from 'node:util'
 import type {
   CodexOptions,
@@ -7,7 +8,7 @@ import type {
   ThreadItem,
   ThreadOptions
 } from '@openai/codex-sdk'
-import type { BrowserWindow } from 'electron'
+import { app, type BrowserWindow } from 'electron'
 import type { AgentEvent, AgentOptions } from '../../shared/api'
 import { projectKey } from '../../shared/projectKey'
 import {
@@ -18,7 +19,9 @@ import {
   type TokenUsage,
   usageDelta
 } from '../../shared/run-stats'
+import { agentWorkspaceState, resolveParkedChat } from '../chat-isolation'
 import { type RolloutUsageWatch, watchRolloutUsage } from '../codex-usage'
+import { type PraxisAgentToolRegistration, registerPraxisAgentTools } from '../praxis-agent-tools'
 import { resolveConnection } from '../providers'
 import { scrubSecret } from '../providers-store'
 import { praxisRules } from '../rules'
@@ -30,8 +33,9 @@ import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from
 
 /**
  * OpenAI Codex backend (v7) via `@openai/codex-sdk`. The SDK shells out to the `codex`
- * CLI, which edits the repo with its OWN sandboxed tools, so praxis doesn't define a
- * toolset here — it maps Codex's streamed `ThreadEvent`s onto praxis's `AgentEvent` stream.
+ * CLI, which edits the repo with its OWN sandboxed tools. Praxis adds only its small,
+ * session-scoped worktree-control MCP server; everything else here maps Codex's streamed
+ * `ThreadEvent`s onto Praxis's `AgentEvent` stream.
  *
  * **Two auth paths (v10), because harness and endpoint are orthogonal.** The harness —
  * the agent loop, the tools, the sandbox — is the same either way; only where the model
@@ -200,6 +204,7 @@ async function startSession(
   // Build the thread up front (the SDK spawns the `codex` CLI; auth = `codex login`,
   // or the connection's own key when `options.connectionId` is set).
   let thread: Thread | null = null
+  let praxisTools: PraxisAgentToolRegistration | null = null
   let initErr: Error | null = null
   try {
     // v10: resolve the connection FIRST. A `connectionId` that no longer resolves —
@@ -225,6 +230,41 @@ async function startSession(
       )
     }
     const { Codex } = await loadCodex()
+    praxisTools = await registerPraxisAgentTools(async (action) => {
+      if (action === 'workspace_state') return agentWorkspaceState(emitKey)
+      const before = agentWorkspaceState(emitKey)
+      if (before.state === 'live' || before.state === 'isolated') {
+        return {
+          ok: false,
+          ...before,
+          guidance: 'There is no parked Praxis batch to prepare.'
+        }
+      }
+      const prepared = await resolveParkedChat(emitKey)
+      const state = agentWorkspaceState(emitKey)
+      return {
+        ...prepared,
+        ...state,
+        guidance: prepared.ok
+          ? prepared.conflicted.length
+            ? 'Resolve every conflict marker in the listed files, then finish the turn normally.'
+            : 'Praxis combined and landed both sides without requiring manual resolution.'
+          : `Praxis could not prepare the conflict: ${prepared.error ?? 'unknown error'}`
+      }
+    })
+    const mcpConfig = {
+      mcp_servers: {
+        praxis: {
+          command: process.execPath,
+          args: [join(app.getAppPath(), 'bin', 'praxis-agent-mcp.mjs')],
+          env: {
+            ELECTRON_RUN_AS_NODE: '1',
+            PRAXIS_AGENT_TOOL_SOCKET: praxisTools.socketPath,
+            PRAXIS_AGENT_TOOL_TOKEN: praxisTools.token
+          }
+        }
+      }
+    }
     const threadOptions: ThreadOptions = {
       workingDirectory: root,
       skipGitRepoCheck: true,
@@ -234,8 +274,14 @@ async function startSession(
       ...(isEffort(options.effort) ? { modelReasoningEffort: options.effort } : {})
     }
     // No connection ⇒ a bare `Codex()`, i.e. byte-identical to the pre-v10 seat.
-    thread = new Codex(conn ? connectionCodexOptions(conn) : undefined).startThread(threadOptions)
+    const codexOptions = conn ? connectionCodexOptions(conn) : {}
+    thread = new Codex({
+      ...codexOptions,
+      config: { ...codexOptions.config, ...mcpConfig }
+    }).startThread(threadOptions)
   } catch (err) {
+    praxisTools?.dispose()
+    praxisTools = null
     initErr = err instanceof Error ? err : new Error(String(err))
   }
 
@@ -419,7 +465,7 @@ async function startSession(
     // Codex CLI is text-only here; images (paste/drop) are ignored for now.
     send: (text, _images) => {
       const prompt = firstTurn
-        ? `${praxisRules({ projectMemory: ctx?.projectMemory })}\n\n---\n\n${text}`
+        ? `${praxisRules({ workspaceTools: true, projectMemory: ctx?.projectMemory })}\n\n---\n\n${text}`
         : text
       firstTurn = false
       chain = chain.then(() => runTurn(prompt))
@@ -431,11 +477,15 @@ async function startSession(
     dispose: () => {
       disposed = true
       stopUsageWatch()
+      praxisTools?.dispose()
+      praxisTools = null
     },
     shutdown: () => {
       aborted = true
       stopUsageWatch()
       turnAbort?.abort()
+      praxisTools?.dispose()
+      praxisTools = null
     },
     interrupt: async () => {
       turnAbort?.abort() // cancel the current turn; the session can still take more

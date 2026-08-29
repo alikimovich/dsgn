@@ -8,16 +8,21 @@
  * - Claude — appended to the `claude_code` preset (`systemPrompt.append`), with
  *   `{ previewTools: true }` so it learns the in-process `preview_*` SDK tools.
  * - Codex / Gemini (subprocess, no system-prompt arg) — prepended to the first
- *   turn's prompt, WITHOUT previewTools (those tools are Claude-only, so the
- *   section must not appear for backends that can't call them).
+ *   turn's prompt, WITHOUT previewTools (those tools are Claude-only). Codex
+ *   separately opts into workspaceTools for its local Praxis MCP bridge; Gemini
+ *   must not see either section because it cannot call them.
  *
  * Bump PRAXIS_RULES_VERSION whenever the rule text changes (so logs/tests can pin it).
  */
 import { projectMemoryRules } from './project-memory'
 
-export const PRAXIS_RULES_VERSION = 11
+export const PRAXIS_RULES_VERSION = 12
 
-export function praxisRules(opts?: { previewTools?: boolean; projectMemory?: string }): string {
+export function praxisRules(opts?: {
+  previewTools?: boolean
+  workspaceTools?: boolean
+  projectMemory?: string
+}): string {
   const lines: string[] = [
     `# Praxis operating rules (v${PRAXIS_RULES_VERSION})`,
     `Praxis is a design tool: you edit the user's real repository while they watch a`,
@@ -56,9 +61,29 @@ export function praxisRules(opts?: { previewTools?: boolean; projectMemory?: str
     `  there can destroy the user's own uncommitted edits.`,
     `- Don't build sync scripts or publish pipelines into the user's repo — Praxis's`,
     `  turn-end merge IS the publish step. If the preview looks stale after a turn`,
-    `  ends, report it as a bug instead of working around it.`,
+    `  ends, inspect Praxis's authoritative workspace state when that tool is available`,
+    `  instead of working around it with Git commands.`,
     `Read-only git (status, log, diff, show) is always fine.`
   ]
+
+  if (opts?.workspaceTools) {
+    lines.push(
+      ``,
+      `## Controlling Praxis-managed worktrees`,
+      `You have two Praxis tools for the state that ordinary git commands cannot see:`,
+      `- \`workspace_state\` reports the landing coordinator's authoritative state for`,
+      `  this chat. Call it whenever a merge, conflict, worktree, landing, or stale-preview`,
+      `  problem is suspected; a clean private \`git status\` does NOT prove the batch landed.`,
+      `- \`prepare_conflict_resolution\` safely combines the user's live edits with this`,
+      `  chat's parked changes inside your current worktree. When \`workspace_state\` says`,
+      `  \`parked\`, call it, reconcile every returned marker-bearing file, remove all`,
+      `  conflict markers, and finish the turn normally so Praxis can land the result.`,
+      `Do not tell the user to open a terminal or say that “Praxis must resolve it” before`,
+      `using these tools. They are the supported way for you to operate the Praxis harness.`,
+      `Never call a discard/reset operation on the user's behalf; preserve both sides and`,
+      `resolve with best judgment unless the user explicitly asks to abandon changes.`
+    )
+  }
 
   lines.push(...projectMemoryRules(opts?.projectMemory ?? ''))
 

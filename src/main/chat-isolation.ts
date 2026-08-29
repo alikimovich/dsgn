@@ -9,11 +9,12 @@ import { projectKey } from '../shared/projectKey'
 import {
   applyParked,
   completeTurn,
+  conflictMarkerFiles,
   createChatWorktree,
   discardParked,
+  type ResolvePrep,
   stageResolve,
-  syncFromLive,
-  type ResolvePrep
+  syncFromLive
 } from './chat-worktrees'
 import { recordEdit } from './edit-history'
 import { isRepoRoot } from './git'
@@ -66,6 +67,11 @@ interface ChatState {
   parked: boolean
   /** The persisted park `SessionRecord` id while parked, else null. */
   parkRecordId: string | null
+  /** Files in the cumulative batch that Praxis could not safely land. */
+  parkedFiles: string[]
+  /** Marker-bearing files after `stageResolve`; retained so preparing twice is
+   *  idempotent instead of erasing the only recovery diff on the second call. */
+  resolvingFiles: string[] | null
   turnNo: number
   /** Per-chat serialization chain (sync + merge queue). */
   chain: Promise<unknown>
@@ -143,6 +149,8 @@ export async function isolatedCwd(liveRoot: string, sessionKey: string): Promise
       liveRoot,
       parked: false,
       parkRecordId: null,
+      parkedFiles: [],
+      resolvingFiles: null,
       turnNo: 0,
       chain: Promise.resolve()
     })
@@ -235,11 +243,16 @@ export function afterTurn(
             st.parked = false
             dropParkRecord(st)
           }
+          st.parkedFiles = []
+          st.resolvingFiles = null
           await retireWorktreeBranch(st.wt)
           // Not revertable once this chat's work has been pushed & merged via a PR.
           emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
         } else if (outcome.outcome === 'parked') {
           st.parked = true
+          st.parkedFiles = outcome.files
+          const markers = await conflictMarkerFiles(st.wt, outcome.files)
+          st.resolvingFiles = markers.length ? markers : null
           upsertParkRecord(st, outcome.files, turn)
           emitIsolation(sessionKey, 'parked', st.wt.branch, outcome.files)
         } else if (outcome.newBase) {
@@ -297,7 +310,11 @@ function saveParkRecord(opts: {
 
 /** Persist (or refresh) the park record a live PARKED chat surfaces in the sidebar,
  *  carrying the last turn's transcript into the review UI. */
-function upsertParkRecord(st: ChatState, files: string[], transcript: SessionTranscriptEntry[] = []): void {
+function upsertParkRecord(
+  st: ChatState,
+  files: string[],
+  transcript: SessionTranscriptEntry[] = []
+): void {
   const id = saveParkRecord({
     wtId: st.wt.id,
     repoRoot: st.liveRoot,
@@ -313,7 +330,12 @@ function upsertParkRecord(st: ChatState, files: string[], transcript: SessionTra
  *  chat is no longer live). `filesTouched` is read from the branch's cumulative diff. */
 async function recoveryParkRecord(repoRoot: string, wtId: string, branch: string): Promise<void> {
   const files = await gitOut(repoRoot, ['diff', '--name-only', `${branch}^..${branch}`])
-    .then((o) => o.split('\n').map((s) => s.trim()).filter(Boolean))
+    .then((o) =>
+      o
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
     .catch(() => [] as string[])
   saveParkRecord({ wtId, repoRoot, branch, files, title: 'Recovered chat changes' })
 }
@@ -355,7 +377,9 @@ export async function applyParkedBranch(
   const found = findByBranch(root, branch)
   if (!found) return { handled: false }
   const [key, st] = found
-  const task = st.chain.then(() => enqueueRepoWrite(st.liveRoot, () => applyParked(st.liveRoot, st.wt)))
+  const task = st.chain.then(() =>
+    enqueueRepoWrite(st.liveRoot, () => applyParked(st.liveRoot, st.wt))
+  )
   st.chain = task.catch(() => {})
   try {
     const res = await task
@@ -369,13 +393,20 @@ export async function applyParkedBranch(
         body: 'Praxis parked-chat apply.'
       })
       st.parked = false
+      st.parkedFiles = []
+      st.resolvingFiles = null
       dropParkRecord(st)
       await retireWorktreeBranch(st.wt)
       emitIsolation(key, 'merged', st.wt.branch, res.files)
     }
     return { handled: true, ok: res.ok, conflict: res.conflict, error: res.error }
   } catch (e) {
-    return { handled: true, ok: false, conflict: false, error: e instanceof Error ? e.message : String(e) }
+    return {
+      handled: true,
+      ok: false,
+      conflict: false,
+      error: e instanceof Error ? e.message : String(e)
+    }
   }
 }
 
@@ -386,7 +417,10 @@ export async function applyParkedBranch(
  * Returns `{ handled: false }` when no live chat owns the branch (falls through to the
  * stock `deleteBranch`).
  */
-export async function discardParkedBranch(root: string, branch: string): Promise<{ handled: boolean }> {
+export async function discardParkedBranch(
+  root: string,
+  branch: string
+): Promise<{ handled: boolean }> {
   const found = findByBranch(root, branch)
   if (!found) return { handled: false }
   const [key, st] = found
@@ -399,6 +433,8 @@ export async function discardParkedBranch(root: string, branch: string): Promise
   st.chain = task.catch(() => {})
   await task.catch(() => {})
   st.parked = false
+  st.parkedFiles = []
+  st.resolvingFiles = null
   dropParkRecord(st)
   emitIsolation(key, 'isolated', st.wt.branch)
   return { handled: true }
@@ -421,6 +457,7 @@ export async function resolveParkedChat(
   const st = states.get(sessionKey)
   if (!st) return { ok: false, conflicted: [], error: 'no-chat' }
   if (!st.parked) return { ok: false, conflicted: [], error: 'not-parked' }
+  if (st.resolvingFiles) return { ok: true, conflicted: st.resolvingFiles }
   const task = st.chain.then(() =>
     enqueueRepoWrite(st.liveRoot, () => stageResolve(st.liveRoot, st.wt))
   )
@@ -431,60 +468,71 @@ export async function resolveParkedChat(
   } catch (e) {
     return { ok: false, conflicted: [], error: e instanceof Error ? e.message : String(e) }
   }
-  if (!prep.clean) return { ok: true, conflicted: prep.conflicted }
+  if (!prep.clean) {
+    st.resolvingFiles = prep.conflicted
+    return { ok: true, conflicted: prep.conflicted }
+  }
   // No overlap — the sides merged automatically. Commit + merge onto live and unpark now.
   // completeTurn's autoApplyWorktree still refuses a binary file (even one stageResolve
   // just resolved by policy) — the applyParked fallback below is what actually lands it.
-  const merge = st.chain.then(() => enqueueRepoWrite(st.liveRoot, async () => {
-    const outcome = await completeTurn(st.liveRoot, st.wt, 'Resolve chat/live merge')
-    if (outcome.outcome === 'merged') {
-      const group = `chat:${st.wt.id}:resolve`
-      for (const e of outcome.edits) {
-        recordEdit(st.liveRoot, e.file, e.before, e.after, undefined, group)
+  const merge = st.chain.then(() =>
+    enqueueRepoWrite(st.liveRoot, async () => {
+      const outcome = await completeTurn(st.liveRoot, st.wt, 'Resolve chat/live merge')
+      if (outcome.outcome === 'merged') {
+        const group = `chat:${st.wt.id}:resolve`
+        for (const e of outcome.edits) {
+          recordEdit(st.liveRoot, e.file, e.before, e.after, undefined, group)
+        }
+        if (outcome.newBase) st.wt.baseSha = outcome.newBase
+        await commitLiveTurn(st.liveRoot, outcome.files, {
+          title: 'Resolve chat/live merge',
+          body: `Praxis conflict resolution (${st.wt.branch}).`
+        })
+        st.parked = false
+        st.parkedFiles = []
+        st.resolvingFiles = null
+        dropParkRecord(st)
+        await retireWorktreeBranch(st.wt)
+        emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
+        return
       }
-      if (outcome.newBase) st.wt.baseSha = outcome.newBase
-      await commitLiveTurn(st.liveRoot, outcome.files, {
-        title: 'Resolve chat/live merge',
-        body: `Praxis conflict resolution (${st.wt.branch}).`
-      })
-      st.parked = false
-      dropParkRecord(st)
-      await retireWorktreeBranch(st.wt)
-      emitIsolation(sessionKey, 'merged', st.wt.branch, outcome.files, group, !st.record?.prUrl)
-      return
-    }
-    if (outcome.outcome === 'noop') {
-      // Staging showed the live tree already CONTAINS the chat's work (or the
-      // chat's diff vanished against it) — there is nothing left to merge.
-      // Leaving the chat parked here made "Resolve it" a silent infinite loop:
-      // ok:true + still-parked re-renders the same card. Unpark.
-      st.parked = false
-      dropParkRecord(st)
-      if (outcome.newBase) st.wt.baseSha = outcome.newBase
-      await retireWorktreeBranch(st.wt)
-      emitIsolation(sessionKey, 'isolated', st.wt.branch)
-      return
-    }
-    // 'parked' again — autoApplyWorktree refused the batch (it only writes text
-    // files that still match the snapshot; a DELETED or binary file in the
-    // chat's diff refuses forever, so retrying can never converge). The user
-    // explicitly asked to resolve, so fall back to the explicit-apply
-    // machinery (the review modal's Apply): a 3-way `git apply` handles
-    // deletions/binary/modes. No per-file undo entries for this path — same
-    // trade-off as the modal's Apply.
-    const res = await applyParked(st.liveRoot, st.wt)
-    if (res.ok) {
-      if (res.newBase) st.wt.baseSha = res.newBase
-      st.parked = false
-      dropParkRecord(st)
-      await retireWorktreeBranch(st.wt)
-      emitIsolation(sessionKey, 'merged', st.wt.branch, res.files)
-      return
-    }
-    throw new Error(
-      `the merged result couldn't be written onto the project${res.error ? ` (${res.error.slice(0, 200)})` : ''}`
-    )
-  }))
+      if (outcome.outcome === 'noop') {
+        // Staging showed the live tree already CONTAINS the chat's work (or the
+        // chat's diff vanished against it) — there is nothing left to merge.
+        // Leaving the chat parked here made "Resolve it" a silent infinite loop:
+        // ok:true + still-parked re-renders the same card. Unpark.
+        st.parked = false
+        st.parkedFiles = []
+        st.resolvingFiles = null
+        dropParkRecord(st)
+        if (outcome.newBase) st.wt.baseSha = outcome.newBase
+        await retireWorktreeBranch(st.wt)
+        emitIsolation(sessionKey, 'isolated', st.wt.branch)
+        return
+      }
+      // 'parked' again — autoApplyWorktree refused the batch (it only writes text
+      // files that still match the snapshot; a DELETED or binary file in the
+      // chat's diff refuses forever, so retrying can never converge). The user
+      // explicitly asked to resolve, so fall back to the explicit-apply
+      // machinery (the review modal's Apply): a 3-way `git apply` handles
+      // deletions/binary/modes. No per-file undo entries for this path — same
+      // trade-off as the modal's Apply.
+      const res = await applyParked(st.liveRoot, st.wt)
+      if (res.ok) {
+        if (res.newBase) st.wt.baseSha = res.newBase
+        st.parked = false
+        st.parkedFiles = []
+        st.resolvingFiles = null
+        dropParkRecord(st)
+        await retireWorktreeBranch(st.wt)
+        emitIsolation(sessionKey, 'merged', st.wt.branch, res.files)
+        return
+      }
+      throw new Error(
+        `the merged result couldn't be written onto the project${res.error ? ` (${res.error.slice(0, 200)})` : ''}`
+      )
+    })
+  )
   st.chain = merge.catch(() => {})
   try {
     await merge
@@ -656,5 +704,50 @@ export function isolationSnapshot(
   return {
     state: st.parked ? 'parked' : 'isolated',
     ...(st.wt.branch ? { branch: st.wt.branch } : {})
+  }
+}
+
+/** Authoritative state exposed to the chat's Praxis MCP tools. Unlike `git status`
+ *  inside the private checkout, this reports whether the landing coordinator has
+ *  accepted, parked, or staged the cumulative batch. Paths stay out of the result:
+ *  the model already runs in its own worktree and should never target the live one. */
+export function agentWorkspaceState(sessionKey: string): {
+  state: 'live' | 'isolated' | 'parked' | 'resolving'
+  branch?: string
+  files: string[]
+  guidance: string
+} {
+  const st = states.get(sessionKey)
+  if (!st) {
+    return {
+      state: 'live',
+      files: [],
+      guidance: 'This chat edits the live folder directly; no Praxis worktree landing is active.'
+    }
+  }
+  if (st.resolvingFiles) {
+    return {
+      state: 'resolving',
+      branch: st.wt.branch,
+      files: st.resolvingFiles,
+      guidance:
+        'Both sides are staged in this worktree. Resolve every conflict marker in the listed files; Praxis will land the result when the turn completes.'
+    }
+  }
+  if (st.parked) {
+    return {
+      state: 'parked',
+      branch: st.wt.branch,
+      files: st.parkedFiles,
+      guidance:
+        'Praxis refused to land this cumulative batch safely. Call prepare_conflict_resolution before editing or giving the user terminal instructions.'
+    }
+  }
+  return {
+    state: 'isolated',
+    branch: st.wt.branch,
+    files: [],
+    guidance:
+      'This chat is healthy and isolated. Praxis will validate and land its edits when the turn completes.'
   }
 }

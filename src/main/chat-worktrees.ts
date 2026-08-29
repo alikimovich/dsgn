@@ -3,13 +3,14 @@ import { readFile, writeFile } from 'fs/promises'
 import { dirname, join } from 'path'
 import { promisify } from 'util'
 import {
-  createWorktree,
-  commitWorktree,
-  autoApplyWorktree,
-  diffWorktree,
   applyToWorkingTree,
   attachWorktreeBranch,
+  autoApplyWorktree,
   captureBase,
+  commitWorktree,
+  createWorktree,
+  diffWorktree,
+  excludedWorktreePath,
   RUNTIME_DEPS,
   type Worktree
 } from './worktrees'
@@ -33,7 +34,11 @@ import {
 
 const execFileP = promisify(execFile)
 
-const git = (cwd: string, args: string[], timeout = 15000): Promise<{ stdout: string; stderr: string }> =>
+const git = (
+  cwd: string,
+  args: string[],
+  timeout = 15000
+): Promise<{ stdout: string; stderr: string }> =>
   execFileP('git', args, { cwd, timeout, maxBuffer: 16 * 1024 * 1024 }) as Promise<{
     stdout: string
     stderr: string
@@ -72,7 +77,8 @@ async function changedFiles(wt: Worktree): Promise<string[]> {
 }
 
 /** Git-style unresolved markers must never cross from a resolution worktree to live. */
-async function hasConflictMarkers(wt: Worktree, files: string[]): Promise<boolean> {
+export async function conflictMarkerFiles(wt: Worktree, files: string[]): Promise<string[]> {
+  const marked: string[] = []
   for (const rel of files) {
     let text: string
     try {
@@ -81,10 +87,10 @@ async function hasConflictMarkers(wt: Worktree, files: string[]): Promise<boolea
       continue
     }
     if (/^<<<<<<< .+$/m.test(text) && /^=======$/m.test(text) && /^>>>>>>> .+$/m.test(text)) {
-      return true
+      marked.push(rel)
     }
   }
-  return false
+  return marked
 }
 
 /**
@@ -92,7 +98,11 @@ async function hasConflictMarkers(wt: Worktree, files: string[]): Promise<boolea
  * tree's CURRENT state (uncommitted WIP included, via `captureBase`) and symlinking
  * node_modules/.env — exactly like comment spawns, only the branch-name scheme differs.
  */
-export function createChatWorktree(liveRoot: string, id: string, worktreesDir: string): Promise<Worktree> {
+export function createChatWorktree(
+  liveRoot: string,
+  id: string,
+  worktreesDir: string
+): Promise<Worktree> {
   return createWorktree(liveRoot, worktreesDir, { id, branchName: (i) => `chat-${i}` })
 }
 
@@ -151,7 +161,9 @@ export async function completeTurn(
   // Failed/interrupted turns are durable on their recovery branch but never land
   // automatically. The user can inspect, resolve or discard the partial result.
   if (opts.land === false) return { outcome: 'parked', files, edits: [] }
-  if (await hasConflictMarkers(wt, files)) return { outcome: 'parked', files, edits: [] }
+  if ((await conflictMarkerFiles(wt, files)).length) {
+    return { outcome: 'parked', files, edits: [] }
+  }
   const { applied, edits } = await autoApplyWorktree(liveRoot, wt, files)
   if (applied) {
     const newBase = await revParse(wt.path, 'HEAD')
@@ -222,6 +234,22 @@ export interface ResolvePrep {
  * tells the user Resolve does.
  */
 export async function stageResolve(liveRoot: string, wt: Worktree): Promise<ResolvePrep> {
+  const porcelain = (await git(wt.path, ['status', '--porcelain=v1', '-z', '--untracked-files=all']))
+    .stdout
+    .split('\0')
+    .filter(Boolean)
+  const meaningful = porcelain.filter((entry) => {
+    // The first path in each record carries the two-byte status prefix; a second
+    // rename/copy path does not. Machine-only paths are excluded from every
+    // snapshot/commit and must not make a runtime-dep symlink look like an edit.
+    const rel = /^[ MADRCU?!]{2} /.test(entry) ? entry.slice(3) : entry
+    return !excludedWorktreePath(rel)
+  })
+  if (meaningful.length) {
+    throw new Error(
+      'the chat worktree changed after it was parked; finish this turn first, then prepare the cumulative conflict on the next turn'
+    )
+  }
   const chatHead = await revParse(wt.path, 'HEAD') // the chat's own cumulative work, before we move the ref
   const patch = await diffWorktree(wt) // chat's cumulative changes — capture before reset
   const files = await changedFiles(wt)

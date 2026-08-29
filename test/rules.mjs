@@ -17,7 +17,7 @@ const assert = (cond, msg) => {
 const r = praxisRules()
 assert(typeof r === 'string' && r.length > 0, 'rules render to a non-empty string')
 assert(typeof PRAXIS_RULES_VERSION === 'number', 'version is a number')
-assert(PRAXIS_RULES_VERSION === 11, 'version bumped to 11')
+assert(PRAXIS_RULES_VERSION === 12, 'version bumped to 12')
 assert(r.includes(`v${PRAXIS_RULES_VERSION}`), 'rules carry the version marker')
 // v3 naming — the product is Praxis in the rule text now.
 assert(/praxis/i.test(r), 'names the product Praxis')
@@ -87,13 +87,34 @@ assert(!/fluid_clamp/.test(r), 'default rendering omits fluid_clamp')
 // text styles…") — the buried calculator bullet never made the agent reach for it
 // (caught by test/tool-invocation.mjs).
 assert(/line_height/.test(withTools), 'previewTools: teaches line_height')
-assert(/type metrics \(line_height\)/i.test(withTools), 'previewTools: line_height has its own section')
-assert(/whenever you write or change text styles/i.test(withTools), 'previewTools: line_height trigger-first phrasing')
+assert(
+  /type metrics \(line_height\)/i.test(withTools),
+  'previewTools: line_height has its own section'
+)
+assert(
+  /whenever you write or change text styles/i.test(withTools),
+  'previewTools: line_height trigger-first phrasing'
+)
 assert(!/line_height/.test(r), 'default rendering omits line_height')
 // R8b (skills install) — offer-to-install skill packs rides with previewTools too.
 assert(/list_recommended_skills/.test(withTools), 'previewTools: teaches list_recommended_skills')
 assert(/install_skills/.test(withTools), 'previewTools: teaches install_skills')
 assert(!/install_skills/.test(r), 'default rendering omits install_skills')
+
+// R9 (Codex Praxis control) — workspace tools appear only for a backend that
+// actually wires the local MCP server. The generic/Gemini prompt must not claim
+// tools it cannot call.
+const withWorkspaceTools = praxisRules({ workspaceTools: true })
+assert(/workspace_state/.test(withWorkspaceTools), 'workspaceTools: teaches authoritative status')
+assert(
+  /prepare_conflict_resolution/.test(withWorkspaceTools),
+  'workspaceTools: teaches safe conflict preparation'
+)
+assert(
+  /do not tell the user to open a terminal/i.test(withWorkspaceTools),
+  'workspaceTools: forbids terminal handoff'
+)
+assert(!/workspace_state/.test(r), 'default rendering omits workspace_state')
 
 if (failed) {
   console.error(`RULES FAILED — ${failed} assertion(s)`)

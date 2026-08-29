@@ -2,6 +2,33 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-08-28 — Codex can operate Praxis-owned worktree recovery
+
+The in-app Codex was told not to mutate Praxis's `praxis/chat-*` branches, but the only
+supported resolver lived behind a renderer button. When it recognized an authoritative
+landing conflict it could inspect its private checkout, yet could neither see the
+coordinator's parked state nor ask Praxis to stage both sides; the resulting “Praxis
+should resolve this” answer sent the user to a second Codex session in a terminal.
+
+Codex and custom-gateway sessions now receive a small Praxis MCP server with two tools:
+`workspace_state` reads the chat's authoritative isolated/parked/resolving state, and
+`prepare_conflict_resolution` runs the existing three-way resolver through the
+repository-scoped writer queue. Marker-bearing files are left in the same worktree the
+model already edits, so Codex reconciles both versions and ordinary turn completion
+lands the result. A second prepare call is idempotent. Preparation refuses to reset a
+worktree if the current turn already changed it, preserving those edits for the next
+cumulative attempt.
+
+The MCP subprocess never receives a raw Git primitive or direct access to coordinator
+internals. Each chat gets an unguessable bearer token over a user-only local socket;
+main maps that token to exactly one live session and removes it on teardown. Destructive
+discard/reset operations remain UI/user decisions. Praxis rules v12 now direct Codex to
+use the tools before offering terminal instructions. `test/praxis-agent-tools.mjs`
+drives the actual MCP protocol under Electron-as-Node and proves token isolation plus
+both calls; the existing worktree and rule suites cover resolver safety and prompting.
+Verified: `bun run typecheck`, production build, and the complete `bun run verify`
+matrix pass (123/123), including a real Codex turn with the injected MCP configuration.
+
 ## 2026-08-24 — Closing the launch terminal no longer causes endless error dialogs
 
 Stopping a development launch could close its PTY while Electron was still winding

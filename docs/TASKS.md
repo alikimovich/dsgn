@@ -10,6 +10,16 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Codex can operate Praxis-owned worktree recovery (2026-08-28, user-requested) — SHIPPED
+
+- [x] **Stop handing complex landing conflicts back to the user.** ✅ 2026-08-28 —
+      Codex and gateway sessions now receive session-scoped `workspace_state` and
+      `prepare_conflict_resolution` MCP tools. They read/mutate the authoritative
+      in-process coordinator through a token-scoped local socket and the existing
+      repository queue; Codex resolves the staged markers in its own checkout and
+      normal turn completion lands them. No raw Git or discard/reset capability is
+      exposed. `test/praxis-agent-tools.mjs`, `test/chat-worktrees.mjs`, `test/rules.mjs`.
+
 ## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
 
 - [x] **Stop the endless `write EIO` dialog loop after the launch terminal closes.** ✅

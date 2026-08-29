@@ -50,6 +50,7 @@ const UNIT = [
   'model-catalog',
   'codex-retry-cause',
   'codex-stream',
+  'praxis-agent-tools',
   'interrupt-escalation',
   'terminal-streams',
   'turn-terminal',

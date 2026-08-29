@@ -22,7 +22,7 @@ idle (detached worktree, no chat branch)
       → live drift/conflict: keep cumulative work on chat branch, park
 
 parked
-  → Resolve: rebase both sides into the worktree; AI resolves markers if necessary
+  → Resolve (UI or agent tool): rebase both sides into the worktree; AI resolves markers
   → Discard: reset worktree, detach, delete chat branch
   → successful resolution: land once, detach, delete chat branch
 ```
@@ -63,6 +63,13 @@ need the explicit resolver, or a failed/interrupted provider turn with partial e
 The conflict card must therefore reflect the harness's authoritative landing state—not
 the model's opinion about whether its private worktree is clean. A clean worktree can
 still be parked because publication to the live checkout failed.
+
+Codex/gateway chats can query that same authority with the session-scoped
+`workspace_state` MCP tool. When it reports `parked`, `prepare_conflict_resolution`
+invokes the same queued resolver as the conflict card, leaving marker-bearing files in
+the chat's current worktree for the model to reconcile. The tool is idempotent after
+staging, refuses to reset a worktree already edited in the current turn, and exposes no
+raw Git/reset/discard escape hatch.
 
 ## Recovery and limits
 

@@ -15,18 +15,19 @@
  *
  * Run with: bun run test:chat-worktrees
  */
-import {
-  createChatWorktree,
-  syncFromLive,
-  completeTurn,
-  applyParked,
-  discardParked,
-  stageResolve
-} from '../src/main/chat-worktrees.ts'
+
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import {
+  applyParked,
+  completeTurn,
+  createChatWorktree,
+  discardParked,
+  stageResolve,
+  syncFromLive
+} from '../src/main/chat-worktrees.ts'
 
 const base = mkdtempSync(join(tmpdir(), 'praxis-cwt-'))
 const worktreesDir = join(base, 'worktrees')
@@ -82,10 +83,14 @@ try {
   ok(!!t1.newBase, 'merged turn returns a newBase for the caller to advance')
   ok(t1.files.includes('FileA.tsx'), `turn-1 files: ${JSON.stringify(t1.files)}`)
   ok(
-    existsSync(join(repo1, 'FileA.tsx')) && readFileSync(join(repo1, 'FileA.tsx'), 'utf8') === 'a\n',
+    existsSync(join(repo1, 'FileA.tsx')) &&
+      readFileSync(join(repo1, 'FileA.tsx'), 'utf8') === 'a\n',
     'turn 1 landed FileA on the LIVE tree'
   )
-  ok(readFileSync(join(repo1, 'README.md'), 'utf8').includes('WIP'), "the main agent's live WIP survived the merge")
+  ok(
+    readFileSync(join(repo1, 'README.md'), 'utf8').includes('WIP'),
+    "the main agent's live WIP survived the merge"
+  )
   ok(
     t1.edits.length === 1 && t1.edits[0].after === 'a\n',
     `merged turn returns before/after edits for undo: ${JSON.stringify(t1.edits)}`
@@ -101,7 +106,10 @@ try {
     t2.files.length === 1 && t2.files[0] === 'FileB.tsx',
     `turn-2 diff is incremental (only the new file, not FileA): ${JSON.stringify(t2.files)}`
   )
-  const t2revs = g(repo1, 'rev-list', `${beforeTurn2Base}..${t2.newBase}`).trim().split('\n').filter(Boolean)
+  const t2revs = g(repo1, 'rev-list', `${beforeTurn2Base}..${t2.newBase}`)
+    .trim()
+    .split('\n')
+    .filter(Boolean)
   ok(t2revs.length === 1, `turn 2 is a single commit off the advanced base: ${t2revs.length}`)
   ok(existsSync(join(repo1, 'FileB.tsx')), 'turn 2 landed FileB on the live tree')
   wt.baseSha = t2.newBase
@@ -111,13 +119,17 @@ try {
   const s1 = await syncFromLive(repo1, wt)
   ok(s1.synced === true, 'syncFromLive syncs a between-turn live edit')
   ok(
-    existsSync(join(wt.path, 'LiveEdit.tsx')) && readFileSync(join(wt.path, 'LiveEdit.tsx'), 'utf8') === 'live\n',
+    existsSync(join(wt.path, 'LiveEdit.tsx')) &&
+      readFileSync(join(wt.path, 'LiveEdit.tsx'), 'utf8') === 'live\n',
     'syncFromLive mirrored the live edit into the worktree'
   )
   const s2 = await syncFromLive(repo1, wt)
   ok(s2.synced === false, 'syncFromLive is a no-op when the worktree already matches live')
   // clean -fd (run by syncFromLive) must NOT remove the gitignored runtime-dep symlinks.
-  ok(existsSync(join(wt.path, 'node_modules', '.marker')), 'clean -fd spared the node_modules symlink')
+  ok(
+    existsSync(join(wt.path, 'node_modules', '.marker')),
+    'clean -fd spared the node_modules symlink'
+  )
   ok(existsSync(join(wt.path, '.env')), 'clean -fd spared the .env symlink')
 
   // ============================================================================
@@ -131,7 +143,10 @@ try {
   writeFileSync(join(wt2.path, 'README.md'), 'from chat\n')
   writeFileSync(join(repo2, 'README.md'), 'user typed this\n')
   const p1 = await completeTurn(repo2, wt2, 'parked turn 1')
-  ok(p1.outcome === 'parked', `mid-turn drift on a touched file parks: ${JSON.stringify(p1.outcome)}`)
+  ok(
+    p1.outcome === 'parked',
+    `mid-turn drift on a touched file parks: ${JSON.stringify(p1.outcome)}`
+  )
   ok(
     readFileSync(join(repo2, 'README.md'), 'utf8') === 'user typed this\n',
     'a parked turn must NOT clobber the concurrent live edit'
@@ -141,11 +156,18 @@ try {
   // re-squashes turn-1 + turn-2 into ONE cumulative commit off base (keeps branchPatch correct).
   writeFileSync(join(wt2.path, 'Extra.tsx'), 'chat extra\n')
   const p2 = await completeTurn(repo2, wt2, 'parked turn 2')
-  ok(p2.outcome === 'parked', `parked chat re-attempts and stays parked while drifted: ${JSON.stringify(p2.outcome)}`)
-  const p2revs = g(wt2.path, 'rev-list', `${wt2.baseSha}..HEAD`).trim().split('\n').filter(Boolean)
-  ok(p2revs.length === 1, `parked turn 2 re-squashes into a single cumulative commit: ${p2revs.length}`)
   ok(
-    g(wt2.path, 'show', 'HEAD:README.md') === 'from chat\n' && g(wt2.path, 'show', 'HEAD:Extra.tsx') === 'chat extra\n',
+    p2.outcome === 'parked',
+    `parked chat re-attempts and stays parked while drifted: ${JSON.stringify(p2.outcome)}`
+  )
+  const p2revs = g(wt2.path, 'rev-list', `${wt2.baseSha}..HEAD`).trim().split('\n').filter(Boolean)
+  ok(
+    p2revs.length === 1,
+    `parked turn 2 re-squashes into a single cumulative commit: ${p2revs.length}`
+  )
+  ok(
+    g(wt2.path, 'show', 'HEAD:README.md') === 'from chat\n' &&
+      g(wt2.path, 'show', 'HEAD:Extra.tsx') === 'chat extra\n',
     'the single squash commit carries BOTH parked turns'
   )
 
@@ -165,7 +187,10 @@ try {
   const ap = await applyParked(repo3, wt3)
   ok(ap.ok, `applyParked applies the parked diff onto a dirty tree: ${JSON.stringify(ap)}`)
   ok(!!ap.newBase, 'a clean applyParked returns a newBase to advance')
-  ok(readFileSync(join(repo3, 'README.md'), 'utf8') === 'chat readme\n', 'applyParked landed the parked change on live')
+  ok(
+    readFileSync(join(repo3, 'README.md'), 'utf8') === 'chat readme\n',
+    'applyParked landed the parked change on live'
+  )
   ok(
     readFileSync(join(repo3, 'Other.tsx'), 'utf8').includes('// unrelated WIP'),
     'applyParked (3-way) preserved the unrelated live WIP'
@@ -179,7 +204,10 @@ try {
   writeFileSync(join(wt4.path, 'README.md'), 'junk\n')
   writeFileSync(join(wt4.path, 'Junk.tsx'), 'junk\n')
   await discardParked(wt4)
-  ok(readFileSync(join(wt4.path, 'README.md'), 'utf8') === 'base\n', 'discardParked reset the tracked file to base')
+  ok(
+    readFileSync(join(wt4.path, 'README.md'), 'utf8') === 'base\n',
+    'discardParked reset the tracked file to base'
+  )
   ok(!existsSync(join(wt4.path, 'Junk.tsx')), 'discardParked cleaned the stray file')
   ok(g(wt4.path, 'status', '--porcelain').trim() === '', 'discardParked left a clean worktree')
   ok(
@@ -199,7 +227,10 @@ try {
   const r5park = await completeTurn(repo5, wt5, 'to be parked')
   ok(r5park.outcome === 'parked', `repo5 file-level drift parks: ${JSON.stringify(r5park.outcome)}`)
   const prep5 = await stageResolve(repo5, wt5)
-  ok(prep5.clean && prep5.conflicted.length === 0, `non-overlapping drift stages clean (no markers): ${JSON.stringify(prep5)}`)
+  ok(
+    prep5.clean && prep5.conflicted.length === 0,
+    `non-overlapping drift stages clean (no markers): ${JSON.stringify(prep5)}`
+  )
   const merged5 = readFileSync(join(wt5.path, 'README.md'), 'utf8')
   ok(
     merged5 === 'USER\nline1\nline2\nline3\nCHAT\n',
@@ -207,7 +238,10 @@ try {
   )
   // baseSha advanced to the live snapshot, so the merge-back is now clean.
   const r5done = await completeTurn(repo5, wt5, 'resolve merge')
-  ok(r5done.outcome === 'merged', `post-stage completeTurn merges onto live: ${JSON.stringify(r5done.outcome)}`)
+  ok(
+    r5done.outcome === 'merged',
+    `post-stage completeTurn merges onto live: ${JSON.stringify(r5done.outcome)}`
+  )
   ok(
     readFileSync(join(repo5, 'README.md'), 'utf8') === 'USER\nline1\nline2\nline3\nCHAT\n',
     'the reconciled result landed on the live tree'
@@ -222,7 +256,10 @@ try {
   writeFileSync(join(wt6.path, 'README.md'), 'line1\nCHAT-EDIT\nline3\n')
   writeFileSync(join(repo6, 'README.md'), 'line1\nUSER-EDIT\nline3\n')
   const r6park = await completeTurn(repo6, wt6, 'to be parked')
-  ok(r6park.outcome === 'parked', `repo6 overlapping drift parks: ${JSON.stringify(r6park.outcome)}`)
+  ok(
+    r6park.outcome === 'parked',
+    `repo6 overlapping drift parks: ${JSON.stringify(r6park.outcome)}`
+  )
   const prep6 = await stageResolve(repo6, wt6)
   ok(
     !prep6.clean && prep6.conflicted.includes('README.md'),
@@ -230,7 +267,10 @@ try {
   )
   const marked6 = readFileSync(join(wt6.path, 'README.md'), 'utf8')
   ok(
-    marked6.includes('<<<<<<<') && marked6.includes('>>>>>>>') && marked6.includes('CHAT-EDIT') && marked6.includes('USER-EDIT'),
+    marked6.includes('<<<<<<<') &&
+      marked6.includes('>>>>>>>') &&
+      marked6.includes('CHAT-EDIT') &&
+      marked6.includes('USER-EDIT'),
     'stageResolve left conflict markers carrying BOTH sides for the agent to reconcile'
   )
   // The agent resolves the markers (writes a reconciled file); the follow-up completeTurn
@@ -238,7 +278,10 @@ try {
   // that would wedge the commit.
   writeFileSync(join(wt6.path, 'README.md'), 'line1\nCHAT-EDIT+USER-EDIT\nline3\n')
   const r6done = await completeTurn(repo6, wt6, 'resolve conflict')
-  ok(r6done.outcome === 'merged', `post-resolution completeTurn merges: ${JSON.stringify(r6done.outcome)}`)
+  ok(
+    r6done.outcome === 'merged',
+    `post-resolution completeTurn merges: ${JSON.stringify(r6done.outcome)}`
+  )
   ok(
     readFileSync(join(repo6, 'README.md'), 'utf8') === 'line1\nCHAT-EDIT+USER-EDIT\nline3\n',
     "the agent's reconciled result landed on the live tree"
@@ -260,7 +303,10 @@ try {
   const p7 = await completeTurn(repo7, wt7, 'park with deletion')
   ok(p7.outcome === 'parked', `deletion + drift parks: ${p7.outcome}`)
   const prep7 = await stageResolve(repo7, wt7)
-  ok(prep7.conflicted.includes('README.md'), `overlapping README carries markers: ${prep7.conflicted}`)
+  ok(
+    prep7.conflicted.includes('README.md'),
+    `overlapping README carries markers: ${prep7.conflicted}`
+  )
   ok(!existsSync(join(wt7.path, 'Doomed.tsx')), 'the re-laid diff kept the deletion staged')
   // The agent reconciles the markers…
   writeFileSync(join(wt7.path, 'README.md'), 'user version + chat version\n')
@@ -308,7 +354,10 @@ try {
   // The file-copy merge still refuses binary content — same escape hatch as repo7's deletion.
   ok(done8.outcome === 'parked', `file-copy merge still refuses binary content: ${done8.outcome}`)
   const ap8 = await applyParked(repo8, wt8)
-  ok(ap8.ok === true, `applyParked fallback lands the resolved binary conflict: ${JSON.stringify(ap8)}`)
+  ok(
+    ap8.ok === true,
+    `applyParked fallback lands the resolved binary conflict: ${JSON.stringify(ap8)}`
+  )
   ok(
     readFileSync(join(repo8, 'plugin.png')).equals(chatImg),
     "the chat's resolved image landed on the live tree"
@@ -328,7 +377,10 @@ try {
   g(repo9, 'add', '-A')
   g(repo9, 'commit', '-q', '-m', 'init')
   const wt9 = await createChatWorktree(repo9, 'chatnine', worktreesDir)
-  ok(existsSync(join(wt9.path, 'node_modules', '.marker')), 'trailing-slash ignored node_modules is symlinked')
+  ok(
+    existsSync(join(wt9.path, 'node_modules', '.marker')),
+    'trailing-slash ignored node_modules is symlinked'
+  )
   writeFileSync(join(wt9.path, 'App.tsx'), 'v2\n')
   const t9 = await completeTurn(repo9, wt9, 'edit app')
   ok(t9.outcome === 'merged', `runtime symlink must not force a park: ${JSON.stringify(t9)}`)
@@ -336,7 +388,10 @@ try {
     t9.files.length === 1 && t9.files[0] === 'App.tsx',
     `only the real edit enters the turn: ${JSON.stringify(t9.files)}`
   )
-  ok(existsSync(join(wt9.path, 'node_modules', '.marker')), 'sync/commit cleanup spares the runtime symlink')
+  ok(
+    existsSync(join(wt9.path, 'node_modules', '.marker')),
+    'sync/commit cleanup spares the runtime symlink'
+  )
 
   // repo10 — secrets and generated machine artifacts never enter a synthetic base,
   // turn commit, patch, or live checkout. Env templates remain editable.
@@ -355,8 +410,14 @@ try {
   writeFileSync(join(repo10, 'tsconfig.tsbuildinfo'), 'live generated\n')
   const wt10 = await createChatWorktree(repo10, 'chatten', worktreesDir)
   ok(!existsSync(join(wt10.path, '.env')), 'an unignored .env is neither captured nor symlinked')
-  ok(!existsSync(join(wt10.path, 'node_modules')), 'unignored node_modules is neither captured nor symlinked')
-  ok(!existsSync(join(wt10.path, 'tsconfig.tsbuildinfo')), '*.tsbuildinfo is excluded from the base')
+  ok(
+    !existsSync(join(wt10.path, 'node_modules')),
+    'unignored node_modules is neither captured nor symlinked'
+  )
+  ok(
+    !existsSync(join(wt10.path, 'tsconfig.tsbuildinfo')),
+    '*.tsbuildinfo is excluded from the base'
+  )
   writeFileSync(join(wt10.path, '.env.local'), 'SECRET=agent\n')
   mkdirSync(join(wt10.path, 'node_modules'), { recursive: true })
   writeFileSync(join(wt10.path, 'node_modules', 'agent.js'), 'generated\n')
@@ -364,9 +425,14 @@ try {
   writeFileSync(join(wt10.path, '.env.example'), 'PUBLIC_VALUE=example\n')
   writeFileSync(join(wt10.path, 'Safe.tsx'), 'safe\n')
   const clean10 = await completeTurn(repo10, wt10, 'exclude machine files')
-  ok(clean10.outcome === 'merged', `safe part of artifact-heavy turn still lands: ${clean10.outcome}`)
   ok(
-    clean10.files.length === 2 && clean10.files.includes('.env.example') && clean10.files.includes('Safe.tsx'),
+    clean10.outcome === 'merged',
+    `safe part of artifact-heavy turn still lands: ${clean10.outcome}`
+  )
+  ok(
+    clean10.files.length === 2 &&
+      clean10.files.includes('.env.example') &&
+      clean10.files.includes('Safe.tsx'),
     `only product files enter the turn commit: ${JSON.stringify(clean10.files)}`
   )
   ok(readFileSync(join(repo10, '.env'), 'utf8') === 'SECRET=live\n', 'live .env is untouched')
@@ -414,14 +480,70 @@ try {
   writeFileSync(join(wt13.path, 'README.md'), 'partial edit before provider failure\n')
   const failed13 = await completeTurn(repo13, wt13, 'failed turn', { land: false })
   ok(failed13.outcome === 'parked', 'a failed turn with edits parks')
-  ok(readFileSync(join(repo13, 'README.md'), 'utf8') === 'base\n', 'failed partial work never lands')
+  ok(
+    readFileSync(join(repo13, 'README.md'), 'utf8') === 'base\n',
+    'failed partial work never lands'
+  )
   ok(
     g(wt13.path, 'show', 'HEAD:README.md') === 'partial edit before provider failure\n',
     'failed partial work remains durable on the chat branch'
   )
 
+  // repo14 — the agent-side prepare tool must be the first mutation in a
+  // resolution turn. If the model already edited the parked checkout, refuse
+  // before reset so those fresh edits are not silently erased.
+  const repo14 = makeRepo('repo14', { 'README.md': 'base\n' })
+  const wt14 = await createChatWorktree(repo14, 'chatfourteen', worktreesDir)
+  writeFileSync(join(wt14.path, 'README.md'), 'chat version\n')
+  writeFileSync(join(repo14, 'README.md'), 'user version\n')
+  const p14 = await completeTurn(repo14, wt14, 'park before late preparation')
+  ok(p14.outcome === 'parked', 'repo14 overlapping turn parks')
+  writeFileSync(join(wt14.path, 'README.md'), 'new current-turn edit\n')
+  let rejected14 = ''
+  try {
+    await stageResolve(repo14, wt14)
+  } catch (error) {
+    rejected14 = error instanceof Error ? error.message : String(error)
+  }
+  ok(/changed after it was parked/.test(rejected14), 'late preparation refuses a dirty worktree')
+  ok(
+    readFileSync(join(wt14.path, 'README.md'), 'utf8') === 'new current-turn edit\n',
+    'late preparation preserves the model’s current-turn edit'
+  )
+
+  // repo15 — a directory-only node_modules/ ignore does not match the linked
+  // worktree symlink. That known runtime artifact must not look like a model edit
+  // to the dirty-before-prepare guard.
+  const repo15 = join(base, 'repo15')
+  mkdirSync(repo15, { recursive: true })
+  g(repo15, 'init', '-q', '-b', 'main')
+  g(repo15, 'config', 'user.name', 'Test')
+  g(repo15, 'config', 'user.email', 'test@local')
+  writeFileSync(join(repo15, '.gitignore'), 'node_modules/\n')
+  mkdirSync(join(repo15, 'node_modules'), { recursive: true })
+  writeFileSync(join(repo15, 'node_modules', '.marker'), 'dep\n')
+  writeFileSync(join(repo15, 'README.md'), 'base\n')
+  g(repo15, 'add', '-A')
+  g(repo15, 'commit', '-q', '-m', 'init')
+  const wt15 = await createChatWorktree(repo15, 'chatfifteen', worktreesDir)
+  writeFileSync(join(wt15.path, 'README.md'), 'chat version\n')
+  writeFileSync(join(repo15, 'README.md'), 'user version\n')
+  const p15 = await completeTurn(repo15, wt15, 'park with runtime symlink')
+  ok(p15.outcome === 'parked', 'repo15 overlapping turn parks')
+  ok(
+    g(wt15.path, 'status', '--porcelain').includes('node_modules'),
+    'fixture proves the runtime symlink appears dirty to raw git status'
+  )
+  const prep15 = await stageResolve(repo15, wt15)
+  ok(
+    prep15.conflicted.includes('README.md'),
+    'runtime-only symlink does not block conflict preparation'
+  )
+
   if (failed === 0)
-    console.log('CHAT-WORKTREES OK — isolation/resolve/artifact-filter/temp-index/marker-safety/runtime-symlink')
+    console.log(
+      'CHAT-WORKTREES OK — isolation/resolve/artifact-filter/temp-index/marker-safety/runtime-symlink/dirty-prepare'
+    )
   else console.error(`CHAT-WORKTREES: ${failed} assertion(s) failed`)
   process.exitCode = failed === 0 ? 0 : 1
 } catch (err) {
