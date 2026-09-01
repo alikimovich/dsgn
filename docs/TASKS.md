@@ -10,6 +10,21 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Contextual animation controls + opt-in generation (2026-09-01, user-requested) — SHIPPED
+
+- [x] **Hide inert transition controls.** ✅ 2026-09-01 — browser computed defaults
+      (`all 0s ease`) no longer materialize the Transition group. A positive-duration,
+      non-`none` transition restores the existing duration/delay/Bezier/Replay editor.
+- [x] **Generate animation controls only on request.** ✅ 2026-09-01 — the empty
+      transition state offers a separate description input; submitting it asks the
+      agent to add motion in the project's existing idiom and expose meaningful values
+      through the Dialkit-style custom-control path.
+- [x] **Evaluate `interface-kit`.** ✅ 2026-09-01 — inspected npm `0.1.3` and its
+      published bundle without installing it. Its broader visual property coverage is
+      useful reference material, but React 19-only integration and a DOM-preview → copy-
+      prompt edit model are a regression from Praxis's source-aware editing seam, so it
+      was not adopted. See PROGRESS 2026-09-01.
+
 ## Codex can operate Praxis-owned worktree recovery (2026-08-28, user-requested) — SHIPPED
 
 - [x] **Stop handing complex landing conflicts back to the user.** ✅ 2026-08-28 —
@@ -570,7 +585,9 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
 - [ ] **Springs / framer-motion animation params.** v1 is CSS transitions only;
       a spring config isn't a single CSS value, so it needs its own control
-      shape and a library-aware apply path.
+      shape and a library-aware apply path. The 2026-09-01 opt-in generator can
+      now surface these through Custom controls; this item remains the native,
+      automatically detected apply path.
 - [ ] **More style properties** — width/height, box-shadow, per-corner radius,
       borders, position/inset; each needs a family mapping + a sane control.
 - [ ] **Responsive / state variants** (`hover:`, `md:`) — the rewrite currently

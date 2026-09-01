@@ -120,6 +120,9 @@ export default function PanelApp(): React.JSX.Element | null {
                 canInstrument={state.canInstrument}
                 tokens={state.tokens}
                 onSeedPrompt={(text) => window.api.panel.action({ kind: 'seed', text })}
+                onAnimationControls={(hint) =>
+                  window.api.panel.action({ kind: 'animation-controls', hint })
+                }
               />
             }
             customTab={

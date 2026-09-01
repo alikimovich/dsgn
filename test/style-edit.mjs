@@ -4,7 +4,8 @@
  *
  *   open the propedit fixture as a project (its static server serves stamped
  *   HTML) → click-select the Tailwind element → the island's Styles tab renders
- *   the four control groups → `styles.apply` padding-top 13px commits an S1
+ *   its three ordinary groups and keeps inactive transition defaults hidden →
+ *   `styles.apply` padding-top 13px commits an S1
  *   class rewrite (`pt-[13px]` lands in src/Styled.tsx) → `styles.preview`
  *   injects a live override the preview's computed style reflects (and
  *   clearPreview reverts exactly) → a UI-DRIVEN commit: Enter on the
@@ -30,7 +31,8 @@
  * `--color-title` still writes `var(--color-title)` — the REFERENCE, not
  * `#212121` — and one undo restores it.
  *
- * v10 phase 4 — transitions: re-select the Tailwind element →
+ * v10 phase 4 — transitions: give the live fixture a real positive-duration
+ * transition, then re-select the Tailwind element →
  * `transition-duration: 150ms` snaps to the named time scale (`duration-150`)
  * → a non-keyword curve lands as an arbitrary `ease-[cubic-bezier(…)]` class
  * with NO spaces → expand the timing row's chevron in the island UI (the
@@ -118,7 +120,7 @@ try {
             t.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0 }))
           }
         }
-        return document.querySelectorAll('.stylepanel__grouptitle').length >= 4
+        return document.querySelectorAll('.stylepanel__grouptitle').length >= 3
       })()`)
       if (ok === true) return
       if (Date.now() > end) throw new Error(`the Styles tab never rendered its groups for ${source}`)
@@ -209,14 +211,29 @@ try {
   await win.waitForSelector('button[aria-label="Select"][aria-pressed="true"]', { timeout: 5000 })
   await pickElement('tw-box', TW_SRC)
 
-  // --- Open the island and switch to the Styles tab; all four v1 groups render. ---
+  // --- Open the island and switch to the Styles tab. Browser transition
+  // defaults (`all 0s ease`) are not a real transition, so only the three
+  // ordinary groups render; animation generation is a separate opt-in action. ---
   await openStylesTab(TW_SRC)
   const groups = await panelEval(
     "[...document.querySelectorAll('.stylepanel__grouptitle')].map((e) => e.textContent.trim())"
   )
-  for (const g of ['Layout', 'Appearance', 'Typography', 'Transition']) {
+  for (const g of ['Layout', 'Appearance', 'Typography']) {
     if (!groups.includes(g)) throw new Error(`Styles group "${g}" missing; got ${JSON.stringify(groups)}`)
   }
+  if (groups.includes('Transition')) {
+    throw new Error(`inactive browser-default transition rendered controls: ${JSON.stringify(groups)}`)
+  }
+  await waitPanel(
+    "document.querySelector('.stylepanel__animationtrigger')?.textContent.includes('Generate animation controls')"
+  )
+  await panelEval("document.querySelector('.stylepanel__animationtrigger')?.click(); true")
+  await waitPanel(
+    "document.querySelector('.stylepanel__animationhint')?.placeholder.includes('describe the animation')"
+  )
+  await panelEval(`document.querySelector('.stylepanel__animationhint')?.dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })
+  ); true`)
   // …with a linked padding scrub row showing the FRESH computed value (16px
   // from .p-4 — proves the styles:read round trip into the sandboxed preload).
   await waitPanel(
@@ -478,8 +495,18 @@ try {
   }
 
   // --- Transitions (phase 4): back to the Tailwind element. ---
+  await previewEval(`(() => {
+    const el = document.querySelector('#tw-box')
+    el.style.transitionProperty = 'opacity'
+    el.style.transitionDuration = '150ms'
+    el.style.transitionTimingFunction = 'ease'
+    return true
+  })()`)
   await pickElement('tw-box', TW_SRC)
   await openStylesTab(TW_SRC)
+  await waitPanel(
+    "[...document.querySelectorAll('.stylepanel__grouptitle')].some((e) => e.textContent.trim() === 'Transition')"
+  )
 
   // S1 duration: 150ms sits on Tailwind's named time scale → `duration-150`
   // (not `duration-[150ms]`) appends to the class list.

@@ -18,6 +18,7 @@ import {
   formatBezier,
   formatCssNumber,
   formatMs,
+  hasActiveTransition,
   normalizeMs,
   parseBezier,
   parseCssNumber,
@@ -158,6 +159,28 @@ assert(stylePropMeta('box-shadow') === null, 'box-shadow out of scope v1')
 // --- s/ms normalization ---
 assert(normalizeMs('0.3s') === 300, '0.3s -> 300')
 assert(normalizeMs('250ms') === 250, '250ms -> 250')
+assert(
+  !hasActiveTransition({
+    'transition-property': 'all',
+    'transition-duration': '0s',
+    'transition-timing-function': 'ease'
+  }),
+  'browser transition defaults are not an active transition'
+)
+assert(
+  hasActiveTransition({
+    'transition-property': 'opacity',
+    'transition-duration': '0s, 180ms'
+  }),
+  'a positive duration activates transition controls'
+)
+assert(
+  !hasActiveTransition({
+    'transition-property': 'none',
+    'transition-duration': '180ms'
+  }),
+  'transition-property none stays inactive even with duration'
+)
 assert(normalizeMs('.15s') === 150, '.15s -> 150')
 assert(normalizeMs('2s') === 2000, '2s -> 2000')
 assert(normalizeMs('0') === 0, 'bare 0 allowed for times')

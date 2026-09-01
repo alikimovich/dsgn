@@ -780,6 +780,8 @@ export type PanelAction =
   /** Ask the AI to surface a control panel for the selection (Custom Controls,
    *  v10) — App builds the trigger prompt and auto-sends it as a real turn. */
   | { kind: 'controls'; hint?: string; panelId?: string }
+  /** Add an animation to the selection, then surface its tunable parameters. */
+  | { kind: 'animation-controls'; hint?: string }
 
 export interface PropEdit {
   source: string

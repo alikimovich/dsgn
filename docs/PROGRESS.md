@@ -2,6 +2,40 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-01 — Animation controls are contextual and animation generation is opt-in
+
+The Styles tab used to render its Transition group for every element because
+computed CSS always reports the browser defaults (`transition-property: all`,
+`transition-duration: 0s`, `transition-timing-function: ease`). Those values look
+configured but cannot animate anything. The panel now treats a transition as active
+only when its property list is not entirely `none` and at least one computed duration
+is positive. Inactive elements show no property/duration/delay/easing/Replay controls;
+a genuinely transitioned element still gets the complete editor.
+
+The empty state is a separate **Generate animation controls** action. It asks for an
+optional animation description, then sends a dedicated agent turn that first follows
+the project's existing CSS/Tailwind/Motion idiom, respects reduced motion, and then
+surfaces the useful duration/easing/spring/distance/stagger parameters through the
+existing Dialkit-style custom-control seam. This is deliberately different from the
+generic “Surface controls” prompt, whose instrumentation step promises not to change
+runtime behavior.
+
+Also evaluated the published `interface-kit@0.1.3` package without adding it to the
+repo. It has broader built-in styling coverage (width/height, alignment, borders,
+shadows, backdrop blur) and polished scrub controls, but it requires React 19 while
+Praxis is on React 18, ships roughly 1.2 MB unpacked, declares itself as a dependency,
+and its edit model applies temporary DOM styles then copies a heuristic selector-based
+prompt. Praxis already resolves stamped source, writes through Tailwind/inline/agent
+paths, supports tokens/props/custom controls, undo, and multiple frameworks. Decision:
+do not adopt the package; borrow interaction/property-coverage ideas selectively.
+
+Verified: `bun test/css-values.mjs` (143 assertions), `bun run typecheck`, production
+build, and the real Electron `test/style-edit.mjs` flow with an isolated profile. Read
+both island captures: the default element has no Transition group; the active
+transition restores the full Bezier editor and Replay controls. The full standard
+matrix was 116/117 on its first run: only the unrelated `spawn-comment` branch-cleanup
+assertion failed, then passed immediately when rerun alone (deterministic + live paths).
+
 ## 2026-08-28 — Codex can operate Praxis-owned worktree recovery
 
 The in-app Codex was told not to mutate Praxis's `praxis/chat-*` branches, but the only

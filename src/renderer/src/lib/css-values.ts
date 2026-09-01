@@ -188,6 +188,24 @@ export function formatMs(ms: number): string {
   return `${fmtNum(ms)}ms`
 }
 
+/**
+ * Does this computed-style snapshot describe a transition that can actually
+ * animate? CSS initial values look deceptively configured (`all`, `0s`,
+ * `ease`), so the Styles panel must not use property presence as the signal.
+ */
+export function hasActiveTransition(values: Record<string, string>): boolean {
+  const properties = (values['transition-property'] ?? '')
+    .split(',')
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+  if (properties.length === 0 || properties.every((property) => property === 'none')) return false
+
+  return (values['transition-duration'] ?? '').split(',').some((duration) => {
+    const ms = normalizeMs(duration.trim())
+    return ms !== null && ms > 0
+  })
+}
+
 // ---------------------------------------------------------------------------
 // cubic-bezier — parse/format, keyword presets, snap, clamp
 // ---------------------------------------------------------------------------

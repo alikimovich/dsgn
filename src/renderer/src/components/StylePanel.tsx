@@ -1,7 +1,7 @@
 import { Play } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
-import { STYLE_PROP_META, sameCssValue } from '@/lib/css-values'
+import { hasActiveTransition, STYLE_PROP_META, sameCssValue } from '@/lib/css-values'
 import type { SelectedElement, Token, TokenSet } from '../../../shared/api'
 import {
   customPropertyNames,
@@ -10,6 +10,7 @@ import {
   type TokenResolution,
   tokensForProp
 } from '../../../shared/token-match'
+import AnimationControlsTrigger from './styles/AnimationControlsTrigger'
 import type { RowCtx } from './styles/row-ctx'
 import { ColorRow } from './styles/rows/ColorRow'
 import { NumberRow, SideRows } from './styles/rows/NumberRow'
@@ -33,6 +34,8 @@ interface Props {
   tokens: TokenSet | null
   /** Seed a chat prompt for changes the styles engine can't land as a literal. */
   onSeedPrompt: (text: string) => void
+  /** Ask the agent to add an animation and surface Dialkit-style controls. */
+  onAnimationControls: (hint?: string) => void
 }
 
 /** Every v1 property (incl. the read-only chips) — one fresh read fills the panel. */
@@ -66,7 +69,8 @@ export default function StylePanel({
   element,
   canInstrument,
   tokens,
-  onSeedPrompt
+  onSeedPrompt,
+  onAnimationControls
 }: Props): React.JSX.Element {
   const [values, setValuesRaw] = useState<Record<string, string>>(() => ({ ...element.styles }))
   const [lost, setLost] = useState(false)
@@ -285,12 +289,6 @@ export default function StylePanel({
   ): Promise<void> => {
     if (!source) return
     setError(null)
-    // Tuning a duration/delay with transitions off would commit an invisible
-    // change — enable `transition-property: all` first so the tweak is real.
-    if (prop === 'transition-duration' || prop === 'transition-delay') {
-      const tp = valuesRef.current['transition-property']
-      if (!tp || tp === 'none') await commit('transition-property', 'all')
-    }
     const prev = valuesRef.current[prop] ?? css
     // The authored text (`1.5rem`) rides along for the S3 agent prompt, then
     // goes stale the moment we commit — clear it so the readout can't keep
@@ -435,6 +433,7 @@ export default function StylePanel({
   }
   const display = values.display ?? ''
   const tokenCount = tokens?.groups.reduce((n, g) => n + g.tokens.length, 0) ?? 0
+  const transitionActive = hasActiveTransition(values)
 
   return (
     <>
@@ -482,29 +481,35 @@ export default function StylePanel({
           <ChipRow label="display" value={display || '—'} />
         </StyleGroup>
 
-        <StyleGroup title="Transition">
-          <TransitionPropertyRow ctx={ctx} />
-          <NumberRow prop="transition-duration" ctx={ctx} />
-          <NumberRow prop="transition-delay" ctx={ctx} />
-          <TimingRow
-            ctx={ctx}
-            onReplay={replay}
-            onNeedsAgent={() => seedStyleEdit('transition-timing-function')}
-          />
-          <div className="stylepanel__row grid min-h-7 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2">
-            <span />
-            <Button
-              variant="outline"
-              size="sm"
-              className="stylepanel__replay h-7 justify-self-end px-2 text-[11.5px]"
-              onClick={replay}
-              title="Replay the last change as a transition"
-            >
-              <Play className="size-3" aria-hidden="true" />
-              Replay
-            </Button>
+        {transitionActive ? (
+          <StyleGroup title="Transition">
+            <TransitionPropertyRow ctx={ctx} />
+            <NumberRow prop="transition-duration" ctx={ctx} />
+            <NumberRow prop="transition-delay" ctx={ctx} />
+            <TimingRow
+              ctx={ctx}
+              onReplay={replay}
+              onNeedsAgent={() => seedStyleEdit('transition-timing-function')}
+            />
+            <div className="stylepanel__row grid min-h-7 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2">
+              <span />
+              <Button
+                variant="outline"
+                size="sm"
+                className="stylepanel__replay h-7 justify-self-end px-2 text-[11.5px]"
+                onClick={replay}
+                title="Replay the last change as a transition"
+              >
+                <Play className="size-3" aria-hidden="true" />
+                Replay
+              </Button>
+            </div>
+          </StyleGroup>
+        ) : (
+          <div className="pt-1">
+            <AnimationControlsTrigger key={elKey} onTrigger={onAnimationControls} />
           </div>
-        </StyleGroup>
+        )}
       </div>
     </>
   )

@@ -54,7 +54,7 @@ import {
 } from './store'
 import { projectKey } from '../../shared/projectKey'
 import { preferredChatAgentSettings } from './preferred-model'
-import { controlsPrompt } from './lib/controls-prompt'
+import { animationControlsPrompt, controlsPrompt } from './lib/controls-prompt'
 import { restoreWorkspace, type RestoreDeps } from './restore'
 import { Code2, Maximize2, Minimize2, MonitorSmartphone, PanelLeft } from 'lucide-react'
 import {
@@ -1758,6 +1758,19 @@ export default function App(): React.JSX.Element {
           }
         } else if (a.kind === 'inspection') {
           sel.setInspection(a.inspection)
+        } else if (a.kind === 'animation-controls') {
+          if (sel.selected) {
+            useComposer
+              .getState()
+              .setSubmit(
+                animationControlsPrompt(
+                  sel.selected,
+                  sel.inspection,
+                  a.hint,
+                  useSession.getState().provider
+                )
+              )
+          }
         } else if (a.kind === 'controls') {
           // Custom Controls (v10): build the trigger prompt from the live
           // selection + the chat's backend, and send it as a REAL agent turn
