@@ -74,10 +74,17 @@ raw Git/reset/discard escape hatch.
 ## Recovery and limits
 
 On restart, dirty or unmerged orphan worktrees are folded into recovery records; work
-already present live is removed. The preview currently serves the live checkout, so
-mid-turn worktree edits are not visible there until landing. Isolation currently applies
-only when the opened folder is the Git repository root; non-Git folders and Git
-subdirectories use the live path and do not receive this concurrency guarantee.
+already present live is removed. Praxis also sweeps branch-only `praxis/chat-*`
+leftovers whose checkout was removed by an older or interrupted teardown. Because a
+landed turn is usually a different commit on the live branch, cleanup accepts either
+commit ancestry or patch equivalence against live `HEAD`; it never deletes a checked-
+out branch, a persisted park, or a tip carrying a unique patch. Other namespaces such
+as `backup/*`, normal work branches, and comment-agent branches are outside this sweep.
+
+The preview currently serves the live checkout, so mid-turn worktree edits are not
+visible there until landing. Isolation currently applies only when the opened folder is
+the Git repository root; non-Git folders and Git subdirectories use the live path and do
+not receive this concurrency guarantee.
 
 Implementation: `src/main/repo-write-queue.ts`, `src/main/chat-isolation.ts`,
 `src/main/chat-worktrees.ts`, `src/main/worktrees.ts`, `src/main/live-commit.ts`.

@@ -56,6 +56,7 @@ import {
   commitWorktree,
   createWorktree,
   deleteBranch,
+  pruneIntegratedChatBranches,
   pruneOrphans,
   removeWorktree,
   type Worktree
@@ -627,7 +628,15 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
           new Set([...spawns.keys(), ...liveChatWorktreeIds()]),
           hasParkRecord
         )
-          .then((reclaimed) => handleReclaimed(reclaimed))
+          .then(async (reclaimed) => {
+            await handleReclaimed(reclaimed)
+            // `pruneOrphans` can only see directories. A prior/interrupting teardown
+            // may already have removed its checkout while leaving the local ref, so
+            // sweep branch-only residue too. Patch-equivalence (not ancestry alone)
+            // recognizes turns already committed to the live branch; parked or unique
+            // work is preserved.
+            await pruneIntegratedChatBranches(root, hasParkRecord)
+          })
           .catch(() => {})
       }
       return {

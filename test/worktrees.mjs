@@ -11,7 +11,9 @@
  * remove reclaims the checkout (keeping the branch); pruneOrphans reclaims leftovers
  * and reports each as `{id, dirty, branch, repoRoot}` (dirty from `status --porcelain`,
  * not commit success; branch/repoRoot captured before removal) and FOLDS a parked
- * chat squash's recovery commit into one commit. Uses real temp git repos.
+ * chat squash's recovery commit into one commit; pruneIntegratedChatBranches removes
+ * only unattached/unparked chat refs whose patch already exists on live HEAD. Uses
+ * real temp git repos.
  *
  * Run with: bun run test:worktrees
  */
@@ -24,6 +26,7 @@ import {
   removeWorktree,
   branchPatch,
   pruneOrphans,
+  pruneIntegratedChatBranches,
   captureBase
 } from '../src/main/worktrees.ts'
 import { execFileSync } from 'node:child_process'
@@ -253,6 +256,79 @@ try {
   ok(/Crash\.tsx/.test(mergedBp), 'branchPatch carries the genuinely-unmerged crash WIP')
   ok(!/Merged\.tsx/.test(mergedBp), 'branchPatch does NOT re-include the already-merged (live) content')
   await removeWorktree(repo, mergedWt, { keepBranch: false })
+
+  // --- Branch-only cleanup: a successful chat turn is usually NOT an ancestor of
+  // live HEAD. Praxis records the same patch as a separate live commit, so patch-id
+  // equivalence must prune it; unique, parked, attached, and non-chat refs stay. ---
+  const pruneRepo = join(base, 'prune-repo')
+  mkdirSync(pruneRepo, { recursive: true })
+  const gp = (...a) => execFileSync('git', a, { cwd: pruneRepo, encoding: 'utf8' }).trim()
+  gp('init', '-q', '-b', 'main')
+  gp('config', 'user.email', 'test@local')
+  gp('config', 'user.name', 'Test')
+  writeFileSync(join(pruneRepo, 'README.md'), 'base\n')
+  gp('add', '-A')
+  gp('commit', '-qm', 'init')
+
+  const integratedWt = await createWorktree(pruneRepo, worktreesDir, {
+    id: 'integrated',
+    branchName: (id) => `chat-${id}`
+  })
+  writeFileSync(join(integratedWt.path, 'Integrated.tsx'), 'export const integrated = true\n')
+  await commitWorktree(integratedWt, 'private chat commit')
+  await removeWorktree(pruneRepo, integratedWt, { keepBranch: true })
+  // Same patch, different SHA/message on live HEAD — exactly commitLiveTurn's shape.
+  writeFileSync(join(pruneRepo, 'Integrated.tsx'), 'export const integrated = true\n')
+  gp('add', 'Integrated.tsx')
+  gp('commit', '-qm', 'live turn commit')
+
+  const uniqueWt = await createWorktree(pruneRepo, worktreesDir, {
+    id: 'unique',
+    branchName: (id) => `chat-${id}`
+  })
+  writeFileSync(join(uniqueWt.path, 'Unique.tsx'), 'do not lose me\n')
+  await commitWorktree(uniqueWt, 'unique chat work')
+  await removeWorktree(pruneRepo, uniqueWt, { keepBranch: true })
+
+  const protectedWt = await createWorktree(pruneRepo, worktreesDir, {
+    id: 'parked',
+    branchName: (id) => `chat-${id}`
+  })
+  writeFileSync(join(protectedWt.path, 'Integrated.tsx'), 'export const integrated = true\n')
+  await commitWorktree(protectedWt, 'already-live but parked')
+  await removeWorktree(pruneRepo, protectedWt, { keepBranch: true })
+
+  const attachedWt = await createWorktree(pruneRepo, worktreesDir, {
+    id: 'attached',
+    branchName: (id) => `chat-${id}`
+  })
+  gp('branch', 'backup/keep-me')
+
+  const pruned = await pruneIntegratedChatBranches(pruneRepo, (id) => id === 'parked')
+  ok(
+    pruned.deleted.includes('praxis/chat-integrated'),
+    `patch-equivalent branch-only ref pruned: ${JSON.stringify(pruned)}`
+  )
+  ok(!gp('branch', '--list', 'praxis/chat-integrated'), 'integrated chat branch no longer exists')
+  ok(
+    gp('branch', '--list', 'praxis/chat-unique').includes('praxis/chat-unique'),
+    'unique chat work is preserved'
+  )
+  ok(
+    gp('branch', '--list', 'praxis/chat-parked').includes('praxis/chat-parked'),
+    'persisted parked branch is protected even when its patch is integrated'
+  )
+  ok(
+    gp('branch', '--list', 'praxis/chat-attached').includes('praxis/chat-attached'),
+    'a branch checked out in a live worktree is preserved'
+  )
+  ok(
+    gp('branch', '--list', 'backup/keep-me').includes('backup/keep-me'),
+    'non-chat backup branches are outside the cleanup scope'
+  )
+  await removeWorktree(pruneRepo, attachedWt, {})
+  await removeWorktree(pruneRepo, uniqueWt, { keepBranch: false })
+  await removeWorktree(pruneRepo, protectedWt, { keepBranch: false })
 
   // --- empty patch applies as a no-op success ---
   const noop = await applyToWorkingTree(repo, '', tmpDir)

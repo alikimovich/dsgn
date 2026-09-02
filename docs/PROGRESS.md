@@ -2,6 +2,25 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-01 — Completed chat branches are pruned even after their checkout is gone
+
+The chat lifecycle already detached and deleted `praxis/chat-*` after a successful
+turn, but startup recovery only enumerated directories in Praxis's worktree store. If
+an older build or interrupted teardown removed the checkout and failed before deleting
+its ref, that branch became invisible to every later cleanup pass and accumulated
+indefinitely.
+
+Project open now performs a second, branch-only sweep after orphan recovery. It is
+deliberately narrower than a generic Git cleanup: only local `praxis/chat-*` refs are
+eligible, never backup/work/comment/remote branches; checked-out branches and persisted
+park records are protected; and unique patches are retained. A plain ancestry test is
+not sufficient because Praxis commits the private turn and the live landing separately,
+with different SHAs. The sweep therefore also uses `git cherry` patch equivalence for
+the chat tip, excluding its synthetic WIP-snapshot parent. `test/worktrees.mjs` proves a
+different-SHA live commit is recognized while unique, parked, attached, and `backup/*`
+branches survive. Verified: `bun run typecheck` and the complete standard
+`bun run test` matrix (117/117).
+
 ## 2026-09-01 — Animation controls are contextual and animation generation is opt-in
 
 The Styles tab used to render its Transition group for every element because

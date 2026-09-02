@@ -10,6 +10,16 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Automatic cleanup for completed chat branches (2026-09-01, user-reported) — SHIPPED
+
+- [x] **Prune branch-only residue without risking unfinished work.** ✅ 2026-09-01 —
+      project open now follows orphan-worktree recovery with a local
+      `praxis/chat-*` branch sweep. It removes only unattached, unparked refs whose tip
+      is reachable from live `HEAD` or has a patch-equivalent commit there; unique
+      patches remain recoverable. Backup, normal work, comment-agent, remote, and
+      checked-out branches are outside the deletion set. `test/worktrees.mjs` covers
+      the equivalent-commit case plus every preservation boundary.
+
 ## Contextual animation controls + opt-in generation (2026-09-01, user-requested) — SHIPPED
 
 - [x] **Hide inert transition controls.** ✅ 2026-09-01 — browser computed defaults

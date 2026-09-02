@@ -242,6 +242,107 @@ export async function deleteBranch(repoRoot: string, branch: string): Promise<vo
   await git(repoRoot, ['branch', '-D', branch]).catch(() => {})
 }
 
+export interface ChatBranchPruneResult {
+  deleted: string[]
+  preserved: string[]
+}
+
+/**
+ * Remove redundant branch-only leftovers from completed chat turns.
+ *
+ * A normal `git branch --merged` check is not enough for Praxis: a chat commits in
+ * its private worktree, then `commitLiveTurn` records an equivalent (different-SHA)
+ * commit on the live branch. `git cherry HEAD <chat> <chat>^` compares stable patch
+ * ids for only the chat tip, so it recognizes that successful landing without
+ * treating the worktree's synthetic WIP-snapshot parent as unmerged work.
+ *
+ * Safety boundaries:
+ * - only local `praxis/chat-*` refs are considered;
+ * - parked refs supplied by `isProtected` are retained;
+ * - a ref checked out in ANY linked worktree is retained (and Git re-checks this
+ *   itself when deleting, closing the scan/delete race);
+ * - a unique tip is retained. No age or branch-name heuristic can delete work.
+ *
+ * This complements `pruneOrphans`: that function recovers checkout directories,
+ * while this one catches the branch-only residue left by an interrupted/older
+ * teardown after the directory has already disappeared. Never throws.
+ */
+export async function pruneIntegratedChatBranches(
+  repoRoot: string,
+  isProtected: (id: string) => boolean = () => false
+): Promise<ChatBranchPruneResult> {
+  const result: ChatBranchPruneResult = { deleted: [], preserved: [] }
+  let branches: string[]
+  try {
+    branches = (await git(repoRoot, [
+      'for-each-ref',
+      '--format=%(refname:short)',
+      'refs/heads/praxis/chat-*'
+    ])).stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean)
+  } catch {
+    return result
+  }
+
+  for (const branch of branches) {
+    const id = branch.slice('praxis/chat-'.length)
+    if (!id || isProtected(id)) {
+      result.preserved.push(branch)
+      continue
+    }
+
+    // Do not rely only on `git branch -D`'s refusal: checking first avoids a noisy
+    // destructive attempt and documents why an active chat can never be swept.
+    let attached = false
+    try {
+      const paths = (await git(repoRoot, [
+        'for-each-ref',
+        '--format=%(worktreepath)',
+        `refs/heads/${branch}`
+      ])).stdout
+      attached = paths.trim().length > 0
+    } catch {
+      attached = true // uncertainty preserves work
+    }
+    if (attached) {
+      result.preserved.push(branch)
+      continue
+    }
+
+    let integrated = false
+    try {
+      await git(repoRoot, ['merge-base', '--is-ancestor', branch, 'HEAD'])
+      integrated = true
+    } catch {
+      // Separate Praxis live commits have different SHAs; compare the tip patch.
+      try {
+        const cherry = (await git(repoRoot, ['cherry', 'HEAD', branch, `${branch}^`])).stdout
+          .split('\n')
+          .map((line) => line.trim())
+          .filter(Boolean)
+        integrated = cherry.length > 0 && cherry.every((line) => line.startsWith('- '))
+      } catch {
+        integrated = false
+      }
+    }
+
+    if (!integrated) {
+      result.preserved.push(branch)
+      continue
+    }
+    try {
+      await git(repoRoot, ['branch', '-D', '--', branch])
+      result.deleted.push(branch)
+    } catch {
+      // A worktree may have attached the ref after our check; preserve on any race.
+      result.preserved.push(branch)
+    }
+  }
+  return result
+}
+
 /**
  * Re-create and attach a chat's ephemeral branch before a turn can edit its worktree.
  * Successful turns retire the branch immediately; attaching at the next turn boundary
