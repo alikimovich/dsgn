@@ -21,6 +21,7 @@ import {
   useComposer,
   useHistory,
   useLayersPanel,
+  useLog,
   usePermissions,
   useQuestions,
   useCodeDrawer,
@@ -591,7 +592,7 @@ export default function ChatPanel(): React.JSX.Element {
 
   useEffect(() => {
     return window.api.agent.onEvent((event) => {
-      // v8 F1: a detached comment spawn's events carry a `sessionId` — they NEVER
+      // Detached background agents carry a `sessionId` — they NEVER
       // enter the main chat stream. We only react to the terminal `spawn-finished`
       // (drop the working rail row; the finished run reappears in history). This
       // guard is what guarantees the active chat stays byte-clean under parallel spawns.
@@ -601,21 +602,33 @@ export default function ChatPanel(): React.JSX.Element {
           useSpawns.getState().start(pkey, event.sessionId, event.branch);
         } else if (event.type === "spawn-finished") {
           useSpawns.getState().remove(pkey, event.sessionId);
-          // Notify in the parent project's chat so the user can follow up on it. A
-          // null branch means it auto-applied onto the working tree; a branch means
-          // it couldn't (conflict) and is waiting in the rail for review.
+          // User-authored comments keep their follow-up note in the parent chat.
+          // Automatic text-edit agents stay out of the transcript entirely: their
+          // running row is the progress UI, and completion goes to the activity log.
+          // A non-null branch means auto-apply was unsafe and sidebar review remains.
           const files = event.files?.length
             ? ` · ${event.files.join(", ")}`
             : "";
-          const head = event.branch
-            ? `💬 Comment finished — couldn't auto-apply, review it in the sidebar${files}`
-            : `💬 Comment applied${files}`;
-          useChat
-            .getState()
-            .appendNote(
-              event.summary ? `${head}\n\n${event.summary}` : head,
-              pkey,
-            );
+          if (event.origin === "text-edit") {
+            useLog
+              .getState()
+              .append(
+                event.branch
+                  ? `Background text edit needs review in the sidebar${files}`
+                  : `Background text edit applied${files}`,
+                event.branch ? "error" : "success",
+              );
+          } else {
+            const head = event.branch
+              ? `💬 Comment finished — couldn't auto-apply, review it in the sidebar${files}`
+              : `💬 Comment applied${files}`;
+            useChat
+              .getState()
+              .appendNote(
+                event.summary ? `${head}\n\n${event.summary}` : head,
+                pkey,
+              );
+          }
           // `pkey` is the PARENT SESSION key now, not the bare project key — a
           // spawn from a secondary chat reads `<projectKey>#<uuid>`. Match on the
           // project prefix so the finished agent still refreshes its history.

@@ -729,7 +729,7 @@ export function agentPromptFor(edit: PropEdit): string {
 }
 
 export function textAgentPrompt(source: string, text: string): string {
-  return `In ${source}, change the selected element's text content to “${text.slice(0, 200)}”.`
+  return `In ${source}, change only the selected element's rendered text to “${text.slice(0, 200)}”. Make the smallest source edit needed. Do not update matching copy elsewhere unless this exact element is driven by a shared value that must change.`
 }
 
 /**

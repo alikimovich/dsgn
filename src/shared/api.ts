@@ -243,6 +243,10 @@ export interface SlashCommandItem {
   source: 'project' | 'other'
 }
 
+/** Why a detached background agent was launched. The worktree/session machinery is
+ * shared, but the renderer uses the origin to choose the right completion UX. */
+export type BackgroundSpawnOrigin = 'comment' | 'text-edit'
+
 export type AgentEvent = (
   | { type: 'delta'; text: string }
   | { type: 'status'; text: string }
@@ -265,14 +269,20 @@ export type AgentEvent = (
    *  about (not its opening words). Emitted once per chat after the first turn
    *  completes; the renderer stores it on the chat slice and the rail shows it. */
   | { type: 'title'; title: string }
-  /** A queued comment spawn (v8 F1 Phase 3) started running — flip its rail row from
+  /** A queued background spawn started running — flip its rail row from
    *  queued → running and attach its branch. */
-  | { type: 'spawn-started'; branch: string }
-  /** A detached comment spawn (v8 F1) finished — drop its working rail row. `branch`
+  | { type: 'spawn-started'; branch: string; origin?: BackgroundSpawnOrigin }
+  /** A detached background spawn finished — drop its working rail row. `branch`
    *  is null when it auto-applied onto the working tree, else the durable review
-   *  branch. `summary` (the agent's closing message) + `files` drive a notification
-   *  in the parent project's chat so the user can follow up on it. */
-  | { type: 'spawn-finished'; branch: string | null; summary?: string; files?: string[] }
+   *  branch. Comments can use `summary` + `files` for a parent-chat notification;
+   *  automatic edit origins deliberately remain out of the transcript. */
+  | {
+      type: 'spawn-finished'
+      branch: string | null
+      origin?: BackgroundSpawnOrigin
+      summary?: string
+      files?: string[]
+    }
   /** Per-chat worktree isolation status (v9). A chat's turn merged back onto the live
    *  checkout ('merged'), a private worktree was forked for the chat ('isolated'), or a
    *  turn parked on its branch after mid-turn drift ('parked'). Routed by `projectKey` =
@@ -294,7 +304,7 @@ export type AgentEvent = (
   /** Which project's session emitted this — set by main so the renderer routes it
    * to the right chat (active project shows live; others accumulate in the rail). */
   projectKey?: string
-  /** Set for a detached comment-spawn's events (v8 F1) — the renderer keeps these
+  /** Set for a detached background spawn's events — the renderer keeps these
    *  out of the main chat stream and routes them to the spawn's own rail row. */
   sessionId?: string
 }
@@ -1544,16 +1554,18 @@ export interface PraxisApi {
     interrupt: () => Promise<void>
     /** Tag the live session with branch / PR metadata for its history record. */
     tagSession: (root: string, tag: { branch?: string; prUrl?: string }) => Promise<void>
-    /** Spawn a detached comment agent in its own git worktree (v8 F1) — runs in the
-     *  background without touching the active chat. Returns `ok:false` (with a reason)
-     *  when the project isn't a git repo root, so the caller can fall back to chat. */
+    /** Spawn a detached agent in its own git worktree — runs in the background
+     *  without touching the active chat. `origin` chooses completion UX. Returns
+     *  `ok:false` when the repo/backend cannot support isolation, so the caller can
+     *  preserve the instruction in its foreground fallback. */
     spawnComment: (
       root: string,
       text: string,
       parentSessionKey: string,
-      options?: AgentOptions
+      options?: AgentOptions,
+      origin?: BackgroundSpawnOrigin
     ) => Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }>
-    /** F1 Phase 3 — cancel a running or queued comment spawn (the rail row's ×). */
+    /** Cancel a running or queued background spawn (the rail row's ×). */
     spawnInterrupt: (spawnId: string) => Promise<void>
     /** F1 Phase 2 — apply a finished spawn's branch diff onto the live working tree
      *  (the dev server HMRs it). `conflict` when the patch overlapped local edits. */

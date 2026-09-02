@@ -69,6 +69,7 @@ import {
 import { Check, ChevronDown } from 'lucide-react'
 import Rail from './components/Rail'
 import type {
+  BackgroundSpawnOrigin,
   CommentMode,
   Framework,
   PreviewComment,
@@ -79,6 +80,56 @@ import type {
 
 const MIN_CHAT_WIDTH = 320
 const MAX_CHAT_WIDTH = 760
+
+/** Dispatch one isolated background agent without touching the visible transcript.
+ * Comment mode and complex inline text edits share the same worktree/queue seam;
+ * callers choose their own lossless fallback for unsupported backends/non-repos. */
+function dispatchBackgroundAgent(opts: {
+  root: string
+  prompt: string
+  label: string
+  origin: BackgroundSpawnOrigin
+  fallback: () => void
+}): void {
+  const parentSessionKey = useChat.getState().activeKey || projectKey(opts.root)
+  const agentSettings = useSession.getState()
+  void window.api.agent
+    .spawnComment(
+      opts.root,
+      opts.prompt,
+      parentSessionKey,
+      toAgentOptions(agentSettings),
+      opts.origin
+    )
+    .then((result) => {
+      if (result.ok && result.spawnId) {
+        useSpawns.getState().add(parentSessionKey, {
+          id: result.spawnId,
+          branch: result.branch ?? null,
+          label: opts.label,
+          modelLabel: chatModelLabel({
+            model: agentSettings.model,
+            modelId: agentSettings.modelId,
+            provider: agentSettings.provider,
+            connectionId: agentSettings.connectionId
+          }),
+          status: result.queued ? 'queued' : 'running'
+        })
+        return
+      }
+      if (result.reason === 'unsupported-backend') {
+        useLog
+          .getState()
+          .append(
+            opts.origin === 'text-edit'
+              ? 'This model cannot run a detached text edit; the instruction was placed in the composer.'
+              : 'This model cannot run a detached background agent yet; the comment was sent to its chat.'
+          )
+      }
+      opts.fallback()
+    })
+    .catch(opts.fallback)
+}
 
 /** A `data-praxis-source` stamp's repo-relative file ("path/File.tsx:12:3" →
  *  "path/File.tsx") — control-panel manifests are keyed by file, not line. */
@@ -410,38 +461,15 @@ export default function App(): React.JSX.Element {
         // worktree) instead of hijacking the active chat — so the user can fire
         // several and keep working. A non-repo project can't worktree → fall back
         // to seeding the composer (the prior behavior).
-        if (root) {
-          const parentSessionKey = useChat.getState().activeKey || projectKey(root)
-          const agentSettings = useSession.getState()
-          void window.api.agent
-            .spawnComment(root, prompt, parentSessionKey, toAgentOptions(agentSettings))
-            .then((r) => {
-              if (r.ok && r.spawnId) {
-                useSpawns.getState().add(parentSessionKey, {
-                  id: r.spawnId,
-                  branch: r.branch ?? null,
-                  label: oneLine(c.text, 60),
-                  modelLabel: chatModelLabel({
-                    model: agentSettings.model,
-                    modelId: agentSettings.modelId,
-                    provider: agentSettings.provider,
-                    connectionId: agentSettings.connectionId
-                  }),
-                  status: r.queued ? 'queued' : 'running'
-                })
-              } else {
-                if (r.reason === 'unsupported-backend') {
-                  useLog.getState().append(
-                    'This model cannot run a detached background agent yet; the comment was sent to its chat.'
-                  )
-                }
-                useComposer.getState().setSubmit(prompt)
-              }
-            })
-            .catch(() => useComposer.getState().setSubmit(prompt))
-        } else {
-          useComposer.getState().setSubmit(prompt)
-        }
+        if (root)
+          dispatchBackgroundAgent({
+            root,
+            prompt,
+            label: oneLine(c.text, 60),
+            origin: 'comment',
+            fallback: () => useComposer.getState().setSubmit(prompt)
+          })
+        else useComposer.getState().setSubmit(prompt)
       } else {
         const root = useSession.getState().projectRoot
         if (!root) {
@@ -711,16 +739,33 @@ export default function App(): React.JSX.Element {
       window.api.preview.onTextEdit((edit) => {
         const root = useSession.getState().projectRoot
         if (!root) return
-        const toAgent = (): void =>
-          useComposer.getState().setSeed(`In ${edit.source}, set the element's text to “${edit.text}”.`)
-        // A non-literal change (needsAgent) OR a write failure both route to the
-        // agent so the user's edit is never silently dropped.
+        const fallbackPrompt = `In ${edit.source}, change only the selected element's text to “${edit.text}”. Make the smallest source edit needed.`
+        const fallback = (prompt: string): void => useComposer.getState().setSeed(prompt)
+        // A non-literal change (needsAgent) OR a write failure now runs in a detached
+        // worktree automatically. Only a backend/repo that cannot spawn falls back to
+        // the composer, so the user's requested edit is never silently dropped.
         void window.api.text
           .apply(root, edit)
           .then((res) => {
-            if (!res.applied) toAgent()
+            if (res.applied) return
+            const prompt = res.agentPrompt ?? fallbackPrompt
+            dispatchBackgroundAgent({
+              root,
+              prompt,
+              label: `Edit text · ${oneLine(edit.text, 42)}`,
+              origin: 'text-edit',
+              fallback: () => fallback(prompt)
+            })
           })
-          .catch(toAgent)
+          .catch(() =>
+            dispatchBackgroundAgent({
+              root,
+              prompt: fallbackPrompt,
+              label: `Edit text · ${oneLine(edit.text, 42)}`,
+              origin: 'text-edit',
+              fallback: () => fallback(fallbackPrompt)
+            })
+          )
       }),
     []
   )

@@ -47,11 +47,12 @@ from growing with every chat.
 - `.env` and non-template `.env.*`, `node_modules`, `*.tsbuildinfo`, `.praxis/`, and
   legacy `.dsgn/` are excluded from snapshots, worktree commits, and live commits.
 - Parked work keeps a durable branch. Successfully landed or discarded work does not.
-- Comment-created background agents are attributed to their exact parent chat in the
-  rail, but still count against the repository-wide concurrency cap and land through
-  the same repository writer. Closing a parent chat does not stop its agent, so an
-  agent left without a live parent re-parents onto the project's first chat rather
-  than disappearing from the rail with its cancel control.
+- Comment-created and automatic text-edit background agents are attributed to their
+  exact parent chat in the rail, but still count against the repository-wide concurrency
+  cap and land through the same repository writer. Closing a parent chat does not stop
+  its agent, so an agent left without a live parent re-parents onto the project's first
+  chat rather than disappearing from the rail with its cancel control. Automatic edit
+  completion is recorded in the activity log, not the chat transcript.
 
 ## What “conflict” means in Praxis
 

@@ -10,6 +10,16 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Automatic background agents for complex text edits (2026-09-01, user-reported) — SHIPPED
+
+- [x] **Run agent-required inline text edits without posting in chat.** ✅ 2026-09-01 —
+      direct text splices remain instant; expression/mixed/error fallbacks now enter
+      the detached worktree queue automatically with the active model. A `text-edit`
+      event origin keeps the composer and transcript untouched, uses the rail for
+      progress, and reports completion in the activity log. The prompt is constrained
+      to the smallest selected-element edit. Unsupported backends/non-repos retain the
+      composer fallback so intent is never lost. `test/text-edit.mjs`.
+
 ## Automatic cleanup for completed chat branches (2026-09-01, user-reported) — SHIPPED
 
 - [x] **Prune branch-only residue without risking unfinished work.** ✅ 2026-09-01 —

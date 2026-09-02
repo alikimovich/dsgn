@@ -2,6 +2,29 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-01 — Complex inline text edits run silently in a background agent
+
+Inline text editing still uses the fast direct source splice for plain JSX, Svelte,
+and HTML text. The awkward fallback changed: expression/mixed content and write
+failures no longer prefill the visible composer and wait for the user to send them.
+They now dispatch automatically through the existing isolated background-agent queue,
+inheriting the active chat's model/settings and auto-applying through the same safe
+worktree landing path as comment agents.
+
+Text-edit spawns carry an explicit origin through renderer → preload → main → terminal
+events. That origin keeps their deltas and completion out of the chat transcript: the
+rail row is the progress UI and the activity log records success or a review-needed
+result. Comment agents retain their existing follow-up note. The generated prompt now
+asks for the smallest source edit and forbids changing matching copy elsewhere unless
+the selected element truly depends on a shared value, preventing the project-wide copy
+expansion shown in the report. Non-repo folders and backends without spawn support
+still seed the composer as a lossless fallback instead of dropping the edit.
+
+`test/text-edit.mjs` now drives a real expression fallback through App's preview event,
+captures the detached dispatch, and proves both composer and chat remain untouched
+through completion. Verified: `bun run typecheck` and the complete standard
+`bun run test` matrix (117/117).
+
 ## 2026-09-01 — Completed chat branches are pruned even after their checkout is gone
 
 The chat lifecycle already detached and deleted `praxis/chat-*` after a successful

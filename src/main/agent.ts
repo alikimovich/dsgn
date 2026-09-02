@@ -7,6 +7,7 @@ import { app, type BrowserWindow, ipcMain } from 'electron'
 import type {
   AgentEvent,
   AgentOptions,
+  BackgroundSpawnOrigin,
   ImageAttachment,
   LiveProjectSnapshot,
   OpenProjectResult,
@@ -242,6 +243,7 @@ interface Spawn {
   parentSessionKey: string
   parentRoot: string
   text: string
+  origin: BackgroundSpawnOrigin
 }
 const spawns = new Map<string, Spawn>()
 // v8 F1 Phase 3: bound concurrent spawns per project; the rest queue (FIFO) and start
@@ -254,6 +256,7 @@ interface QueuedSpawn {
   parentSessionKey: string
   text: string
   options: AgentOptions
+  origin: BackgroundSpawnOrigin
 }
 const spawnQueue: QueuedSpawn[] = []
 // `startSpawn` only inserts into `spawns` once the worktree + session have
@@ -316,11 +319,11 @@ function closeSession(s: ProviderSession, persist: 'main' | 'history' | 'none' =
 }
 
 /**
- * A detached comment spawn (v8 F1) reached its terminal event. By default we now
+ * A detached background spawn reached its terminal event. By default we now
  * AUTO-APPLY its change straight onto the working branch the user is on — no
  * separate `praxis/comment-*` branch, no PR, no manual Apply (that was "too many
  * approvals") — and record it in the undo history so Cmd+Z reverts the whole
- * comment atomically. The branch + checkout are deleted and the record is NOT
+ * task atomically. The branch + checkout are deleted and the record is NOT
  * persisted, so the finished spawn vanishes from the rail instead of lingering as
  * a "previous agent".
  *
@@ -333,7 +336,7 @@ async function finalizeSpawn(id: string, _status: 'done' | 'error'): Promise<voi
   const spawn = spawns.get(id)
   if (!spawn) return
   spawns.delete(id)
-  const { session, wt, parentKey, parentSessionKey, parentRoot, text } = spawn
+  const { session, wt, parentKey, parentSessionKey, parentRoot, text, origin } = spawn
   try {
     closeSession(session) // finalize + persist the record (removed below if we auto-apply)
     // The agent's closing message → a chat notification the user can reply to.
@@ -353,16 +356,16 @@ async function finalizeSpawn(id: string, _status: 'done' | 'error'): Promise<voi
       }
     }
     if (auto.applied) {
-      // Land it on the working branch + make the whole comment ONE Cmd+Z (shared
+      // Land it on the working branch + make the whole task ONE Cmd+Z (shared
       // group). Then drop the branch and un-persist the record so the rail clears.
-      const group = `comment:${id}`
+      const group = `${origin}:${id}`
       for (const e of auto.edits)
         recordEdit(parentRoot, e.file, e.before, e.after, undefined, group)
       // …and as one commit on the live checkout, like an interactive chat's turn, so
       // the spawn shows up in `git log` and can be reverted on its own.
       await commitLiveTurn(parentRoot, files, {
         title: firstLine(text),
-        body: 'Praxis comment spawn.'
+        body: origin === 'text-edit' ? 'Praxis background text edit.' : 'Praxis comment spawn.'
       })
       await removeWorktree(parentRoot, wt, { keepBranch: false })
       try {
@@ -375,6 +378,7 @@ async function finalizeSpawn(id: string, _status: 'done' | 'error'): Promise<voi
         projectKey: parentSessionKey,
         sessionId: id,
         branch: null,
+        origin,
         ...(summary ? { summary } : {}),
         files: auto.edits.map((e) => basename(e.file))
       } satisfies AgentEvent)
@@ -391,6 +395,7 @@ async function finalizeSpawn(id: string, _status: 'done' | 'error'): Promise<voi
         projectKey: parentSessionKey,
         sessionId: id,
         branch: committed ? wt.branch : null,
+        origin,
         ...(summary ? { summary } : {}),
         files: committed ? files.map((f) => basename(f)) : []
       } satisfies AgentEvent)
@@ -435,7 +440,8 @@ async function startSpawn(q: QueuedSpawn): Promise<string | null> {
       type: 'spawn-finished',
       projectKey: q.parentSessionKey,
       sessionId: q.id,
-      branch: null
+      branch: null,
+      origin: q.origin
     } satisfies AgentEvent)
     void pumpQueue(q.parentKey)
     return null
@@ -471,7 +477,8 @@ async function startSpawn(q: QueuedSpawn): Promise<string | null> {
       parentKey: q.parentKey,
       parentSessionKey: q.parentSessionKey,
       parentRoot: q.root,
-      text: q.text
+      text: q.text,
+      origin: q.origin
     })
     // Now counted via `spawns` itself — release the reservation so it isn't
     // double-counted by `runningCount`.
@@ -485,7 +492,8 @@ async function startSpawn(q: QueuedSpawn): Promise<string | null> {
       type: 'spawn-finished',
       projectKey: q.parentSessionKey,
       sessionId: q.id,
-      branch: null
+      branch: null,
+      origin: q.origin
     } satisfies AgentEvent)
     void pumpQueue(q.parentKey)
     return null
@@ -505,7 +513,8 @@ async function pumpQueue(parentKey: string): Promise<void> {
         type: 'spawn-started',
         projectKey: q.parentSessionKey,
         sessionId: q.id,
-        branch
+        branch,
+        origin: q.origin
       } satisfies AgentEvent)
     }
   }
@@ -1081,7 +1090,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
     }
   )
 
-  // v8 F1: spawn a detached comment agent in its own git worktree. It runs in the
+  // v8 F1: spawn a detached background agent in its own git worktree. It runs in the
   // background (bypassPermissions — a headless run has no card UI), edits its private
   // checkout (zero cross-writes with the main agent or other spawns), and on finish
   // commits to a `praxis/comment-<id>` branch + lands in this project's history. Over the
@@ -1093,7 +1102,8 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
       root: string,
       text: string,
       requestedParentSessionKey: string,
-      options: AgentOptions = {}
+      options: AgentOptions = {},
+      requestedOrigin: BackgroundSpawnOrigin = 'comment'
     ) => {
       // Worktrees need a repo TOP LEVEL — a non-repo (or subdir) falls back to chat.
       if (!(await isRepoRoot(root))) return { ok: false, reason: 'not-a-repo' }
@@ -1107,9 +1117,13 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
       const parentSessionKey = sessionKeysForProject(parentKey).includes(requestedParentSessionKey)
         ? requestedParentSessionKey
         : (activeSessionKeyByProject.get(parentKey) ?? parentKey)
+      // IPC values are renderer-controlled. Unknown future/malformed values retain
+      // the established comment UX instead of creating an unhandled event variant.
+      const origin: BackgroundSpawnOrigin =
+        requestedOrigin === 'text-edit' ? 'text-edit' : 'comment'
       // Stable id assigned up front so the rail row survives a queued→running flip.
       const id = randomUUID().slice(0, 8)
-      const q: QueuedSpawn = { id, root, parentKey, parentSessionKey, text, options }
+      const q: QueuedSpawn = { id, root, parentKey, parentSessionKey, text, options, origin }
       if (runningCount(parentKey) >= MAX_SPAWNS_PER_REPO) {
         spawnQueue.push(q) // a slot will free on the next finalizeSpawn → pumpQueue
         return { ok: true, spawnId: id, queued: true }
@@ -1129,7 +1143,8 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
         type: 'spawn-finished',
         projectKey: q.parentSessionKey,
         sessionId: id,
-        branch: null
+        branch: null,
+        origin: q.origin
       } satisfies AgentEvent)
       return
     }

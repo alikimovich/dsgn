@@ -4,6 +4,7 @@ import type {
   AgentOptions,
   Annotation,
   AnnotationInput,
+  BackgroundSpawnOrigin,
   Bounds,
   BranchResult,
   CommentMode,
@@ -363,9 +364,10 @@ const api: PraxisApi = {
       root: string,
       text: string,
       parentSessionKey: string,
-      options?: AgentOptions
+      options?: AgentOptions,
+      origin?: BackgroundSpawnOrigin
     ): Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }> =>
-      ipcRenderer.invoke('agent:spawn-comment', root, text, parentSessionKey, options),
+      ipcRenderer.invoke('agent:spawn-comment', root, text, parentSessionKey, options, origin),
     spawnInterrupt: (spawnId: string): Promise<void> =>
       ipcRenderer.invoke('agent:spawn-interrupt', spawnId),
     spawnApply: (

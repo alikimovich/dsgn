@@ -38,10 +38,11 @@ GitHub PR.
   [`docs/DESIGN.md`](docs/DESIGN.md)), then edits its **props** with typed
   controls (react-docgen for React, `svelte/compiler` for Svelte 5), applies
   the repo's **design tokens** (auto-detected from a manifest, Tailwind, or CSS
-  vars), and edits text inline. Non-literal cases route to the chat.
+  vars), and edits text inline. Non-literal text cases run as detached background
+  agents without entering the visible chat.
 - **Review → handoff.** Pin comments/notes to elements and **Publish** a branch
-  + GitHub PR. Comments can spawn parallel background agent sessions (each in
-  its own git worktree).
+  + GitHub PR. Comments and complex inline text edits can spawn parallel background
+  agent sessions (each in its own git worktree).
 - **Concurrent-chat isolation.** Git-root projects give each chat a private
   worktree and serialize publication through one live-checkout writer. Recovery
   branches exist only during active or parked work and are deleted after a
