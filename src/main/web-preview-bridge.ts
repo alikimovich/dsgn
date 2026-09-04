@@ -3,6 +3,8 @@
  * preview's own origin, so it can inspect DOM that the cross-origin Praxis parent
  * cannot, then reports bounded descriptions through postMessage.
  */
+import { SCOPE_CLASS_PATTERN } from '../shared/display-classes'
+
 export const WEB_PREVIEW_BRIDGE = String.raw`(() => {
   const script = document.currentScript
   const params = new URL(script && script.src ? script.src : location.href).searchParams
@@ -37,6 +39,10 @@ export const WEB_PREVIEW_BRIDGE = String.raw`(() => {
     return element
   }
 
+  // Generated scope markers help CSS selectors but are not useful identity.
+  // The source comes from shared/display-classes.ts, exactly as in Electron.
+  const scopeClassPattern = new RegExp(${JSON.stringify(SCOPE_CLASS_PATTERN.source)})
+
   const selector = (element) => {
     if (element.id) return '#' + CSS.escape(element.id)
     const parts = []
@@ -69,7 +75,9 @@ export const WEB_PREVIEW_BRIDGE = String.raw`(() => {
     return {
       tag: element.tagName.toLowerCase(),
       id: element.id || null,
-      classes: Array.from(element.classList || []).slice(0, 32),
+      classes: Array.from(element.classList || [])
+        .filter((name) => !scopeClassPattern.test(name))
+        .slice(0, 32),
       selector: selector(element).slice(0, 1024),
       source: element.getAttribute('data-praxis-source'),
       componentSource: element.getAttribute('data-praxis-component-source'),

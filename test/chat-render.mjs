@@ -27,6 +27,7 @@ const SAMPLE = [
   '```',
   '',
   '- Adjusted `--accent` token to `#0d9488`',
+  '- Set the pale surface to #edf4ff',
   '- Reduced top padding from `64px` to `48px`',
   '',
   '> Preview should hot-reload automatically.'
@@ -62,6 +63,26 @@ try {
   }, SAMPLE)
 
   await win.waitForSelector('.markdown pre code', { timeout: 5000 })
+  const colorPreviews = await win.$$eval('.markdown__color-token', (els) =>
+    els.map((el) => ({
+      color: el.getAttribute('data-color'),
+      text: el.textContent,
+      swatch: getComputedStyle(el.querySelector('.markdown__color-swatch')).backgroundColor,
+      inPre: Boolean(el.closest('pre'))
+    }))
+  )
+  if (
+    colorPreviews.length !== 2 ||
+    !colorPreviews.some(
+      ({ color, text, swatch }) =>
+        color === '#edf4ff' && text === '#edf4ff' && swatch === 'rgb(237, 244, 255)'
+    ) ||
+    colorPreviews.some(({ inPre }) => inPre)
+  ) {
+    throw new Error(
+      `hex colors should render with previews outside code blocks: ${JSON.stringify(colorPreviews)}`
+    )
+  }
   // Mid-turn: the running cat is captioned with tokens in/out + working time,
   // NOT the current tool step (which lives in the turn's own step disclosure).
   const running = (await win.textContent('.chat__stats')) ?? ''

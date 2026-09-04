@@ -27,6 +27,14 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Clean selection titles (2026-09-04, user-reported) — SHIPPED
+
+- [x] **Hide compiler style-scope classes everywhere selections are named.**
+      PR #223's predicate is now shared by Layers, the native preview badge and
+      `SelectedElement` payload, and the browser preview bridge. CSS selectors retain
+      raw classes; only human-facing identity is filtered. `test/select-element.mjs`
+      covers both the visible badge and renderer payload.
+
 ## Option-hover spacing measurement (2026-09-04, user-reported) — SHIPPED
 
 - [x] **Restore the unmerged Figma-style measurement overlay.** ✅ 2026-09-04 —
@@ -43,6 +51,16 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       simply a new peer chat. When sessions stop, relaunch continuity follows the
       last-active chat instead of privileging the project's first-created key.
       Legacy `slot: 'main'` records remain readable and migrate to `slot: 'current'`.
+
+## Rail accordion (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Switching projects hands the open chat list over.** ✅ 2026-09-04 — the
+      rail keeps exactly one project unfolded: `foldOthers` in `store.ts` runs on
+      `activate`/`openOrActivate` and on the chevron (which unfolds exclusively
+      too), so the project you leave folds as the one you pick opens instead of
+      every visited project stacking up. `.rail__project-body` animates from
+      `height: 0` to `auto` so the swap is motion, not a pop. `test/rail.mjs`.
+      See PROGRESS 2026-09-04.
 
 ## Browser and hosted Praxis (2026-09-03, user-requested) — IN PROGRESS
 
@@ -85,6 +103,23 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       auth and quotas, and verify edit/recovery/publish across a redeploy. Multi-user
       workspaces require the separate control-plane/isolated-worker phase in
       `docs/BROWSER.md`.
+
+## Git-based PR descriptions (2026-09-02, user-reported) — SHIPPED
+
+- [x] **Create PR must not paste the chat transcript.** ✅ 2026-09-02 — PR title
+      and body now come from change-bearing branch commits, changed-file scopes, and
+      diffstat. Conversation-only messages, logs, slash commands, and old
+      `Changes requested in Praxis` publish commits are excluded. Existing PRs get
+      their title/body refreshed on the next Create PR. Regression fixture mirrors
+      the broken `about-me-2026` PR #8.
+
+## Inline chat color previews (2026-09-02, user-requested) — SHIPPED
+
+- [x] **Show a swatch beside hex colors in assistant messages.** ✅ 2026-09-02 —
+      assistant prose and inline code now preview 3/4/6/8-digit CSS hex literals with
+      a small outlined swatch. Fenced code and links remain untouched. Covered by the
+      pure `test/markdown-color.mjs` component regression and the visual
+      `test/chat-render.mjs` Electron regression.
 
 ## Automatic background agents for complex text edits (2026-09-01, user-reported) — SHIPPED
 
@@ -130,6 +165,24 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       repository queue; Codex resolves the staged markers in its own checkout and
       normal turn completion lands them. No raw Git or discard/reset capability is
       exposed. `test/praxis-agent-tools.mjs`, `test/chat-worktrees.mjs`, `test/rules.mjs`.
+
+## Remote publish reconciliation (2026-08-27, user-reported)
+
+- [x] **Preserve and reconcile both work-branch histories before push.** ✅
+      2026-08-27 — Publish now holds a per-repository lock, fetches/prunes origin,
+      records recovery refs for both tips, chooses normal push vs fast-forward vs
+      explicit merge from ancestry, and retries a remote-moved rejection at most
+      three total attempts. Conflicts pause with their exact files and never use
+      force/rebase/reset or a blanket ours/theirs strategy. Existing conflicts are
+      refused before staging. `test/publish-reconcile.mjs` covers the full graph
+      matrix plus a real push race.
+- [ ] **Replace permanent work-branch publishing with unique publish branches.**
+      Build each `praxis/publish/<session-id>` from a freshly fetched
+      `origin/<base>`, apply the session's squashed changes there, open/merge its
+      PR, delete the temporary branch, and seed the next chat from the newly
+      fetched base. This removes cross-session branch-name collisions entirely;
+      it needs a deliberate migration for current PR-only mode and existing open
+      PRs rather than being hidden inside the rejection repair.
 
 ## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
 

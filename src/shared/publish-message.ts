@@ -1,21 +1,83 @@
 /**
- * Build the Publish commit/PR title + body from what the user actually asked
- * praxis to do this session (pure — unit-tested via bun, no electron).
- *
- * The squash-merge commit on the default branch inherits these, so the GitHub
- * history reads as real work ("Remove the tooltip from the PLUS8 entry (+2
- * more)") instead of "praxis: publish praxis/main".
+ * Build a Publish commit/PR title and body from the changes that actually landed
+ * on the branch. Chat transcripts are deliberately not an input: conversation
+ * contains questions, corrections, logs, and commands that are not release notes.
  */
 
-/** Strip praxis's own element-reference preamble from a seeded selection ask. */
-const cleanAsk = (t: string): string =>
-  t
-    .replace(/^In the preview I selected [\s\S]*?\.\s+/i, '')
-    .replace(/\s+/g, ' ')
-    .trim()
+const truncate = (text: string, max: number): string =>
+  text.length <= max ? text : `${text.slice(0, max - 1).replace(/\s+\S*$/, '')}…`
 
-const truncate = (t: string, max: number): string =>
-  t.length <= max ? t : `${t.slice(0, max - 1).replace(/\s+\S*$/, '')}…`
+const cleanSummary = (raw: string): string => {
+  let text = raw.replace(/\s+/g, ' ').trim()
+  text = text.replace(/^In the preview I selected [\s\S]*?\.\s+/i, '')
+  text = text.replace(
+    /^so i have (.+?) project\. i want to (.+)$/i,
+    (_match, project: string, action: string) => action.replace(/\bit\b/i, project)
+  )
+  text = text.replace(/^(?:that's|that is) (?:cool|great|good),? but\s+/i, '')
+  text = text.replace(/^(?:ok(?:ay)?|cool|great|nice|well)[.!,:;\s-]+/i, '')
+  text = text.replace(/^i (?:actually )?want (?:it|you) to\s+/i, '')
+  text = text.trim()
+  return text ? text[0].toUpperCase() + text.slice(1) : ''
+}
+
+const isNoise = (summary: string): boolean =>
+  !summary ||
+  summary.startsWith('/') ||
+  /^(?:do it(?: for me)?|tell me what|sounds like you|you are praxis|pull latest from main)$/i.test(
+    summary
+  ) ||
+  /\[vite\]|Publishing —|Creating PR —/i.test(summary)
+
+/**
+ * Parse `%s%x1f%b%x1e` git-log output. The legacy publisher made a final commit
+ * whose body began with "Changes requested in Praxis:" and contained the pasted
+ * chat; exclude it when an existing PR is updated so that mistake cannot persist.
+ */
+export function publishCommitSummaries(log: string): string[] {
+  const seen = new Set<string>()
+  const summaries: string[] = []
+  for (const record of log.split('\x1e')) {
+    const [subject = '', body = ''] = record.split('\x1f')
+    if (body.includes('Changes requested in Praxis:')) continue
+    if (/^Reconcile local and remote Praxis publish histories$/i.test(subject.trim())) continue
+    const summary = cleanSummary(subject)
+    if (isNoise(summary)) continue
+    const key = summary.toLocaleLowerCase()
+    if (!seen.has(key)) {
+      seen.add(key)
+      summaries.push(summary)
+    }
+  }
+  return summaries
+}
+
+const hasAny = (files: string[], test: (file: string) => boolean): boolean => files.some(test)
+
+export function changedScopes(files: string[]): string[] {
+  const scopes: string[] = []
+  const add = (label: string, test: (file: string) => boolean): void => {
+    if (hasAny(files, test)) scopes.push(label)
+  }
+  add('UI components', (f) => /(?:^|\/)components?\//i.test(f))
+  add('content', (f) => /(?:^|\/)(?:content|posts?|articles?)\//i.test(f) || /\.mdx$/i.test(f))
+  add('styles', (f) => /\.(?:css|scss|sass|less|pcss)$/i.test(f))
+  add('media', (f) => /\.(?:avif|gif|jpe?g|png|svg|webp|mp4|mov|webm|mp3|wav)$/i.test(f))
+  add('tests', (f) => /(?:^|\/)(?:test|tests|__tests__)\//i.test(f) || /\.(?:test|spec)\./i.test(f))
+  add('dependencies', (f) =>
+    /(?:^|\/)(?:package\.json|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock)$/i.test(f)
+  )
+  add('documentation', (f) => /(?:^|\/)docs?\//i.test(f) || /(?:^|\/)README(?:\.|$)/i.test(f))
+  add('configuration', (f) => /(?:^|\/)(?:[^/]+\.config\.[^/]+|tsconfig[^/]*\.json)$/i.test(f))
+  if (!scopes.length && files.length) scopes.push('project files')
+  return scopes
+}
+
+const naturalList = (items: string[]): string => {
+  if (items.length < 2) return items[0] ?? ''
+  if (items.length === 2) return `${items[0]} and ${items[1]}`
+  return `${items.slice(0, -1).join(', ')}, and ${items.at(-1)}`
+}
 
 export interface PublishMessage {
   title: string
@@ -24,27 +86,56 @@ export interface PublishMessage {
 
 export function buildPublishMessage(
   branch: string,
-  asks: string[],
-  diffstat?: string
+  commitSummaries: string[],
+  diffstat = '',
+  changedFiles: string[] = []
 ): PublishMessage {
-  const cleaned = asks.map(cleanAsk).filter(Boolean)
-  const first = cleaned[0] ?? ''
+  const summaries = commitSummaries.map(cleanSummary).filter((s) => !isNoise(s))
+  const scopes = changedScopes(changedFiles)
+  const scopeText = naturalList(scopes.slice(0, 4))
+  const title = truncate(
+    summaries.length === 1
+      ? summaries[0]
+      : scopeText
+        ? `Update ${scopeText}`
+        : summaries.length > 1
+          ? `Implement ${summaries.length} project changes`
+          : `Praxis: publish ${branch}`,
+    72
+  )
 
-  let title = first ? truncate(first, 64) : `Praxis: publish ${branch}`
-  if (cleaned.length > 1) title += ` (+${cleaned.length - 1} more)`
-
-  const lines: string[] = []
-  if (cleaned.length > 0) {
-    lines.push('Changes requested in Praxis:')
-    for (const ask of cleaned.slice(0, 20)) lines.push(`- ${truncate(ask, 200)}`)
-    if (cleaned.length > 20) lines.push(`- …and ${cleaned.length - 20} more`)
+  const lines = ['## Summary', '']
+  if (summaries.length) {
+    for (const summary of summaries.slice(0, 8)) lines.push(`- ${truncate(summary, 180)}`)
+    if (summaries.length > 8) lines.push(`- …and ${summaries.length - 8} more change commits`)
+  } else if (changedFiles.length) {
+    lines.push(
+      `- Update ${changedFiles.length} ${scopeText || 'project'} ${changedFiles.length === 1 ? 'file' : 'files'}.`
+    )
+  } else {
+    lines.push('- Publish the current Praxis work branch.')
   }
-  const stat = diffstat?.trim()
+
+  if (changedFiles.length) {
+    lines.push('', '## Change overview', '')
+    if (scopeText) lines.push(`- Areas touched: ${scopeText}`)
+    lines.push(`- Files changed: ${changedFiles.length}`)
+  }
+
+  const stat = diffstat.trim()
   if (stat) {
-    if (lines.length) lines.push('')
-    lines.push('```', ...stat.split('\n').slice(0, 16), '```')
+    lines.push(
+      '',
+      '<details>',
+      '<summary>Diffstat</summary>',
+      '',
+      '```text',
+      ...stat.split('\n').slice(0, 24),
+      '```',
+      '</details>'
+    )
   }
-  if (!lines.length) lines.push('Published from Praxis.')
 
+  lines.push('', '_Prepared in Praxis._')
   return { title, body: lines.join('\n') }
 }

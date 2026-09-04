@@ -18,7 +18,9 @@
  */
 
 import type { LayerFingerprint, LayerNode, LayersSnapshot } from '../shared/api'
+import { isScopeClass } from '../shared/display-classes'
 export type { LayerFingerprint, LayerNode, LayersSnapshot }
+export { isScopeClass } from '../shared/display-classes'
 
 // Elements not worth showing as page structure: script-ish/head-ish tags the
 // user never reorders, plus icon internals (treated as a leaf below).
@@ -56,9 +58,16 @@ export function buildLayersSnapshot(): LayersSnapshot {
     if (source) stampCounts.set(source, (stampCounts.get(source) ?? 0) + 1)
 
     const tag = el.tagName.toLowerCase()
+    // Scope classes are dropped BEFORE the 5-class cap — filtering later would
+    // let a row whose first five classes are all scope markers show nothing.
     const classes =
       typeof el.className === 'string' && el.className.trim()
-        ? el.className.trim().split(/\s+/).slice(0, 5).map((c) => c.slice(0, 30))
+        ? el.className
+            .trim()
+            .split(/\s+/)
+            .filter((c) => !isScopeClass(c))
+            .slice(0, 5)
+            .map((c) => c.slice(0, 30))
         : []
     const isLeafTag = LEAF_TAGS.has(tag)
     const children = isLeafTag ? [] : elementChildren(el).filter((c) => !SKIP_TAGS.has(c.tagName.toLowerCase()))
