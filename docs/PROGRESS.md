@@ -2,6 +2,33 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Option-hover measures the spacing between two elements
+
+Select an element in the preview, then hold Option/Alt and hover another: the
+overlay now draws the distance between them, Figma-style — capped red spans with
+the pixel number on each. Separated boxes get the gap on the axis they're apart
+on (both axes when they're diagonal, each with a dashed guide extending the
+target's edge out to meet the measurement line); nested or intersecting boxes get
+the four matched-edge deltas instead, which is exactly the inset read you want
+when checking padding inside a container.
+
+The geometry is a pure module (`src/preview/measure.ts`) so it unit-tests without
+a DOM; `preload.ts` only turns segments into fixed-position divs in the existing
+shadow-root overlay, on a new layer of its own. It hangs off the mousemove that
+already drives the hover highlight (`e.altKey` reads the modifier, so the gesture
+works whether or not the preview holds keyboard focus), rebuilds only when the
+rounded geometry actually changed, and clears on Option-up, window blur, scroll,
+mouse-out, and every existing selection teardown.
+
+`test/measure-distance.mjs` covers the geometry (gaps, diagonals + guides,
+containment insets, flush/sub-pixel edges that must NOT draw a label);
+`test/measure-alt.mjs` drives the real preview — pick the heading, Option-hover
+the card, assert the label equals the live `getBoundingClientRect` gap, and
+capture the overlay's own pixels to `test/artifacts/measure-alt.png`. Verified
+with `bun run typecheck` and the unit tier; the Electron tier could not be run in
+this environment (Playwright's `_electron.launch` never yields a window here —
+`test/smoke.mjs` hangs identically at HEAD).
+
 ## 2026-09-02 — Create PR describes git changes instead of pasting chat
 
 PR #8 on `about-me-2026` exposed the failure clearly: Publish used every user
