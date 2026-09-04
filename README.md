@@ -21,6 +21,9 @@ GitHub PR.
   is isolated behind a browser gateway and supports source-aware element selection;
   native editing-tool parity is still in progress. See
   [`docs/BROWSER.md`](docs/BROWSER.md).
+- **Secure access from another machine.** Add `--remote` to publish the loopback-only
+  control UI and isolated preview through Tailscale Serve. Praxis prints a single-use
+  pairing URL for a browser on the same tailnet and removes its routes on shutdown.
 - **AI chat that edits the running app.** A persistent multi-turn agent session
   streams over IPC and edits source with hot-reload. Backends are pluggable —
   Claude (via the Agent SDK), Codex, and Gemini behind one provider seam
@@ -82,6 +85,7 @@ Then authorize the agent once and launch:
 claude setup-token   # one-time: authorize the agent with your own subscription
 praxis               # launch the app (builds on first run)
 praxis serve ./my-app # or run the local-browser UI for one repo
+praxis serve ./my-app --remote # open it from another device on your Tailscale network
 ```
 
 In the app, click **Open project…**, pick a repo with a `dev`/`start` script,

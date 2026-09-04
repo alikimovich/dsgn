@@ -1538,6 +1538,19 @@ body.is-fullscreen .sidebar-toggle {
     cursor: text;
 }
 
+.previewbar__remote {
+    flex: 0 0 auto;
+    border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+    border-radius: 999px;
+    padding: 2px 8px;
+    color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+    font-size: 15px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
 .previewbar__actions {
     margin-left: auto;
     display: flex;

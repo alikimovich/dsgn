@@ -9,7 +9,12 @@
 import { spawnSync } from 'node:child_process'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { lockfilesToRestore } from '../bin/praxis.mjs'
+import {
+  lockfilesToRestore,
+  parseTailscaleStatus,
+  remoteServeSpec,
+  tailscaleServeEnableUrl
+} from '../bin/praxis.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -59,6 +64,55 @@ const help = spawnSync(process.execPath, [join(repoRoot, 'bin', 'praxis.mjs'), '
 })
 assert(help.status === 0, 'CLI help exits successfully')
 assert(help.stdout.includes('praxis serve <repo>'), 'CLI help documents local browser mode')
+assert(help.stdout.includes('--remote'), 'CLI help documents remote-workstation mode')
+
+const connectedStatus = JSON.stringify({
+  BackendState: 'Running',
+  Self: { ID: 'node-123', DNSName: 'studio.example.ts.net.' },
+  CertDomains: ['studio.example.ts.net']
+})
+eq(
+  parseTailscaleStatus(connectedStatus),
+  'studio.example.ts.net',
+  'Tailscale status yields a clean MagicDNS hostname'
+)
+eq(tailscaleServeEnableUrl(connectedStatus), null, 'enabled Tailscale Serve passes preflight')
+eq(
+  tailscaleServeEnableUrl(
+    JSON.stringify({
+      BackendState: 'Running',
+      Self: { ID: 'node-123', DNSName: 'studio.example.ts.net.' },
+      CertDomains: null
+    })
+  ),
+  'https://login.tailscale.com/f/serve?node=node-123',
+  'disabled Tailscale Serve returns its one-time enablement URL'
+)
+const remote = remoteServeSpec('studio.example.ts.net', 4173, 4174)
+eq(
+  remote,
+  {
+    publicOrigin: 'https://studio.example.ts.net:8443',
+    previewPublicOrigin: 'https://studio.example.ts.net:8444',
+    routes: [
+      { externalPort: 8443, target: 'http://127.0.0.1:4173' },
+      { externalPort: 8444, target: 'http://127.0.0.1:4174' }
+    ]
+  },
+  'remote mode plans separate tailnet origins for control and preview'
+)
+for (const [input, message] of [
+  [{ BackendState: 'Stopped', Self: { DNSName: 'studio.example.ts.net.' } }, 'stopped client'],
+  [{ BackendState: 'Running', Self: {} }, 'missing MagicDNS']
+]) {
+  let rejected = false
+  try {
+    parseTailscaleStatus(JSON.stringify(input))
+  } catch {
+    rejected = true
+  }
+  assert(rejected, `${message} is rejected for remote mode`)
+}
 
 if (failed) {
   console.error(`PRAXIS-CLI FAILED — ${failed} assertion(s)`)

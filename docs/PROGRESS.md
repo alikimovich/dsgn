@@ -2,6 +2,33 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Secure remote-browser access through Tailscale Serve
+
+Added `praxis serve <repo> --remote`, the first usable mode 2 slice. Praxis keeps
+the control server and untrusted preview gateway on distinct IPv4-loopback ports,
+then configures two tailnet-only Tailscale Serve HTTPS routes. The browser receives
+the public origins while upstream dev servers remain private; the session cookie is
+`Secure`, RPC and WebSocket requests retain exact Host/Origin enforcement, and the
+single-use launch URL pairs one browser profile for the process lifetime. Remote mode
+does not auto-open locally, avoiding accidental consumption of that pairing URL.
+
+The CLI validates local and remote ports, requires a connected MagicDNS Tailscale
+node, reports the one-time Serve activation URL when the feature is disabled, refuses
+to replace existing Serve ports, and removes only the routes it created on graceful
+shutdown. The UI displays a readable “Remote access active” pill. WebSocket events
+now carry monotonic sequence numbers and the browser reconnects with its last cursor;
+the server retains a bounded replay window for events missed during sleep or a network
+transition.
+
+Expanded CLI and browser-mode coverage for Tailscale status/spec generation, public
+origin wiring, distinct fixed preview ports, and reconnect replay. Verified the
+targeted CLI test, full typecheck, browser integration, the complete standard test
+matrix (118/118), and a real browser flow that paired, opened the fixture repo,
+rendered its proxied preview, and showed the remote indicator. On this workstation
+Tailscale is connected; Serve still needs its one-time tailnet activation before a
+real second-device HTTPS pass. Multi-client presence, selective revocation, writer
+arbitration, and daemon packaging remain tracked as the next mode 2 hardening slice.
+
 ## 2026-09-03 — Local browser mode foundation
 
 Added `praxis serve <repo>` as the first executable slice of the browser plan. It

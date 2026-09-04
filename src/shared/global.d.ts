@@ -9,6 +9,7 @@ declare global {
       rpcPath: string
       eventsPath: string
       previewToken: string
+      remote: boolean
     }
   }
 }

@@ -905,12 +905,35 @@ app.whenReady().then(async () => {
     const root = process.env.PRAXIS_WEB_ROOT
     if (!root) throw new Error('PRAXIS_WEB_ROOT is required in browser mode.')
     const port = Number(process.env.PRAXIS_WEB_PORT || '4173')
+    const previewPort = Number(process.env.PRAXIS_WEB_PREVIEW_PORT || '0')
+    const publicOrigin = process.env.PRAXIS_WEB_PUBLIC_ORIGIN
+    const previewPublicOrigin = process.env.PRAXIS_WEB_PREVIEW_ORIGIN
+    if (process.env.PRAXIS_WEB_REMOTE === '1') {
+      for (const [label, raw] of [
+        ['Praxis', publicOrigin],
+        ['preview', previewPublicOrigin]
+      ] as const) {
+        if (
+          !raw ||
+          new URL(raw).protocol !== 'https:' ||
+          !new URL(raw).hostname.endsWith('.ts.net')
+        ) {
+          throw new Error(`Remote ${label} origin must be an HTTPS *.ts.net origin.`)
+        }
+      }
+    }
     const browser = await startBrowserServer({
       root,
       port: Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 4173,
-      rendererDir: join(__dirname, '../renderer')
+      previewPort:
+        Number.isInteger(previewPort) && previewPort >= 0 && previewPort <= 65535 ? previewPort : 0,
+      rendererDir: join(__dirname, '../renderer'),
+      publicOrigin,
+      previewPublicOrigin
     })
     console.log(`Praxis browser UI: ${browser.url}`)
+    console.log(`Praxis local control: ${browser.localUrl}`)
+    console.log(`Praxis local preview: ${browser.previewLocalUrl}`)
     console.log(`Open once: ${browser.launchUrl}`)
     if (process.env.PRAXIS_WEB_OPEN !== '0') void shell.openExternal(browser.launchUrl)
     return

@@ -56,10 +56,122 @@ function usage() {
 Commands:
   praxis              Launch Praxis (builds first if needed)
   praxis serve <repo>  Run Praxis in the local browser
+    --remote           Share securely with other devices in your Tailscale network
+    --remote-port=8443 Choose the tailnet HTTPS port (preview uses the next port)
   praxis --update      Pull latest changes, reinstall, and rebuild
   praxis --help        Show this help message
   praxis --version      Print the installed version
 `
+}
+
+export function parseTailscaleStatus(raw) {
+  let status
+  try {
+    status = JSON.parse(String(raw))
+  } catch {
+    throw new Error('Tailscale did not return valid status JSON.')
+  }
+  if (status.BackendState && status.BackendState !== 'Running') {
+    throw new Error(`Tailscale is not connected (state: ${status.BackendState}).`)
+  }
+  const hostname = String(status.Self?.DNSName ?? '').replace(/\.$/, '')
+  if (!hostname.endsWith('.ts.net')) {
+    throw new Error('Tailscale MagicDNS is required for secure remote access.')
+  }
+  return hostname
+}
+
+export function tailscaleServeEnableUrl(raw) {
+  let status
+  try {
+    status = JSON.parse(String(raw))
+  } catch {
+    throw new Error('Tailscale did not return valid status JSON.')
+  }
+  const hostname = parseTailscaleStatus(raw)
+  if (Array.isArray(status.CertDomains) && status.CertDomains.includes(hostname)) return null
+  const nodeId = String(status.Self?.ID ?? '')
+  return nodeId ? `https://login.tailscale.com/f/serve?node=${encodeURIComponent(nodeId)}` : null
+}
+
+export function remoteServeSpec(hostname, localPort, previewLocalPort, remotePort = 8443) {
+  const ports = [localPort, previewLocalPort, remotePort, remotePort + 1]
+  if (ports.some((port) => !Number.isInteger(port) || port < 1 || port > 65535)) {
+    throw new Error('Remote access ports must be integers between 1 and 65535.')
+  }
+  if (localPort === previewLocalPort) throw new Error('Control and preview ports must differ.')
+  return {
+    publicOrigin: `https://${hostname}:${remotePort}`,
+    previewPublicOrigin: `https://${hostname}:${remotePort + 1}`,
+    routes: [
+      {
+        externalPort: remotePort,
+        target: `http://127.0.0.1:${localPort}`
+      },
+      {
+        externalPort: remotePort + 1,
+        target: `http://127.0.0.1:${previewLocalPort}`
+      }
+    ]
+  }
+}
+
+function tailscale(args, options = {}) {
+  const result = spawnSync('tailscale', args, { encoding: 'utf8', ...options })
+  if (result.error || result.status !== 0) {
+    const detail = String(result.stderr || result.stdout || result.error?.message || '').trim()
+    throw new Error(detail || `tailscale ${args.join(' ')} failed.`)
+  }
+  return String(result.stdout ?? '')
+}
+
+function configureRemoteAccess(localPort, previewLocalPort, remotePort) {
+  let hostname
+  let statusJson
+  try {
+    statusJson = tailscale(['status', '--json'])
+    hostname = parseTailscaleStatus(statusJson)
+  } catch (error) {
+    throw new Error(
+      `Remote mode needs a connected Tailscale client. ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  const enableUrl = tailscaleServeEnableUrl(statusJson)
+  if (enableUrl) {
+    throw new Error(`Tailscale Serve is not enabled. Enable it once, then rerun:\n${enableUrl}`)
+  }
+
+  const spec = remoteServeSpec(hostname, localPort, previewLocalPort, remotePort)
+  const status = tailscale(['serve', 'status'])
+  for (const route of spec.routes) {
+    if (new RegExp(`:${route.externalPort}(?:\\D|$)`).test(status)) {
+      throw new Error(
+        `Tailscale Serve port ${route.externalPort} is already configured. Choose another with --remote-port.`
+      )
+    }
+  }
+
+  const configured = []
+  const cleanup = () => {
+    for (const port of configured.reverse()) {
+      spawnSync('tailscale', ['serve', '--yes', `--https=${port}`, 'off'], {
+        stdio: 'ignore'
+      })
+    }
+    configured.length = 0
+  }
+  try {
+    for (const route of spec.routes) {
+      tailscale(['serve', '--bg', '--yes', `--https=${route.externalPort}`, route.target])
+      configured.push(route.externalPort)
+    }
+  } catch (error) {
+    cleanup()
+    throw new Error(
+      `Could not configure Tailscale Serve. ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  return { ...spec, cleanup }
 }
 
 function getElectronPath() {
@@ -122,6 +234,36 @@ function serve(args) {
     process.exit(1)
   }
 
+  const remote = args.includes('--remote')
+  const previewPortFlag = args.find((arg) => arg.startsWith('--preview-port='))
+  const previewPort = previewPortFlag
+    ? Number(previewPortFlag.slice('--preview-port='.length))
+    : port + 1
+  const remotePortFlag = args.find((arg) => arg.startsWith('--remote-port='))
+  const remotePort = remotePortFlag ? Number(remotePortFlag.slice('--remote-port='.length)) : 8443
+  if (remote && port < 1) {
+    console.error('Remote mode needs a fixed browser port between 1 and 65535.')
+    process.exit(1)
+  }
+  if (
+    remote &&
+    (!Number.isInteger(previewPort) ||
+      previewPort < 1 ||
+      previewPort > 65535 ||
+      previewPort === port)
+  ) {
+    console.error(
+      `Invalid preview port: ${previewPortFlag?.slice('--preview-port='.length) ?? previewPort}`
+    )
+    process.exit(1)
+  }
+  if (remote && (!Number.isInteger(remotePort) || remotePort < 1 || remotePort >= 65535)) {
+    console.error(
+      `Invalid remote port: ${remotePortFlag?.slice('--remote-port='.length) ?? remotePort}`
+    )
+    process.exit(1)
+  }
+
   const builtEntry = join(repoRoot, 'out', 'main', 'index.js')
   const rendererEntry = join(repoRoot, 'out', 'renderer', 'index.html')
   if (!existsSync(builtEntry) || !existsSync(rendererEntry)) {
@@ -136,6 +278,17 @@ function serve(args) {
   }
 
   const electronPath = getElectronPath()
+  let remoteAccess
+  if (remote) {
+    try {
+      remoteAccess = configureRemoteAccess(port, previewPort, remotePort)
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      process.exit(1)
+    }
+    console.log(`Tailscale remote access: ${remoteAccess.publicOrigin}`)
+  }
+
   const child = spawn(electronPath, ['.'], {
     cwd: repoRoot,
     stdio: 'inherit',
@@ -144,16 +297,36 @@ function serve(args) {
       PRAXIS_WEB_MODE: '1',
       PRAXIS_WEB_ROOT: root,
       PRAXIS_WEB_PORT: String(port),
-      PRAXIS_WEB_OPEN: args.includes('--no-open') ? '0' : '1',
+      PRAXIS_WEB_PREVIEW_PORT: remote ? String(previewPort) : '0',
+      // In remote mode the one-time URL belongs on the other device. Opening it
+      // locally would consume the launch token before that browser can pair.
+      PRAXIS_WEB_OPEN: remote || args.includes('--no-open') ? '0' : '1',
+      ...(remoteAccess
+        ? {
+            PRAXIS_WEB_REMOTE: '1',
+            PRAXIS_WEB_PUBLIC_ORIGIN: remoteAccess.publicOrigin,
+            PRAXIS_WEB_PREVIEW_ORIGIN: remoteAccess.previewPublicOrigin,
+          }
+        : {})
     },
   })
+  let stopping = false
+  const stop = (signal) => {
+    if (stopping) return
+    stopping = true
+    remoteAccess?.cleanup()
+    child.kill(signal)
+  }
+  process.once('SIGINT', () => stop('SIGINT'))
+  process.once('SIGTERM', () => stop('SIGTERM'))
   child.on('error', (error) => {
+    remoteAccess?.cleanup()
     console.error(`Could not start Praxis browser mode: ${error.message}`)
     process.exit(1)
   })
   child.on('exit', (code, signal) => {
-    if (signal) process.kill(process.pid, signal)
-    else process.exit(code ?? 0)
+    remoteAccess?.cleanup()
+    process.exit(signal ? 1 : (code ?? 0))
   })
 }
 

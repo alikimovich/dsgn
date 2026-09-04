@@ -29,9 +29,17 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       expand the browser preview runtime beyond selection, and run a real provider
       edit through the browser adapter. Native-only affordances should keep explicit
       browser fallbacks.
-- [ ] **Add secure remote-workstation access.** Device pairing/revocation,
-      reconnect/replay, single-writer coordination, and a documented Tailscale Serve
-      path with the Praxis daemon remaining loopback-bound.
+- [x] **Add secure single-client remote-workstation access.** ✅ 2026-09-04 —
+      `praxis serve <repo> --remote` keeps control and preview services on separate
+      loopback ports and publishes them as separate, tailnet-only Tailscale Serve
+      HTTPS origins. It adds one-time browser pairing, exact public-origin checks,
+      secure cookies, reconnect replay, graceful route cleanup, and a visible remote
+      indicator. The CLI detects disconnected/disabled Tailscale state and existing
+      port conflicts before exposing anything.
+- [ ] **Harden mode 2 for multiple clients and unattended use.** Add presence and
+      selective revocation UI, writer arbitration, suspend/lock controls, and a
+      launchd/systemd user service. The current process-lifetime mode intentionally
+      pairs one browser profile.
 - [ ] **Deferred: personal Railway alpha and multi-tenancy.** The 2026-09-03 product
       decision prioritizes local-browser and remote-workstation modes first. Later,
       containerize the web runtime, persist `/data`, add application/Git/provider

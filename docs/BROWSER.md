@@ -1,7 +1,8 @@
 # Browser and hosted Praxis
 
-Status: mode 1 local-browser foundation implemented, 2026-09-03. Secure remote
-workstation access (mode 2) is next; hosted modes remain deferred.
+Status: mode 1 local-browser foundation implemented, 2026-09-03. A secure,
+single-client mode 2 slice shipped 2026-09-04; multi-client controls and a user
+service remain follow-up work. Hosted modes remain deferred.
 
 **Product decision (2026-09-03):** prioritize modes 1 and 2—local browser and
 remote browser controlling a local workstation. Hosted Railway and multi-user cloud
@@ -34,6 +35,42 @@ The server validates `Host` and exact RPC/WebSocket `Origin` values, and every
 repository-scoped command is pinned to the CLI-selected real path. The project
 preview is served from a separate random loopback origin in a sandboxed iframe. Its
 selection bridge uses both that exact origin and a per-run capability token.
+
+## Running mode 2 today
+
+Install Tailscale on both machines, sign them into the same tailnet, then run this
+on the workstation that owns the repository:
+
+```text
+praxis serve /absolute/path/to/repo --remote
+```
+
+Praxis checks that Tailscale is connected and that Serve is enabled. The first run
+may print a Tailscale activation link; open it once, enable Serve for the workstation,
+and rerun the command. Copy the printed `Open once:` URL to the other machine. Remote
+mode deliberately does not open that URL on the workstation, because doing so would
+consume the single-use pairing secret before the other browser receives it.
+
+The control UI and untrusted project preview remain on separate origins. By default,
+Praxis listens only on local ports 4173 and 4174 and asks Tailscale Serve to publish
+them as tailnet-only HTTPS ports 8443 and 8444. Use `--port`, `--preview-port`, or
+`--remote-port` to resolve a conflict; the preview's remote port is always one above
+`--remote-port`. The session cookie is `Secure`, and HTTP RPC plus WebSocket upgrades
+still require the exact public origin. A reconnect cursor replays events missed while
+the remote browser sleeps or changes network.
+
+Stopping Praxis normally removes both Tailscale Serve routes and revokes the browser
+session. If the process is force-killed, clean up its two default routes without
+resetting unrelated Serve configuration:
+
+```text
+tailscale serve --yes --https=8443 off
+tailscale serve --yes --https=8444 off
+```
+
+This first mode 2 slice pairs one browser profile for one Praxis process. A connected-
+client list, selective revocation, multi-client writer arbitration, and launchd/systemd
+packaging are intentionally still pending.
 
 Praxis should be able to present the same browser UI while running its workspace
 engine in three places:
@@ -144,10 +181,10 @@ This is the recommended remote mode when the repository should remain on the mac
 running Praxis. The server still binds to loopback; an authenticated private tunnel
 publishes only the Praxis HTTPS endpoint.
 
-Recommended first integration: **Tailscale Serve**, limited to devices/users in the
-same tailnet. It reverse-proxies a local HTTP service and provisions HTTPS, while
-tailnet policy controls which devices can reach it. Praxis should still require its
-own login or one-time device pairing as defense in depth.
+The first integration is **Tailscale Serve**, limited to devices/users in the same
+tailnet. It reverse-proxies two local HTTP services and provisions HTTPS, while
+tailnet policy controls which devices can reach them. Praxis also requires a
+single-use, per-process browser pairing as defense in depth.
 
 ```text
 Workstation                       Other computer/tablet
@@ -163,15 +200,21 @@ tool execution. Tailscale Funnel is public-internet exposure and is not the defa
 if public sharing is ever supported, place a strong identity-aware access proxy in
 front and issue short-lived, revocable sessions.
 
-Remote-mode requirements:
+Current remote-mode guarantees:
 
 - explicit opt-in (`--remote`), never automatic exposure;
-- authenticated users/devices plus per-session CSRF protection;
+- Tailscale device authorization plus single-use Praxis pairing and exact-origin
+  CSRF protection;
 - WebSocket reconnect and replay from a monotonic event cursor;
+- loopback-only control/preview services with separate tailnet HTTPS origins;
+- a visible “remote access active” indicator and route cleanup on graceful shutdown.
+
+Remaining multi-client/daemon requirements:
+
 - a visible connected-client list and **Revoke** control;
 - single-writer coordination when two browsers operate the same chat/workspace;
 - terminal shutdown must not kill the daemon when installed as a user service;
-- suspend/lock controls and an obvious “remote access active” indicator.
+- suspend/lock controls.
 
 Official operational references:
 
@@ -295,11 +338,11 @@ the control application. The gateway must:
 
 ### Phase 1 — local browser proof of concept
 
-- [ ] Extract project detection, dev-server, source, Git, and one agent path from
+- [x] Extract project detection, dev-server, Git, and one agent path from
       `ipcMain` registration.
-- [ ] Serve the renderer and implement the browser `window.api` adapter.
-- [ ] Open one CLI-selected repo; stream one agent turn; show dev-server logs.
-- [ ] Render the app in an iframe through the preview gateway.
+- [x] Serve the renderer and implement the browser `window.api` adapter.
+- [x] Open one CLI-selected repo and stream one agent turn.
+- [x] Render the app in an iframe through the preview gateway.
 
 ### Phase 2 — browser editing parity
 
@@ -312,9 +355,9 @@ the control application. The gateway must:
 
 ### Phase 3 — remote-local access
 
-- [ ] Add device pairing, session revocation, client presence, reconnect/replay, and
-      single-writer coordination.
-- [ ] Document/test Tailscale Serve with a loopback-bound Praxis daemon.
+- [x] Add single-use pairing, process-lifetime revocation, and reconnect/replay.
+- [ ] Add multi-client presence, selective revocation, and single-writer coordination.
+- [x] Document/test Tailscale Serve with a loopback-bound Praxis process.
 - [ ] Package the daemon as a launchd/systemd user service.
 
 ### Phase 4 — Railway personal alpha

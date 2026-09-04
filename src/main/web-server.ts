@@ -21,6 +21,7 @@ import type { RendererEventTarget, RpcHandler, RpcHandlerRegistry } from './rpc-
 import { WEB_PREVIEW_BRIDGE } from './web-preview-bridge'
 
 const MAX_RPC_BODY = 4 * 1024 * 1024
+const MAX_EVENT_REPLAY = 512
 const SESSION_COOKIE = 'praxis_web_session'
 
 const MIME: Record<string, string> = {
@@ -102,6 +103,8 @@ type PreviewGateway = {
 
 export type BrowserServer = {
   url: string
+  localUrl: string
+  previewLocalUrl: string
   launchUrl: string
   close: () => Promise<void>
 }
@@ -109,7 +112,21 @@ export type BrowserServer = {
 export type BrowserServerOptions = {
   root: string
   port?: number
+  previewPort?: number
   rendererDir: string
+  publicOrigin?: string
+  previewPublicOrigin?: string
+}
+
+function cleanOrigin(raw: string, label: string): string {
+  const url = new URL(raw)
+  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
+    throw new Error(`${label} must be an HTTP(S) origin.`)
+  }
+  if (url.pathname !== '/' || url.search || url.hash) {
+    throw new Error(`${label} must not include a path, query, or fragment.`)
+  }
+  return url.origin
 }
 
 function sameSecret(left: string, right: string): boolean {
@@ -178,7 +195,8 @@ function stripFrameAncestors(value: string): string {
 
 async function createPreviewGateway(
   previewToken: string,
-  controlOrigin: () => string
+  controlOrigin: () => string,
+  port = 0
 ): Promise<PreviewGateway> {
   let target: URL | null = null
   const server = createServer((req, res) => {
@@ -250,7 +268,7 @@ async function createPreviewGateway(
 
   await new Promise<void>((resolveListen, reject) => {
     server.once('error', reject)
-    server.listen(0, '127.0.0.1', () => resolveListen())
+    server.listen(port, '127.0.0.1', () => resolveListen())
   })
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Preview gateway did not bind.')
@@ -294,11 +312,22 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
   const previewToken = randomBytes(24).toString('base64url')
   const router = new WebCommandRouter(root)
   const sockets = new Set<WebSocket>()
-  let origin = ''
+  const eventLog: Array<{ seq: number; channel: string; payload: unknown }> = []
+  let nextEventSeq = 1
+  let origin = options.publicOrigin ? cleanOrigin(options.publicOrigin, 'Public origin') : ''
+  const configuredPreviewOrigin = options.previewPublicOrigin
+    ? cleanOrigin(options.previewPublicOrigin, 'Preview public origin')
+    : ''
+  if (origin && configuredPreviewOrigin === origin) {
+    throw new Error('The control UI and project preview must use separate origins.')
+  }
   let launchAvailable = true
 
   const emit = (channel: string, payload: unknown): void => {
-    const message = JSON.stringify({ channel, payload })
+    const event = { seq: nextEventSeq++, channel, payload }
+    eventLog.push(event)
+    if (eventLog.length > MAX_EVENT_REPLAY) eventLog.splice(0, eventLog.length - MAX_EVENT_REPLAY)
+    const message = JSON.stringify(event)
     for (const socket of sockets) if (socket.readyState === WebSocket.OPEN) socket.send(message)
   }
   const eventTarget: RendererEventTarget = {
@@ -331,26 +360,33 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
     devices: []
   }))
 
-  const preview = await createPreviewGateway(previewToken, () => origin)
+  const preview = await createPreviewGateway(previewToken, () => origin, options.previewPort)
+  const previewOrigin = configuredPreviewOrigin || preview.origin
   const webConfig = {
     root,
     rpcPath: '/__praxis/rpc',
     eventsPath: '/__praxis/events',
-    previewToken
+    previewToken,
+    remote: !!options.publicOrigin
   }
   router.handle('preview:load', (_event, rawUrl: string) => {
     const target = allowedPreviewTarget(rawUrl)
     preview.setTarget(target.href)
     emit('preview:url-changed', target.href)
-    return { gatewayUrl: `${preview.origin}${target.pathname}${target.search}${target.hash}` }
+    return { gatewayUrl: `${previewOrigin}${target.pathname}${target.search}${target.hash}` }
   })
   router.handle('preview:reset', () => {
     preview.setTarget(null)
   })
 
   const webSocketServer = new WebSocketServer({ noServer: true })
-  webSocketServer.on('connection', (socket) => {
+  webSocketServer.on('connection', (socket, request) => {
     sockets.add(socket)
+    const after = Number(
+      new URL(request.url ?? '/', 'http://praxis.invalid').searchParams.get('after')
+    )
+    const cursor = Number.isSafeInteger(after) && after >= 0 ? after : 0
+    for (const event of eventLog) if (event.seq > cursor) socket.send(JSON.stringify(event))
     socket.on('close', () => sockets.delete(socket))
   })
 
@@ -376,7 +412,7 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
         launchAvailable = false
         res.writeHead(302, {
           location: '/',
-          'set-cookie': `${SESSION_COOKIE}=${encodeURIComponent(sessionToken)}; HttpOnly; SameSite=Strict; Path=/`,
+          'set-cookie': `${SESSION_COOKIE}=${encodeURIComponent(sessionToken)}; HttpOnly; SameSite=Strict; Path=/${origin.startsWith('https:') ? '; Secure' : ''}`,
           'cache-control': 'no-store'
         })
         res.end()
@@ -459,10 +495,13 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
   const address = server.address()
   if (!address || typeof address === 'string')
     throw new Error('Praxis browser server did not bind.')
-  origin = `http://127.0.0.1:${address.port}`
+  const localUrl = `http://127.0.0.1:${address.port}`
+  origin ||= localUrl
 
   return {
     url: origin,
+    localUrl,
+    previewLocalUrl: preview.origin,
     launchUrl: `${origin}/?token=${encodeURIComponent(launchToken)}`,
     close: async () => {
       for (const socket of sockets) socket.close()

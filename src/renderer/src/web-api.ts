@@ -5,6 +5,7 @@ type WebConfig = {
   rpcPath: string
   eventsPath: string
   previewToken: string
+  remote: boolean
 }
 
 type EventListener = (payload: unknown) => void
@@ -35,6 +36,7 @@ function previewFrame(): HTMLIFrameElement | null {
 /** Install the HTTP/WebSocket implementation before the shared React entry renders. */
 export function installWebApi(config: WebConfig): void {
   let nextRequest = 1
+  let lastEventSeq = 0
   let previewOrigin: string | null = null
 
   const postPreview = (type: string, payload?: unknown): void => {
@@ -65,10 +67,20 @@ export function installWebApi(config: WebConfig): void {
 
   const connectEvents = (): void => {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const socket = new WebSocket(`${protocol}//${location.host}${config.eventsPath}`)
+    const socket = new WebSocket(
+      `${protocol}//${location.host}${config.eventsPath}?after=${lastEventSeq}`
+    )
     socket.addEventListener('message', (event) => {
       try {
-        const message = JSON.parse(String(event.data)) as { channel?: string; payload?: unknown }
+        const message = JSON.parse(String(event.data)) as {
+          seq?: number
+          channel?: string
+          payload?: unknown
+        }
+        if (typeof message.seq === 'number') {
+          if (message.seq <= lastEventSeq) return
+          lastEventSeq = message.seq
+        }
         if (typeof message.channel === 'string') emit(message.channel, message.payload)
       } catch {
         // A malformed event is isolated to this frame; reconnect remains healthy.

@@ -31,6 +31,7 @@ history as written.
 | --- | --- |
 | `bun run dev` | Launch the app (electron-vite, HMR) |
 | `praxis serve <repo>` | Run the built UI in a local browser (loopback only) |
+| `praxis serve <repo> --remote` | Publish the loopback UI/preview to the private Tailscale network |
 | `bun run build` | Build main/preload/preview/renderer to `out/` |
 | `bun run typecheck` | Type-check all three tsconfig projects (node, web, preview). Run after every change |
 | `bun run test:<name>` | One test (see package.json for ~40 aliases) |
@@ -115,6 +116,9 @@ Project-memory persistence and Main-context reset are documented in `docs/MEMORY
   sandboxed iframe with a token-and-origin-checked `postMessage` selection bridge.
   This is the mode-1 foundation; remaining native editing-tool parity is tracked in
   `docs/TASKS.md` and the architecture/security plan is `docs/BROWSER.md`.
+  `--remote` keeps both services loopback-bound while Tailscale Serve publishes
+  separate tailnet-only HTTPS origins; it uses a single-use pairing URL, secure
+  session cookie, monotonic event replay, and graceful route cleanup.
 
 - The chat runs in `main` via provider SDKs; output streams over `agent:*` IPC
   into the zustand store. The store is the seam between transport and UI.

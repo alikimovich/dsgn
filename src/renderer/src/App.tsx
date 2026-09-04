@@ -2041,6 +2041,14 @@ export default function App(): React.JSX.Element {
                 ) : (
                   <span className="previewbar__url">{hint}</span>
                 )}
+                {window.__PRAXIS_WEB_CONFIG__?.remote && (
+                  <span
+                    className="previewbar__remote"
+                    title="Available only inside your Tailscale network"
+                  >
+                    Remote access active
+                  </span>
+                )}
                 <div className="previewbar__actions">
                   {status.kind === 'running' && (
                     <>
