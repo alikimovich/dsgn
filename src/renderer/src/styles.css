@@ -819,8 +819,35 @@ body.is-fullscreen .sidebar-toggle {
     flex-direction: column;
     gap: 1px;
 }
+/* The chat list is mounted/unmounted by the project's fold, and the rail is an
+   accordion (switching projects folds one away as it unfolds the next — see
+   Rail.tsx), so the two would otherwise swap in a single frame. Grow the
+   incoming list from zero height instead: `interpolate-size` lets the keyframe
+   animate to `height: auto`, since the list's real height depends on how many
+   chats it has. `overflow: hidden` is what keeps the rows clipped while it
+   grows; it costs nothing afterwards (nothing here paints outside the box). */
+.rail__item {
+    interpolate-size: allow-keywords;
+}
 .rail__project-body {
     padding-bottom: 5px;
+    overflow: hidden;
+    animation: rail-unfold 0.18s ease-out;
+}
+@keyframes rail-unfold {
+    from {
+        height: 0;
+        opacity: 0;
+    }
+    to {
+        height: auto;
+        opacity: 1;
+    }
+}
+@media (prefers-reduced-motion: reduce) {
+    .rail__project-body {
+        animation: none;
+    }
 }
 .rail__section-label {
     display: flex;
@@ -1902,6 +1929,23 @@ body.is-resizing {
     color: var(--text);
     padding: 1.5px 5px;
     border-radius: 5px;
+}
+
+.markdown__color-token {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.markdown__color-swatch {
+    display: inline-block;
+    width: 0.78em;
+    height: 0.78em;
+    flex: 0 0 auto;
+    border-radius: 3px;
+    background: var(--markdown-color);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent);
 }
 
 .markdown pre {

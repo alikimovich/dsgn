@@ -1,37 +1,66 @@
 /**
- * Unit test for the pure Publish commit/PR message builder (no Electron).
+ * Pure Publish commit/PR message builder. The regression fixture mirrors PR #8:
+ * legacy chat paste is excluded and only commits that changed the branch become
+ * concise summary bullets.
+ *
  * Run with: bun test/publish-message.mjs
  */
 import assert from 'node:assert'
-import { buildPublishMessage } from '../src/shared/publish-message.ts'
+import {
+  buildPublishMessage,
+  changedScopes,
+  publishCommitSummaries
+} from '../src/shared/publish-message.ts'
 
-// No asks → the old fallback (but with a body).
-let m = buildPublishMessage('praxis/main', [])
-assert.equal(m.title, 'Praxis: publish praxis/main')
-assert.equal(m.body, 'Published from Praxis.')
+const legacyLog = [
+  'so I have apca-cli project. I want to embed it here in a terminal like window\x1fPraxis turn 1.\x1e',
+  "that's cool, but I actually want it to be interactive here, and zoomable\x1fPraxis turn 2.\x1e",
+  'cool. add a new article called figma console\x1fPraxis turn 3.\x1e',
+  'pull latest from main (+15 more)\x1fChanges requested in Praxis:\n- /clear\n- do it for me\x1e'
+].join('')
 
-// One ask → it IS the title, and the body lists it.
-m = buildPublishMessage('praxis/main', ['make the hero heading teal'])
-assert.equal(m.title, 'make the hero heading teal')
-assert.ok(m.body.includes('- make the hero heading teal'), m.body)
-
-// Multiple asks → "(+N more)" and all listed.
-m = buildPublishMessage('praxis/main', ['fix the nav', 'darken the footer', 'add a favicon'])
-assert.equal(m.title, 'fix the nav (+2 more)')
-assert.ok(m.body.includes('- darken the footer') && m.body.includes('- add a favicon'), m.body)
-
-// praxis's seeded element-reference preamble is stripped from selection asks.
-m = buildPublishMessage('praxis/x', [
-  'In the preview I selected the <h3#tooltip> element in src/lib/Workplace.svelte:42:8 with text “PLUS8”. remove the tooltip from this place of work'
+const summaries = publishCommitSummaries(legacyLog)
+assert.deepEqual(summaries, [
+  'Embed apca-cli here in a terminal like window',
+  'Be interactive here, and zoomable',
+  'Add a new article called figma console'
 ])
-assert.equal(m.title, 'remove the tooltip from this place of work')
+assert.ok(!summaries.some((s) => /clear|do it|pull latest/i.test(s)), 'chat noise excluded')
 
-// Long asks truncate on a word boundary with an ellipsis.
-m = buildPublishMessage('praxis/x', ['please carefully restructure the entire landing page hero section grid to be responsive'])
-assert.ok(m.title.length <= 65 && m.title.endsWith('…'), m.title)
+const files = [
+  'package.json',
+  'bun.lock',
+  'public/images/figma.png',
+  'src/components/media/TerminalWindow.tsx',
+  'src/components/media/TerminalWindow.module.css',
+  'src/content/projects/figma-console.mdx'
+]
+assert.deepEqual(changedScopes(files), [
+  'UI components',
+  'content',
+  'styles',
+  'media',
+  'dependencies'
+])
 
-// Diffstat lands in a fenced block.
-m = buildPublishMessage('praxis/x', ['fix nav'], ' src/App.tsx | 4 ++--\n 1 file changed')
-assert.ok(m.body.includes('```') && m.body.includes('src/App.tsx'), m.body)
+const message = buildPublishMessage(
+  'praxis/main',
+  summaries,
+  ' src/components/media/TerminalWindow.tsx | 51 +++++\n 6 files changed',
+  files
+)
+assert.equal(message.title, 'Update UI components, content, styles, and media')
+assert.ok(message.body.startsWith('## Summary\n\n- Embed apca-cli'), message.body)
+assert.ok(message.body.includes('## Change overview'), message.body)
+assert.ok(message.body.includes('Files changed: 6'), message.body)
+assert.ok(message.body.includes('<summary>Diffstat</summary>'), message.body)
+assert.ok(!message.body.includes('Changes requested in Praxis:'), message.body)
 
-console.log('PUBLISH-MESSAGE OK — titles, preamble strip, truncation, diffstat')
+const single = buildPublishMessage('praxis/x', ['Fix the navigation'], '', ['src/Nav.tsx'])
+assert.equal(single.title, 'Fix the navigation')
+
+const fallback = buildPublishMessage('praxis/x', [], '', ['README.md'])
+assert.equal(fallback.title, 'Update documentation')
+assert.ok(fallback.body.includes('Update 1 documentation file.'))
+
+console.log('PUBLISH-MESSAGE OK — git-based title, structured body, legacy chat excluded')

@@ -91,3 +91,20 @@ Implementation: `src/main/repo-write-queue.ts`, `src/main/chat-isolation.ts`,
 `src/main/chat-worktrees.ts`, `src/main/worktrees.ts`, `src/main/live-commit.ts`.
 Regression coverage: `test/chat-worktrees.mjs`, `test/live-commit.mjs`,
 `test/chat-isolation.mjs`, `test/turn-terminal.mjs`.
+
+## Publishing a shared work branch
+
+Publish is a second repository-wide landing boundary after chat work reaches the live
+checkout. The entire commit → reconcile → push → PR → merge → cleanup sequence holds a
+per-repository publish lock. Before pushing an existing `praxis/*` branch, Praxis
+fetches/prunes origin and records both tips below `refs/praxis/recovery/`.
+
+The reconciliation is ancestry-driven: a remote ancestor needs only a normal push; a
+local ancestor fast-forwards; true divergence gets an explicit merge commit. A push
+rejected because the remote moved repeats fetch/reconciliation, with three total
+attempts. Content conflicts remain in the live checkout with both recovery refs and
+are surfaced as an exact file list. Publish never force-pushes, rebases, resets, or
+chooses ours/theirs across the repository.
+
+Implementation: `src/main/publish-reconcile.ts`, integrated by
+`src/main/annotations.ts`. Regression coverage: `test/publish-reconcile.mjs`.

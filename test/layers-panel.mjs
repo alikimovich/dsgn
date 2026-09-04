@@ -86,8 +86,13 @@ try {
   }
   // The three "mapped" rows all render (DOM has 3 elements) even though they
   // share one source stamp — the tree reflects live DOM, not source templates.
+  // Those rows also carry a compiler style-scope class (`s-p0FWuf5vgUnM`) in
+  // the fixture; the label is "li.mapped", never "li.mapped.s-p0FWuf5vgUnM".
   const mappedCount = labels.filter((l) => l === 'li.mapped').length
   if (mappedCount !== 3) throw new Error(`expected 3 "li.mapped" rows, got ${mappedCount}`)
+  if (labels.some((l) => l?.includes('s-p0FWuf5vgUnM'))) {
+    throw new Error(`scope class leaked into a row label; got ${JSON.stringify(labels)}`)
+  }
 
   // --- Clicking a row selects it — the normal useSelection pipeline. ---
   await win.evaluate((args) => {

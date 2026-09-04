@@ -596,6 +596,9 @@ export interface LayerNode {
   depth: number
   tag: string
   id: string | null
+  /** LABEL material, not the live class list: capped at 5 and stripped of
+   *  compiler style-scope markers (`s-…`/`svelte-…`/`sc-…`) — see
+   *  `isScopeClass` in `src/preview/layers.ts`. */
   classes: string[]
   source: string | null
   componentSource: string | null
@@ -1029,6 +1032,10 @@ export interface PublishResult {
   /** The fresh praxis/* branch created to continue on (publish.ship). */
   branch?: string
   error?: string
+  /** Per-file merge conflicts left for explicit resolution; never auto-resolved. */
+  conflictFiles?: string[]
+  /** Local refs preserving the pre-reconciliation tips. */
+  recoveryRefs?: string[]
 }
 
 /**
@@ -1451,7 +1458,8 @@ export interface PraxisApi {
     toPr: (root: string, opts: { title: string }) => Promise<PublishResult>
     /** Full ship: commit all → push → PR → squash-merge to the default branch →
      *  pull it → delete the merged branch → start a fresh praxis/* branch. */
-    ship: (root: string, summary?: string[], mode?: 'merge' | 'pr') => Promise<PublishResult>
+    /** The legacy summary argument is ignored; PR copy is derived from git changes. */
+    ship: (root: string, legacySummary?: string[], mode?: 'merge' | 'pr') => Promise<PublishResult>
   }
   github: {
     /** GitHub link + gh readiness for the header + connect sheet. */

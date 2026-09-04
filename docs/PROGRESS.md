@@ -2,6 +2,72 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Candidate integrated into main
+
+Merged the seven candidate-only commits with the seven main-only commits. The one
+textual conflict was the roadmap: both branches had added independent shipped and
+in-progress sections at the same insertion point. The resolution keeps both sets and
+orders the new entries newest-first; the automatically merged progress log received
+the same chronological repair. No implementation side was discarded. Verified all
+three TypeScript projects, the candidate-focused unit tests, and the complete standard
+suite (121/121). The rail accordion, color swatches, and scope-class-free Layers UI
+artifacts were visually inspected after the merge.
+
+## 2026-09-04 — Layers rows drop compiler style-scope classes
+
+Every row in a scoped-CSS project carried the compiler's own scoping class
+(`s-p0FWuf5vgUnM`, `svelte-a43zbs`, `sc-bdVaJa`, …). It's identical on every
+element a scoped stylesheet touches, so it added a long meaningless suffix to
+each label and drowned the class that actually identifies the element.
+
+`buildLayersSnapshot` now filters them out via a new pure `isScopeClass`
+predicate in `src/preview/layers.ts`. Two deliberate choices: the filter runs
+BEFORE the existing 5-class cap (otherwise a row whose first five classes are
+scope markers would show nothing), and it's a prefix ALLOWLIST plus a
+hash-shaped-tail check rather than a "looks random" heuristic — nothing
+reliably separates a short hash from a real class name, so `s-active` and
+`css-grid` stay on the row while `s-p0FWuf5vgUnM` goes. `LayerNode.classes` was
+already label material (capped, lossy), so filtering at capture rather than in
+`LayersTree` costs no other consumer; `api.ts` says so now.
+
+`test/layers-labels.mjs` (new, unit) covers both directions of the predicate;
+the `layers-app` fixture's mapped `<li>`s gained a scope class so
+`test/layers-panel.mjs` fails if one ever leaks into a label again. Verified
+with `bun run typecheck` and the complete `bun run test` suite (119/119).
+
+## 2026-09-04 — The rail's project list is an accordion again (one open at a time)
+
+User-reported: switching projects should hand the open chat list over — the one
+you leave closes as the one you pick opens. Since 2026-08-07 the fold was fully
+independent per project (that change fixed the opposite bug: `expanded` used to
+mean "is the active project", so a fold reset on every switch). Independent folds
+meant every project you visited stayed unfolded, and the rail grew a stack of
+open chat lists you had to close by hand.
+
+`store.ts` now has one helper, `foldOthers(projects, key)` — unfold `key`, fold
+everything else — applied at the three places a list opens: `activate`,
+`openOrActivate`, and the chevron's `toggleChatsCollapsed`. The chevron unfolds
+exclusively too, so "at most one open" holds however you got there; folding the
+open one just closes it (nothing springs open in its place). `chatsCollapsed`
+stays real persisted per-project state, so a relaunch restores the same single
+open project, and folding still never deactivates anything — the dev server and
+preview of every open project stay live.
+
+The list also animates open now, or the swap would happen in one frame:
+`.rail__project-body` runs a `rail-unfold` keyframe from `height: 0` to
+`height: auto`, which needs `interpolate-size: allow-keywords` (set on
+`.rail__item`) since the list's real height depends on how many chats it has.
+Verified by sampling the element per frame in Electron 43: 5 → 25 → 47 → 65 →
+78 → 86 → 87px, then the animation ends. Reduced-motion drops it.
+
+`src/renderer/src/store.ts`, `src/renderer/src/components/Rail.tsx` (comments),
+`src/renderer/src/styles.css`, `test/rail.mjs` — which flips its old
+"B's chats stay listed after switching away" assertion into the accordion ones
+(switch folds the outgoing project, the chevron unfolds exclusively, folding
+reopens nothing). Verified: `bun run typecheck`, plus `rail`, `rail-collapse`,
+`rail-favicon`, `rail-chat-overflow`, `rail-chat-status`, `viewport-per-project`
+and `restore-reload` on the Electron tier.
+
 ## 2026-09-04 — Secure remote-browser access through Tailscale Serve
 
 Added `praxis serve <repo> --remote`, the first usable mode 2 slice. Praxis keeps
@@ -79,6 +145,40 @@ Product priority was then narrowed: build the local-browser and remote-browser/
 local-workstation modes first. The personal Railway alpha and multi-user hosted
 product remain designed but explicitly deferred, so the first implementation does
 not take on cloud orchestration, hosted persistence, or billing concerns.
+
+## 2026-09-02 — Create PR describes git changes instead of pasting chat
+
+PR #8 on `about-me-2026` exposed the failure clearly: Publish used every user
+message after a renderer-side counter as release notes, so its title became
+`pull latest from main (+15 more)` and its body included arguments, `/clear`, Vite
+logs, and Publish's own status text. It also described only the active chat even
+when the branch contained work from several chats.
+
+Publish no longer sends chat copy. Main reads the non-merge commits and changed
+files against the base branch, filters the legacy transcript-paste commit, and builds
+a conventional `Summary` / `Change overview` description with a collapsible diffstat.
+Titles use the sole change summary when there is one, or the actual areas touched
+(UI components, content, styles, media, tests, dependencies, docs, configuration)
+when a PR spans several changes. Reusing an open PR refreshes the bad title/body with
+this cumulative git-based description, so another Create PR repairs existing PR #8.
+
+`test/publish-message.mjs` includes a regression shaped like PR #8 and proves chat
+noise and the legacy pasted body cannot leak through. Verified with `bun run typecheck`
+and the complete `bun run test` suite (118/118).
+
+## 2026-09-02 — Chat color literals have inline previews
+
+Assistant markdown now places a small outlined swatch immediately before CSS hex
+colors, including the common inline-code form (for example, `#edf4ff`). Standard
+3/4/6/8-digit hex forms are supported. Fenced source blocks and links stay untouched
+so code remains clean and URLs are not split. The literal text remains selectable and
+copyable; the supplementary swatch is hidden from assistive technology.
+
+`test/markdown-color.mjs` server-renders the real Markdown component to cover every
+supported hex form plus the source/link exclusions. `test/chat-render.mjs` checks the
+computed swatch color in Electron and captures the result in the existing chat visual
+artifact. Verified with `bun run typecheck` and the complete `bun run test` suite
+(118/118); the chat screenshot was visually inspected.
 
 ## 2026-09-01 — Complex inline text edits run silently in a background agent
 
@@ -182,6 +282,34 @@ drives the actual MCP protocol under Electron-as-Node and proves token isolation
 both calls; the existing worktree and rule suites cover resolver safety and prompting.
 Verified: `bun run typecheck`, production build, and the complete `bun run verify`
 matrix pass (123/123), including a real Codex turn with the injected MCP configuration.
+
+## 2026-08-27 — Publish reconciles a moved remote branch without rewriting history
+
+A reused work branch could diverge from `origin/praxis/*`: Publish committed the
+local work and immediately pushed, so Git rejected it even though both histories
+were valid. The concrete report was `about-me`'s `praxis/main`, where the remote
+tip had been rewritten independently and Praxis had continued committing locally.
+
+`src/main/publish-reconcile.ts` now owns the shared-branch landing step. One publish
+holds a canonical-path, per-repository lock across commit, reconciliation, PR, merge,
+and cleanup. Before every push it fetches/prunes origin and writes local recovery refs
+for the current local and remote tips. An ancestor remote pushes normally; an ancestor
+local fast-forwards; diverged histories get an explicit `--no-ff` merge. No path uses
+force, rebase, reset, or a global ours/theirs choice. If the remote moves after fetch,
+the rejected push triggers at most two more fetch/reconcile attempts.
+
+Overlapping content pauses Publish with Git's merge state intact. `PublishResult`
+carries the exact conflict files and recovery refs, and the publish log opens with a
+per-file resolution checklist instead of only the raw Git error. A second Publish
+cannot accidentally stage conflict markers: existing unmerged paths are detected
+before `git add -A`.
+
+`test/publish-reconcile.mjs` uses real bare repositories and peer clones to cover a
+missing branch, local ahead, local behind, clean divergence, content conflict, a
+remote that advances from a `pre-push` race, and lock release. The longer-term removal
+of permanent shared work branches remains tracked in TASKS: publish unique
+`praxis/publish/<session-id>` branches from fresh `origin/<base>` snapshots. Verified:
+`bun run typecheck` and the complete `bun run test` suite (117/117) pass.
 
 ## 2026-08-24 — Closing the launch terminal no longer causes endless error dialogs
 
