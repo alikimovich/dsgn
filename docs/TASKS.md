@@ -10,6 +10,16 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Rail accordion (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Switching projects hands the open chat list over.** ✅ 2026-09-04 — the
+      rail keeps exactly one project unfolded: `foldOthers` in `store.ts` runs on
+      `activate`/`openOrActivate` and on the chevron (which unfolds exclusively
+      too), so the project you leave folds as the one you pick opens instead of
+      every visited project stacking up. `.rail__project-body` animates from
+      `height: 0` to `auto` so the swap is motion, not a pop. `test/rail.mjs`.
+      See PROGRESS 2026-09-04.
+
 ## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
 
 - [x] **Stop the endless `write EIO` dialog loop after the launch terminal closes.** ✅
