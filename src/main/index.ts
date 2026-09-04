@@ -46,6 +46,7 @@ import { registerStylesIpc } from './styles'
 import { installTerminalStreamGuards } from './terminal-streams'
 import { registerTokensIpc } from './tokens'
 import { registerUpdateIpc } from './update-ipc'
+import { startBrowserServer } from './web-server'
 
 // When a development terminal closes, its PTY can disappear before Electron
 // finishes shutting down. Absorb only that stream-level EIO/EPIPE so it cannot
@@ -898,7 +899,22 @@ if (process.env['ELECTRON_RENDERER_URL']) {
 // has to run at module scope — registerMediaProtocol() (the handler) comes later.
 registerMediaScheme()
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (process.env.PRAXIS_WEB_MODE === '1') {
+    app.dock?.hide()
+    const root = process.env.PRAXIS_WEB_ROOT
+    if (!root) throw new Error('PRAXIS_WEB_ROOT is required in browser mode.')
+    const port = Number(process.env.PRAXIS_WEB_PORT || '4173')
+    const browser = await startBrowserServer({
+      root,
+      port: Number.isInteger(port) && port >= 0 && port <= 65535 ? port : 4173,
+      rendererDir: join(__dirname, '../renderer')
+    })
+    console.log(`Praxis browser UI: ${browser.url}`)
+    console.log(`Open once: ${browser.launchUrl}`)
+    if (process.env.PRAXIS_WEB_OPEN !== '0') void shell.openExternal(browser.launchUrl)
+    return
+  }
   registerMediaProtocol()
   // macOS dock icon comes from the bundle's .icns (scripts/patch-electron.mjs
   // installs ours into the dev Electron.app). Do NOT app.dock.setIcon() here:

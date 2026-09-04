@@ -35,6 +35,7 @@ export const DESKTOP_CORNER_RADIUS = 15;
 
 export default function PreviewPane(): React.JSX.Element {
   const slotRef = useRef<HTMLDivElement>(null);
+  const browserMode = !!window.__PRAXIS_WEB_CONFIG__;
   const viewport = useViewport((s) => s.viewport);
   const frozen = usePreviewFreeze((s) => s.frozen);
   // Right-edge strip reserved by the floating prop panel: desktop narrows the
@@ -46,6 +47,17 @@ export default function PreviewPane(): React.JSX.Element {
   // Where the native view sits, relative to the slot — the freeze <img> matches it.
   const [viewRect, setViewRect] = useState<ViewRect | null>(null);
   const [freezeImg, setFreezeImg] = useState<string | null>(null);
+  const [browserUrl, setBrowserUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!browserMode) return;
+    const receive = (event: Event): void => {
+      const detail = (event as CustomEvent<{ url: string | null }>).detail;
+      setBrowserUrl(detail?.url ?? null);
+    };
+    window.addEventListener("praxis:web-preview", receive);
+    return () => window.removeEventListener("praxis:web-preview", receive);
+  }, [browserMode]);
 
   useEffect(() => {
     const el = slotRef.current;
@@ -186,6 +198,23 @@ export default function PreviewPane(): React.JSX.Element {
             top: bezel.top,
             width: bezel.width,
             height: bezel.height,
+          }}
+        />
+      )}
+      {browserMode && browserUrl && viewRect && (
+        <iframe
+          id="praxis-web-preview"
+          title="Project preview"
+          src={browserUrl}
+          className="preview-web-frame"
+          allow="clipboard-read; clipboard-write"
+          sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-downloads"
+          style={{
+            left: viewRect.left,
+            top: viewRect.top,
+            width: viewRect.width,
+            height: viewRect.height,
+            borderRadius: viewRect.radius,
           }}
         />
       )}

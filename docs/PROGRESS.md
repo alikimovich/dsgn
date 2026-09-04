@@ -2,6 +2,57 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-03 — Local browser mode foundation
+
+Added `praxis serve <repo>` as the first executable slice of the browser plan. It
+runs the existing Electron main bundle as a windowless local workspace engine,
+serves the shared React renderer on IPv4 loopback, and installs an HTTP/WebSocket
+`PraxisApi` adapter in place of the preload bridge. Agent, provider, and dev-server
+registrations now accept the same small command-router contract as `ipcMain`, so the
+working backend and streamed event path are shared rather than reimplemented.
+
+The browser control page uses a single-use launch token exchanged for an `HttpOnly`,
+`SameSite=Strict` session cookie. It rejects unexpected Hosts, cross-origin RPC and
+WebSocket requests, and commands whose repository path differs from the CLI-selected
+real path. Static browser configuration is loaded through a CSP-compatible external
+script rather than inline JavaScript.
+
+The project dev server remains private. A separate random-loopback preview gateway
+proxies HTTP and HMR WebSocket traffic, strips embedding blockers, injects the small
+browser selection bridge, and renders it in a sandboxed iframe. Parent/preview
+messages require both the exact preview origin and a per-run token. In a real browser
+run, the fixture opened at its live URL and selecting its heading returned
+`h1#hero-title` plus `src/components/Hero.tsx:7` to Praxis.
+
+Added `test/browser-mode.mjs` to the Electron tier. It covers the auth exchange and
+single-use property, RPC origin and root scoping, agent command/event streaming,
+dev-server startup, preview proxying, and bridge injection. Verified `bun run
+typecheck`, the targeted browser-mode integration, a real in-app-browser project open
+and source selection, and the complete standard `bun run test` matrix (118/118).
+
+## 2026-09-03 — Browser, remote-workstation, and hosted architecture plan
+
+Documented a shared browser-client architecture in `docs/BROWSER.md`. The plan keeps
+`PraxisApi` as the renderer contract while separating Electron IPC from a validated
+HTTP/WebSocket transport and extracting the preview DOM behavior from its Electron
+preload. It covers three workspace locations: same-machine localhost, a local
+workstation reached securely from another browser (Tailscale Serve first), and a
+fully hosted Railway deployment.
+
+The hosted design deliberately distinguishes a personal single-container alpha from
+a multi-user product. The latter requires a stateless control plane, durable metadata
+and artifacts, and one isolated worker per untrusted workspace; Railway volumes do
+not support replicas and have per-project/count constraints, so a shared volume is
+not treated as a multi-tenant sandbox. The plan also records preview-origin isolation,
+Git/model credential boundaries, reconnect/recovery requirements, phased delivery,
+and the end-to-end definition of done. Documentation-only change; no runtime tests
+were needed.
+
+Product priority was then narrowed: build the local-browser and remote-browser/
+local-workstation modes first. The personal Railway alpha and multi-user hosted
+product remain designed but explicitly deferred, so the first implementation does
+not take on cloud orchestration, hosted persistence, or billing concerns.
+
 ## 2026-09-01 — Complex inline text edits run silently in a background agent
 
 Inline text editing still uses the fast direct source splice for plain JSX, Svelte,

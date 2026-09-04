@@ -1641,6 +1641,13 @@ body.is-resizing {
     height: 100%;
     position: relative;
 }
+/* Browser mode replaces the native WebContentsView with a cross-origin iframe
+   served by the local preview gateway. Its injected bridge owns inspection. */
+.preview-web-frame {
+    position: absolute;
+    border: 0;
+    background: #fff;
+}
 /* iPhone bezel in mobile viewport — sits behind the native preview view, whose
    bounds fill the screen cutout, so the frame shows around the live page. */
 .preview-bezel {

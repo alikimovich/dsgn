@@ -30,6 +30,7 @@ history as written.
 | Command | What |
 | --- | --- |
 | `bun run dev` | Launch the app (electron-vite, HMR) |
+| `praxis serve <repo>` | Run the built UI in a local browser (loopback only) |
 | `bun run build` | Build main/preload/preview/renderer to `out/` |
 | `bun run typecheck` | Type-check all three tsconfig projects (node, web, preview). Run after every change |
 | `bun run test:<name>` | One test (see package.json for ~40 aliases) |
@@ -107,6 +108,14 @@ Project-memory persistence and Main-context reset are documented in `docs/MEMORY
   + rebuilds. The app checks its git remote in the background (`update-ipc.ts`)
   and offers an in-app "Update & Restart" that runs `praxis --update` and relaunches.
 
+- **Browser mode:** `praxis serve <repo>` runs the same Electron main bundle without
+  a desktop window. `web-server.ts` exposes root-scoped HTTP commands + WebSocket
+  events, while `web-api.ts` installs the browser-side `PraxisApi`. The untrusted
+  project preview is proxied onto a separate loopback origin and embedded as a
+  sandboxed iframe with a token-and-origin-checked `postMessage` selection bridge.
+  This is the mode-1 foundation; remaining native editing-tool parity is tracked in
+  `docs/TASKS.md` and the architecture/security plan is `docs/BROWSER.md`.
+
 - The chat runs in `main` via provider SDKs; output streams over `agent:*` IPC
   into the zustand store. The store is the seam between transport and UI.
 - Praxis **owns** the dev-server lifecycle of the target repo (never run the
@@ -116,9 +125,10 @@ Project-memory persistence and Main-context reset are documented in `docs/MEMORY
 - **Agent core = SDK in-process** (not ACP/subprocess): the product's custom
   tools (select element → edit props → annotate → PR) are wired to the renderer
   and need in-process SDK tools.
-- **Preview = native `WebContentsView`, not an iframe**: so a preload can be
-  injected into the previewed app for element selection (a cross-origin iframe
-  couldn't).
+- **Electron preview = native `WebContentsView`, not an iframe**: so a preload can
+  be injected into the previewed app for element selection. Browser mode instead
+  uses a separate-origin gateway + injected `postMessage` bridge in a sandboxed
+  iframe.
 - **Prop editing is hybrid**: simple literals splice straight into source (instant
   HMR); complex/expression values fall back to the agent. React and Svelte have
   separate engines because their ASTs differ; selection/tokens are framework-

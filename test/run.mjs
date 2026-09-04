@@ -91,6 +91,7 @@ const UNIT = [
 
 // electron = the `node test/NAME.mjs` group AFTER `electron-vite build` in `test`.
 const ELECTRON = [
+  'browser-mode',
   'smoke',
   'menu-recents',
   'open-preview',

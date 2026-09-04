@@ -55,6 +55,7 @@ function usage() {
 
 Commands:
   praxis              Launch Praxis (builds first if needed)
+  praxis serve <repo>  Run Praxis in the local browser
   praxis --update      Pull latest changes, reinstall, and rebuild
   praxis --help        Show this help message
   praxis --version      Print the installed version
@@ -101,6 +102,59 @@ function launch() {
 
   console.log('Launching Praxis…')
   process.exit(0)
+}
+
+function serve(args) {
+  const positional = args.filter((arg) => !arg.startsWith('--'))
+  const requestedRoot = positional[0] || process.cwd()
+  let root
+  try {
+    root = realpathSync(requestedRoot)
+  } catch {
+    console.error(`Project folder not found: ${requestedRoot}`)
+    process.exit(1)
+  }
+
+  const portFlag = args.find((arg) => arg.startsWith('--port='))
+  const port = portFlag ? Number(portFlag.slice('--port='.length)) : 4173
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    console.error(`Invalid browser port: ${portFlag?.slice('--port='.length)}`)
+    process.exit(1)
+  }
+
+  const builtEntry = join(repoRoot, 'out', 'main', 'index.js')
+  const rendererEntry = join(repoRoot, 'out', 'renderer', 'index.html')
+  if (!existsSync(builtEntry) || !existsSync(rendererEntry)) {
+    const buildResult = spawnSync(detectPackageManager(), ['run', 'build'], {
+      cwd: repoRoot,
+      stdio: 'inherit',
+    })
+    if (buildResult.status !== 0) {
+      console.error('Praxis build failed — see output above.')
+      process.exit(buildResult.status ?? 1)
+    }
+  }
+
+  const electronPath = getElectronPath()
+  const child = spawn(electronPath, ['.'], {
+    cwd: repoRoot,
+    stdio: 'inherit',
+    env: {
+      ...process.env,
+      PRAXIS_WEB_MODE: '1',
+      PRAXIS_WEB_ROOT: root,
+      PRAXIS_WEB_PORT: String(port),
+      PRAXIS_WEB_OPEN: args.includes('--no-open') ? '0' : '1',
+    },
+  })
+  child.on('error', (error) => {
+    console.error(`Could not start Praxis browser mode: ${error.message}`)
+    process.exit(1)
+  })
+  child.on('exit', (code, signal) => {
+    if (signal) process.kill(process.pid, signal)
+    else process.exit(code ?? 0)
+  })
 }
 
 function update() {
@@ -184,6 +238,11 @@ function main() {
     // --no-launch is accepted (passed by the in-app updater) and ignored,
     // since update() never auto-launches regardless.
     update()
+    return
+  }
+
+  if (command === 'serve') {
+    serve(args.slice(1))
     return
   }
 

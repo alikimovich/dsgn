@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readdirSync, renameSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { promisify } from 'node:util'
-import { app, type BrowserWindow, ipcMain } from 'electron'
+import { app, type BrowserWindow, ipcMain as electronIpcMain } from 'electron'
 import type {
   AgentEvent,
   AgentOptions,
@@ -47,6 +47,7 @@ import {
   projectMemoryUpdate
 } from './project-memory'
 import { registerProviderIpc } from './providers'
+import type { RpcHandlerRegistry } from './rpc-router'
 import { createSessionStore, type SessionStore } from './sessions-store'
 import { TurnTerminalTracker } from './turn-terminal'
 import {
@@ -64,6 +65,7 @@ import {
 } from './worktrees'
 
 const execFileP = promisify(execFile)
+let ipcMain: RpcHandlerRegistry = electronIpcMain
 const git = (root: string, args: string[]): Promise<{ stdout: string }> =>
   execFileP('git', args, { cwd: root, timeout: 20000 }) as Promise<{ stdout: string }>
 
@@ -555,7 +557,11 @@ function resolveQuestion(s: ProviderSession, id: string, answers: QuestionAnswer
   s.emit({ type: 'question-resolved', id })
 }
 
-export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
+export function registerAgentIpc(
+  getWindow: () => BrowserWindow | null,
+  router: RpcHandlerRegistry = electronIpcMain
+): void {
+  ipcMain = router
   getWindow_ = getWindow // share with finalizeSpawn (runs outside this closure)
   // v9 per-chat worktree isolation — deps-injected so this module barely grows.
   initChatIsolation({ worktreesDir, store, getWindow })
@@ -1310,7 +1316,7 @@ export function registerAgentIpc(getWindow: () => BrowserWindow | null): void {
   // the other userData-backed stores, and handed THIS module's `dataDir` so both
   // stores share one directory — and so providers.ts can't create it ahead of the
   // legacy dsgn→praxis migration above and quietly skip it.
-  registerProviderIpc(dataDir)
+  registerProviderIpc(dataDir, router)
 
   // v9 reattach: everything still live in main, for a fresh renderer (after a
   // reload) to repaint without tearing anything down. Groups every live

@@ -10,6 +10,35 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Browser and hosted Praxis (2026-09-03, user-requested) — IN PROGRESS
+
+- [x] **Write the architecture plan.** ✅ 2026-09-03 — `docs/BROWSER.md` covers a
+      shared browser client for localhost, remote access to a local workstation, and
+      a Railway-style hosted workspace; it includes security boundaries, persistence,
+      preview bridging, delivery phases, and acceptance criteria.
+- [x] **Build the local-browser foundation.** ✅ 2026-09-03 — `praxis serve <repo>`
+      runs the existing workspace engine without a desktop window and serves the
+      shared React UI on loopback. A single-use launch exchange, scoped HTTP RPC,
+      WebSocket events, sandboxed preview gateway, and browser `postMessage` bridge
+      cover project open, dev-server startup, agent commands/streaming, preview, and
+      stamped element selection. `test/browser-mode.mjs` covers auth, scope/origin
+      rejection, agent event completion, dev-server proxying, and bridge injection;
+      the real browser flow was also driven through source selection.
+- [ ] **Bring the remaining native editing tools to browser parity.** Move the
+      props/styles/text/source/history/setup/publish handlers onto the shared router,
+      expand the browser preview runtime beyond selection, and run a real provider
+      edit through the browser adapter. Native-only affordances should keep explicit
+      browser fallbacks.
+- [ ] **Add secure remote-workstation access.** Device pairing/revocation,
+      reconnect/replay, single-writer coordination, and a documented Tailscale Serve
+      path with the Praxis daemon remaining loopback-bound.
+- [ ] **Deferred: personal Railway alpha and multi-tenancy.** The 2026-09-03 product
+      decision prioritizes local-browser and remote-workstation modes first. Later,
+      containerize the web runtime, persist `/data`, add application/Git/provider
+      auth and quotas, and verify edit/recovery/publish across a redeploy. Multi-user
+      workspaces require the separate control-plane/isolated-worker phase in
+      `docs/BROWSER.md`.
+
 ## Automatic background agents for complex text edits (2026-09-01, user-reported) — SHIPPED
 
 - [x] **Run agent-required inline text edits without posting in chat.** ✅ 2026-09-01 —

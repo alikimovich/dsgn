@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'child_process'
-import { app, type BrowserWindow, ipcMain } from 'electron'
+import { app, type BrowserWindow, ipcMain as electronIpcMain } from 'electron'
 import { access, readFile } from 'fs/promises'
 import type { Server } from 'http'
 import { basename, join } from 'path'
@@ -22,6 +22,9 @@ import {
 } from './devserver-net'
 import { migrateLegacySidecar } from './sidecar-migrate'
 import { findStaticEntry, startStaticServer } from './static-server'
+import type { RpcHandlerRegistry } from './rpc-router'
+
+let ipcMain: RpcHandlerRegistry = electronIpcMain
 
 // The preview always runs on a free port we pick (from this base) bound to IPv4
 // loopback — so it never collides with the framework default (5173/3000), never
@@ -398,7 +401,11 @@ function spawnDevServer(
   })
 }
 
-export function registerDevServerIpc(getWindow: () => BrowserWindow | null): void {
+export function registerDevServerIpc(
+  getWindow: () => BrowserWindow | null,
+  router: RpcHandlerRegistry = electronIpcMain
+): void {
+  ipcMain = router
   ipcMain.handle('project:detect', async (_e, root: string) => {
     // Move pre-rename `.dsgn/` data (annotations/tokens) into `.praxis/` before
     // anything reads the sidecar. No-op except right after the 2026-07 rename.

@@ -29,6 +29,7 @@
     "typecheck": "npm run typecheck:node && npm run typecheck:web && npm run typecheck:preview",
     "test:feedback-dialog": "electron-vite build && node test/feedback-dialog.mjs",
     "test:smoke": "electron-vite build && node test/smoke.mjs",
+    "test:browser": "electron-vite build && node test/browser-mode.mjs",
     "test:menu": "electron-vite build && node test/menu-recents.mjs",
     "test:preview": "electron-vite build && node test/open-preview.mjs",
     "test:preview-iframe": "electron-vite build && node test/preview-iframe-navigation.mjs",
@@ -182,6 +183,7 @@
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.3.1",
     "use-stick-to-bottom": "^1.1.6",
+    "ws": "^8.21.3",
     "zod": "^4.0.0",
     "zustand": "^5.0.2"
   },
@@ -190,6 +192,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
+    "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^4.3.4",
     "electron": "^43.1.0",
     "electron-vite": "^2.3.0",

@@ -16,6 +16,11 @@ GitHub PR.
   Plain HTML/CSS/JS folders (no package.json or build step) are served by a
   built-in static server with live-reload; anything Praxis can't auto-launch
   prompts for a custom command.
+- **Local browser mode.** `praxis serve /path/to/repo` runs the same workspace
+  engine and React UI on loopback without opening a desktop window. The preview
+  is isolated behind a browser gateway and supports source-aware element selection;
+  native editing-tool parity is still in progress. See
+  [`docs/BROWSER.md`](docs/BROWSER.md).
 - **AI chat that edits the running app.** A persistent multi-turn agent session
   streams over IPC and edits source with hot-reload. Backends are pluggable —
   Claude (via the Agent SDK), Codex, and Gemini behind one provider seam
@@ -76,6 +81,7 @@ Then authorize the agent once and launch:
 ```bash
 claude setup-token   # one-time: authorize the agent with your own subscription
 praxis               # launch the app (builds on first run)
+praxis serve ./my-app # or run the local-browser UI for one repo
 ```
 
 In the app, click **Open project…**, pick a repo with a `dev`/`start` script,
@@ -118,6 +124,10 @@ Electron
 ├─ preview/preload injected into the PREVIEWED app: element select, comments, tokens
 └─ renderer        React 18 + Tailwind v4 + shadcn/ui: chat (left) + preview (right)
 ```
+
+Local browser mode keeps the same main-process services but swaps preload IPC for
+scoped HTTP commands and WebSocket events. Its project preview runs in a sandboxed
+iframe on a separate loopback origin; see [`docs/BROWSER.md`](docs/BROWSER.md).
 
 - **Preview** is a native `WebContentsView`, not an iframe, so a second preload
   is injected into the previewed app for element selection.

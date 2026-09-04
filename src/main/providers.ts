@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import { app, ipcMain, safeStorage } from 'electron'
+import { app, ipcMain as electronIpcMain, safeStorage } from 'electron'
 import type {
   ModelCatalogInput,
   ModelCatalogResult,
@@ -24,6 +24,9 @@ import {
   sameOrigin,
   scrubSecret
 } from './providers-store'
+import type { RpcHandlerRegistry } from './rpc-router'
+
+let ipcMain: RpcHandlerRegistry = electronIpcMain
 
 /**
  * Main-owned wiring for user-added model endpoints (v10) — the Electron half of
@@ -438,7 +441,11 @@ export function resolveConnection(
  * `providers:*` IPC. `dataDirFn` is agent.ts's `dataDir` — see the note on
  * `getDataDir` for why it's injected instead of recomputed.
  */
-export function registerProviderIpc(dataDirFn: () => string): void {
+export function registerProviderIpc(
+  dataDirFn: () => string,
+  router: RpcHandlerRegistry = electronIpcMain
+): void {
+  ipcMain = router
   getDataDir = dataDirFn
   // From here on `getDataDir` is final, so the catalog can be built and shared.
   // `backends/claude.ts` feeds the Claude half through it (`recordClaudeModels`)

@@ -1,9 +1,12 @@
 import React from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App'
-import PanelApp from './components/PanelApp'
 import EditorWindow from './components/EditorWindow'
+import PanelApp from './components/PanelApp'
+import { installWebApi } from './web-api'
 import './styles.css'
+
+if (window.__PRAXIS_WEB_CONFIG__) installWebApi(window.__PRAXIS_WEB_CONFIG__)
 
 const params = new URLSearchParams(location.search)
 
