@@ -3,6 +3,12 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Compact composer controls (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Truncate long provider/model labels instead of wrapping the toolbar.**
+      The provider, model, and permission pickers now stay on one line with bounded,
+      shrinkable widths while the send button remains visible in narrow chat panes.
+
 > **The Electron tier runs on a machine with NO display** (found 2026-08-12),
 > which the 2026-08-07 correction below didn't cover: after an
 > `electron-vite build`, `PRAXIS_USER_DATA=$(mktemp -d) xvfb-run -a node

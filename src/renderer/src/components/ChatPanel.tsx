@@ -1273,7 +1273,7 @@ export default function ChatPanel(): React.JSX.Element {
   // shadcn Select) on purpose: tiny controls, and the permission-mode test reads
   // native <option> values via $$eval — a Radix portal would break it.
   const selectCls =
-    "h-6 cursor-pointer appearance-none rounded-md border-0 bg-transparent px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+    "composer__picker h-6 min-w-0 cursor-pointer appearance-none truncate rounded-md border-0 bg-transparent px-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
   // Before main's choices land, `selection` resolves to nothing at all — a
   // placeholder <option> in each control keeps them from rendering blank for that
@@ -1601,9 +1601,10 @@ export default function ChatPanel(): React.JSX.Element {
             onPaste={onPaste}
           />
           <InputGroupAddon align="block-end" className="gap-1">
-            {/* The selectors shrink + wrap when the chat pane is narrow so the send
-                button (shrink-0, below) is never pushed off the edge. */}
-            <div className="mr-auto flex min-w-0 flex-wrap items-center gap-1">
+            {/* Keep the compact toolbar on one line. The three selectors have bounded
+                widths and may shrink/truncate, so a long provider or model name never
+                pushes the send button off the edge or wraps under the first row. */}
+            <div className="composer__controls mr-auto flex min-w-0 flex-nowrap items-center gap-1">
               {/* Per-chat worktree isolation (v9) runs silently; a parked (unmergeable)
                   chat surfaces the full ConflictCard above the composer instead of a
                   chip here. */}
@@ -1636,7 +1637,7 @@ export default function ChatPanel(): React.JSX.Element {
               {/* Provider: the two built-in seats, then every saved connection
                   (main's own order), then the row that opens Settings. */}
               <select
-                className={selectCls}
+                className={`${selectCls} max-w-20 flex-[1_1_5rem]`}
                 value={selection.providerKey}
                 onChange={(e) => {
                   const key = e.target.value;
@@ -1665,7 +1666,7 @@ export default function ChatPanel(): React.JSX.Element {
               </select>
               {/* Model: only the selected provider's. */}
               <select
-                className={selectCls}
+                className={`${selectCls} max-w-28 flex-[2_1_7rem]`}
                 value={selection.choice?.value ?? model}
                 onChange={(e) => onModelChange(e.target.value)}
                 aria-label="Model"
@@ -1688,7 +1689,7 @@ export default function ChatPanel(): React.JSX.Element {
                 ))}
               </select>
               <select
-                className={selectCls}
+                className={`${selectCls} max-w-20 flex-[1_1_5rem]`}
                 value={permissionMode}
                 onChange={(e) => onPermissionModeChange(e.target.value)}
                 aria-label="Permission mode"

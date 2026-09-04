@@ -709,8 +709,9 @@ try {
     throw new Error(`sent bubble should show the selection pill: ${selectionPill}`)
   }
 
-  // Composer responsiveness: at a narrow chat pane the send button stays visible
-  // (selects wrap), and the textarea auto-grows up to ~6 lines for a long prompt.
+  // Composer responsiveness: at a narrow chat pane the controls stay on one line,
+  // bounded selects truncate instead of wrapping, the send button stays visible,
+  // and the textarea auto-grows up to ~6 lines for a long prompt.
   await win.evaluate(() => {
     document.querySelector('.pane--chat').style.width = '320px'
   })
@@ -719,12 +720,63 @@ try {
     () => parseFloat(document.querySelector('.composer__input').style.height) > 90,
     { timeout: 4000 }
   )
+  // Exercise the actual overflow case without changing provider state: native
+  // selects expose their option text through an internal renderer, so append a
+  // deliberately long selected label and inspect the compact toolbar itself.
+  await win.evaluate(() => {
+    for (const [label, text] of [
+      ['Provider', 'A very long saved provider connection'],
+      ['Model', 'GPT-5.6-Sol with an intentionally long model label']
+    ]) {
+      const select = document.querySelector(`select[aria-label="${label}"]`)
+      const option = document.createElement('option')
+      option.value = `long-${label.toLowerCase()}`
+      option.textContent = text
+      select.append(option)
+      select.value = option.value
+    }
+  })
   const sendVisible = await win.evaluate(() => {
     const br = document.querySelector('.composer__send').getBoundingClientRect()
     const pr = document.querySelector('.pane--chat').getBoundingClientRect()
     return br.width > 0 && br.right <= pr.right + 1
   })
   if (!sendVisible) throw new Error('send button must stay visible at a narrow chat width')
+  const compactControls = await win.evaluate(() => {
+    const row = document.querySelector('.composer__controls')
+    const selects = [...document.querySelectorAll('.composer__picker')]
+    const rects = selects.map((select) => select.getBoundingClientRect())
+    return {
+      flexWrap: row ? getComputedStyle(row).flexWrap : null,
+      rowHeight: row?.getBoundingClientRect().height ?? 0,
+      tops: rects.map((rect) => Math.round(rect.top)),
+      widths: rects.map((rect) => rect.width),
+      styles: selects.map((select) => {
+        const style = getComputedStyle(select)
+        return {
+          textOverflow: style.textOverflow,
+          whiteSpace: style.whiteSpace
+        }
+      })
+    }
+  })
+  if (compactControls.flexWrap !== 'nowrap') {
+    throw new Error(`composer controls should not wrap: ${JSON.stringify(compactControls)}`)
+  }
+  if (compactControls.rowHeight > 25 || new Set(compactControls.tops).size !== 1) {
+    throw new Error(`composer controls should remain one line: ${JSON.stringify(compactControls)}`)
+  }
+  if (compactControls.widths.some((width) => width > 113)) {
+    throw new Error(`composer picker widths should be bounded: ${JSON.stringify(compactControls)}`)
+  }
+  if (
+    compactControls.styles.some(
+      (style) => style.textOverflow !== 'ellipsis' || style.whiteSpace !== 'nowrap'
+    )
+  ) {
+    throw new Error(`composer picker labels should truncate: ${JSON.stringify(compactControls)}`)
+  }
+  await win.locator('.composer').screenshot({ path: join(artifacts, '04b-composer-narrow.png') })
   await win.fill('.composer__input', '') // reset
 
   // Thinking-level selector is removed (effort is pinned to high).

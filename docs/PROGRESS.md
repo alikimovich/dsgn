@@ -2,6 +2,20 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Composer pickers truncate instead of wrapping
+
+Kept the provider, model, and permission pickers on one line in narrow chat panes.
+Each native picker now has a bounded flex width and ellipsis behavior, allowing long
+connection/model labels to shrink before they can wrap the toolbar or push the send
+button out of view. The chat-render regression now checks the one-line geometry,
+width caps, truncation styles, and send-button visibility at a 320px pane width;
+its forced long labels visibly render as `A very…` and `GPT-5.6-…`.
+
+Verified all TypeScript projects and the focused Electron chat-render flow. The
+standard matrix finished at 117/119: this path passed, `spawn-comment` passed on its
+focused rerun, and the already-documented `rail-chat-status` state-seeding race still
+fails at its missing-row geometry assertion.
+
 ## 2026-09-04 — Browser Add Tokens reaches the shared token service
 
 Fixed the remote/local-browser token offer appearing inert. The browser adapter
