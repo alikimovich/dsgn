@@ -614,9 +614,6 @@ export interface ProjectEntry {
   chatsCollapsed?: boolean
   /** Monotonic recency stamp (bumped on activate) — drives LRU warm-server eviction. */
   touchedAt: number
-  /** Chat length at the last successful Publish — the next Publish summarizes
-   *  only the user asks after this point. */
-  publishedMsgCount?: number
   /**
    * v9 resume/multi-chat — this project's live `sessionKey`s (mirrors `agent.ts`'s
    * map): `key` itself for the default chat, plus `` `${key}#…` `` for any

@@ -1147,9 +1147,8 @@ export default function App(): React.JSX.Element {
   // its remote counterpart, push, open a PR, squash-merge it to main, pull main,
   // delete the merged branch, and start a fresh same-named branch to keep working
   // on. Progress + result go to the log.
-  // The commit/PR/merge messages summarize the user asks since the LAST publish
-  // (tracked per-project via publishedMsgCount), so the GitHub history reads as
-  // the actual work.
+  // Main builds the commit/PR/merge description from the actual branch commits
+  // and changed files. Chat is deliberately not sent as PR copy.
   const publish = async (): Promise<void> => {
     const root = useSession.getState().projectRoot
     if (!root || publishing) return
@@ -1163,19 +1162,9 @@ export default function App(): React.JSX.Element {
       'server'
     )
     const key = projectKey(root)
-    const msgs = useChat.getState().byKey[key]?.messages ?? []
-    const since = useWorkspace.getState().projects.find((p) => p.key === key)?.publishedMsgCount ?? 0
-    const asks = msgs
-      .slice(since)
-      .filter((m) => m.role === 'user')
-      .map((m) => m.text)
     try {
-      const res = await window.api.publish.ship(root, asks, mode)
+      const res = await window.api.publish.ship(root, undefined, mode)
       if (res.ok) {
-        // PR-only keeps the branch (and its open PR) accumulating — the ask
-        // summary should stay cumulative until a merge, so don't advance the
-        // marker for it.
-        if (mode === 'merge') useWorkspace.getState().patchEntry(key, { publishedMsgCount: msgs.length })
         if (res.branch) {
           useSession.getState().setBranch(res.branch)
           useWorkspace.getState().patchEntry(projectKey(root), { branch: res.branch })
@@ -2232,7 +2221,6 @@ export default function App(): React.JSX.Element {
           const chat = useChat.getState()
           chat.clearChat(key)
           if (chat.activeKey === key) chat.setActiveChat(key)
-          useWorkspace.getState().patchEntry(key, { publishedMsgCount: 0 })
           void useHistory.getState().load(root)
         }}
       />

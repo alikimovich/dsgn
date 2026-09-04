@@ -5,7 +5,7 @@ import { join } from 'path'
 import { promisify } from 'util'
 import type { Annotation, AnnotationInput, PublishResult } from '../shared/api'
 import { buildPrBody } from '../shared/pr-body'
-import { buildPublishMessage } from '../shared/publish-message'
+import { buildPublishMessage, publishCommitSummaries } from '../shared/publish-message'
 import { enclosingRepoRoot, ensureBranch } from './git'
 import { publishConflictFiles, pushReconciledBranch, withPublishLock } from './publish-reconcile'
 import { aheadOfBase, changedSince, defaultBase } from './publish-scope'
@@ -199,7 +199,7 @@ async function publishToPr(root: string, opts: { title: string }): Promise<Publi
  */
 async function shipToMain(
   root: string,
-  summary: string[] = [],
+  _legacyChatSummary: string[] = [],
   mode: 'merge' | 'pr' = 'merge'
 ): Promise<PublishResult> {
   let branch: string
@@ -264,12 +264,27 @@ async function shipToMain(
 
   try {
     // 1. Commit all changes (gitignore-respected). Skip the commit if clean.
-    // Title + body come from the session's user requests (and the diffstat vs
-    // base), so the branch commit, the PR, and the squash-merge commit all read
-    // as the actual work — not "praxis: publish <branch>".
+    // Title + body come from the commits and files that actually differ from the
+    // base. Chat is intentionally excluded: it contains questions, corrections,
+    // logs, and commands that do not belong in release notes.
     await git(root, ['add', '-A'])
     const diffstat = await git(root, ['diff', '--stat', base]).catch(() => '')
-    const msg = buildPublishMessage(branch, summary, diffstat)
+    const changedFiles = (await git(root, ['diff', '--name-only', base]).catch(() => ''))
+      .split('\n')
+      .map((file) => file.trim())
+      .filter(Boolean)
+    const commitLog = await git(root, [
+      'log',
+      '--no-merges',
+      '--format=%s%x1f%b%x1e',
+      `${base}..${branch}`
+    ]).catch(() => '')
+    const msg = buildPublishMessage(
+      branch,
+      publishCommitSummaries(commitLog),
+      diffstat,
+      changedFiles
+    )
     const staged = await git(root, ['diff', '--cached', '--name-only'])
     if (staged) await git(root, ['commit', '-m', msg.title, '-m', msg.body])
     const ahead = await git(root, ['rev-list', '--count', `${base}..${branch}`]).catch(() => '0')
