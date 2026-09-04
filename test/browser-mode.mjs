@@ -7,7 +7,7 @@
  * Run with: bun run test:browser
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { cpSync, existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { request as httpRequest } from 'node:http'
 import { createServer as createTcpServer } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -17,7 +17,11 @@ import electronPath from 'electron'
 import WebSocket from 'ws'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
-const fixture = join(root, 'test', 'fixtures', 'selectable-app')
+const fixtureSource = join(root, 'test', 'fixtures', 'selectable-app')
+const fixtureTemp = mkdtempSync(join(tmpdir(), 'praxis-browser-project-'))
+const fixturePath = join(fixtureTemp, 'selectable-app')
+cpSync(fixtureSource, fixturePath, { recursive: true })
+const fixture = realpathSync(fixturePath)
 const ownsUserData = !process.env.PRAXIS_USER_DATA
 const userData = process.env.PRAXIS_USER_DATA ?? mkdtempSync(join(tmpdir(), 'praxis-browser-mode-'))
 
@@ -200,6 +204,31 @@ try {
     fail(`fixture detection failed: ${JSON.stringify(detected.body)}`)
   }
 
+  const detectedTokens = await rpc('tokens:detect', [fixture])
+  if (!detectedTokens.body.ok || detectedTokens.body.result?.source !== 'none') {
+    fail(`browser token detection failed: ${JSON.stringify(detectedTokens.body)}`)
+  }
+  const outOfScopeTokens = await rpc('tokens:scaffold', [root])
+  if (outOfScopeTokens.status !== 400 || outOfScopeTokens.body.ok !== false) {
+    fail('browser token scaffold accepted a repository outside the server root')
+  }
+  const scaffoldedTokens = await rpc('tokens:scaffold', [fixture])
+  if (
+    !scaffoldedTokens.body.ok ||
+    !scaffoldedTokens.body.result?.ok ||
+    !scaffoldedTokens.body.result?.written ||
+    scaffoldedTokens.body.result?.set?.source !== 'manifest'
+  ) {
+    fail(`browser token scaffold failed: ${JSON.stringify(scaffoldedTokens.body)}`)
+  }
+  if (!existsSync(join(fixture, '.praxis', 'tokens.json'))) {
+    fail('browser token scaffold did not write .praxis/tokens.json')
+  }
+  const repeatedScaffold = await rpc('tokens:scaffold', [fixture])
+  if (!repeatedScaffold.body.result?.ok || repeatedScaffold.body.result?.written) {
+    fail(`browser token scaffold was not idempotent: ${JSON.stringify(repeatedScaffold.body)}`)
+  }
+
   const events = []
   const socketHeaders = { Host: publicHost, Cookie: cookie, Origin: publicOrigin }
   socket = await openSocket(
@@ -279,7 +308,7 @@ try {
   await rpc('agent:close-project', [fixture])
 
   console.log(
-    'BROWSER MODE OK — auth, scoped RPC, reconnect replay, dev server, and preview gateway'
+    'BROWSER MODE OK — auth, scoped RPC, token scaffold, reconnect replay, dev server, and preview gateway'
   )
 } catch (error) {
   console.error('BROWSER MODE FAILED:', error?.message ?? error)
@@ -290,5 +319,6 @@ try {
     child.kill('SIGTERM')
     await new Promise((resolve) => child.once('exit', resolve))
   }
+  rmSync(fixtureTemp, { recursive: true, force: true })
   if (ownsUserData) rmSync(userData, { recursive: true, force: true })
 }

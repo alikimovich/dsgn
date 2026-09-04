@@ -10,6 +10,7 @@ import * as electron from 'electron'
 import { mkdir, readFile, readdir, writeFile } from 'fs/promises'
 import { join } from 'path'
 import type { Token, TokenGroup, TokenScaffoldResult, TokenSet } from '../shared/api'
+import type { RpcHandlerRegistry } from './rpc-router'
 
 /**
  * Design-token detection (the differentiator's last piece). A repo can expose
@@ -323,7 +324,9 @@ async function scaffoldManifest(root: string): Promise<TokenScaffoldResult> {
   }
 }
 
-export function registerTokensIpc(): void {
-  electron.ipcMain.handle('tokens:detect', (_e, root: string) => detectTokens(root))
-  electron.ipcMain.handle('tokens:scaffold', (_e, root: string) => scaffoldManifest(root))
+export function registerTokensIpc(
+  router: RpcHandlerRegistry = electron.ipcMain as unknown as RpcHandlerRegistry
+): void {
+  router.handle('tokens:detect', (_e, root: string) => detectTokens(root))
+  router.handle('tokens:scaffold', (_e, root: string) => scaffoldManifest(root))
 }

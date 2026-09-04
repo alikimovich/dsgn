@@ -33,6 +33,11 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       stamped element selection. `test/browser-mode.mjs` covers auth, scope/origin
       rejection, agent event completion, dev-server proxying, and bridge injection;
       the real browser flow was also driven through source selection.
+- [x] **Restore browser design-token detection and starter scaffolding.** ✅
+      2026-09-04 — the browser router now shares the Electron token service, so
+      **Add tokens** writes the root-scoped, idempotent `.praxis/tokens.json` and
+      existing Tailwind/CSS/manifest tokens are detected instead of receiving a
+      false offer.
 - [ ] **Bring the remaining native editing tools to browser parity.** Move the
       props/styles/text/source/history/setup/publish handlers onto the shared router,
       expand the browser preview runtime beyond selection, and run a real provider

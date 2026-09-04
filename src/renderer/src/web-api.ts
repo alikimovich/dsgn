@@ -277,7 +277,7 @@ export function installWebApi(config: WebConfig): void {
       canRevert: (root, group) => invoke('edit:can-revert', root, group)
     },
     tokens: {
-      detect: () => Promise.resolve({ source: 'none', groups: [] }),
+      detect: (root) => invoke('tokens:detect', root),
       scaffold: (root) => invoke('tokens:scaffold', root)
     },
     annotations: {

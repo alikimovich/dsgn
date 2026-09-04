@@ -18,6 +18,7 @@ import { checkoutBranch, ensureBranch, listBranches, switchBranch } from './git'
 import { connectToGitHub, githubStatus } from './github'
 import { readProjectIcon } from './project-icon'
 import type { RendererEventTarget, RpcHandler, RpcHandlerRegistry } from './rpc-router'
+import { registerTokensIpc } from './tokens'
 import { WEB_PREVIEW_BRIDGE } from './web-preview-bridge'
 
 const MAX_RPC_BODY = 4 * 1024 * 1024
@@ -63,7 +64,9 @@ const ROOT_ARGUMENTS: Record<string, number | 'options'> = {
   'agent:spawn-pr': 0,
   'sessions:list': 0,
   'project-memory:get': 0,
-  'project-memory:set': 0
+  'project-memory:set': 0,
+  'tokens:detect': 0,
+  'tokens:scaffold': 0
 }
 
 export class WebCommandRouter implements RpcHandlerRegistry {
@@ -336,6 +339,7 @@ export async function startBrowserServer(options: BrowserServerOptions): Promise
 
   registerDevServerIpc(getWindow, router)
   registerAgentIpc(getWindow, router)
+  registerTokensIpc(router)
   router.handle('project:pick', () => root)
   router.handle('project:icon', () => readProjectIcon(root))
   router.handle('menu:set-recents', () => undefined)

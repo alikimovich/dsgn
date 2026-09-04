@@ -2,6 +2,26 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Browser Add Tokens reaches the shared token service
+
+Fixed the remote/local-browser token offer appearing inert. The browser adapter
+already sent `tokens:scaffold`, but the browser command router had never registered
+that handler; it rejected the RPC as unsupported, and the retry-friendly offer card
+kept the failure quiet. Token detection was also a hard-coded empty result, so browser
+mode could offer a starter palette even when the project already exposed tokens.
+
+`registerTokensIpc` now accepts the same narrow handler registry used by Electron,
+allowing browser mode to reuse the existing detector and safe, idempotent scaffolder.
+Both commands are repository-root scoped, and the browser adapter now performs real
+detection. Browser integration runs against a disposable copy of the fixture and
+covers empty detection, out-of-root rejection, manifest creation, returned token data,
+and a no-write second call.
+
+Verified full typecheck, the focused Electron Add Tokens UI test, and the focused
+browser transport test. The standard matrix finished at 118/119: all token/browser
+coverage passed, while the already-documented unrelated `rail-chat-status` state-
+seeding race failed again at its missing-row geometry assertion.
+
 ## 2026-09-04 — Chats now maintain unified project memory
 
 Every successful interactive chat turn now triggers a separate, tool-free model
