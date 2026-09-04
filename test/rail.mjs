@@ -3,7 +3,9 @@
  * keeping A warm, then switch back to A via the rail. Asserts:
  *  - both appear in the rail; both dev servers stay running (warm),
  *  - switching swaps the active preview URL to the target project,
- *  - the per-project chat slice swaps with the active project.
+ *  - the per-project chat slice swaps with the active project,
+ *  - the rail is an ACCORDION: one project's chats are unfolded at a time —
+ *    switching (and the chevron) folds whichever was open.
  *
  * Run with: bun run test:rail
  */
@@ -48,6 +50,15 @@ const previewUrl = (app) =>
       .map((w) => w.getURL())
       .find((u) => /^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):\d+/.test(u))
   )
+
+// Poll a locator-based condition (React repaints a beat after the click).
+const until = async (cond, message, tries = 30) => {
+  for (let i = 0; i < tries; i++) {
+    if (await cond()) return
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  throw new Error(message)
+}
 
 // Poll until the preview navigates to the expected port (navigation is async).
 const waitPreviewPort = async (app, expected) => {
@@ -141,34 +152,47 @@ try {
   )
   if (aHasBText) throw new Error("A's chat leaked B's message — per-project isolation broken")
 
-  // A project's fold is its OWN state: switching to A must NOT collapse B — its
-  // chat list (the "hello from B" row) stays on screen, backgrounded but open.
+  // The rail is an accordion: switching to A unfolded A's chats and folded B's
+  // away, so exactly one project's list is open.
+  const itemA = win.locator('.rail__item', { hasText: 'praxis-fixture-static' })
   const itemB = win.locator('.rail__item', { hasText: 'selectable' })
+  const chatsA = itemA.locator('.rail__chats .rail__chat-item')
   const chatsB = itemB.locator('.rail__chats .rail__chat-item')
-  if ((await chatsB.count()) === 0) {
-    throw new Error("B's chats should stay listed after switching away from B")
+  await until(
+    async () => (await chatsB.count()) === 0,
+    "switching to A should fold B's chats away (accordion)"
+  )
+  if ((await chatsA.count()) === 0) {
+    throw new Error("switching to A should unfold A's own chats")
   }
   await win.screenshot({ path: join(artifacts, '10-rail-folds.png') })
 
-  // The chevron folds only the project it belongs to…
+  // The chevron unfolds exclusively too — opening B's list closes A's…
   await itemB.locator('.rail__glyph-btn').click()
-  await win.waitForFunction(() => {
-    const b = [...document.querySelectorAll('.rail__item')].find((li) =>
-      li.textContent?.includes('selectable')
-    )
-    return b && !b.querySelector('.rail__chats')
-  }, undefined, { timeout: 3000 })
+  await until(
+    async () => (await chatsB.count()) > 0 && (await chatsA.count()) === 0,
+    "B's chevron should unfold B and fold A"
+  )
 
-  // …and the fold survives becoming the active project again (it used to spring
-  // back open, because "expanded" meant "is the active project").
+  // …while folding B just closes B (nothing springs open in its place).
+  await itemB.locator('.rail__glyph-btn').click()
+  await until(
+    async () => (await chatsB.count()) === 0 && (await chatsA.count()) === 0,
+    "B's chevron should fold B without reopening A"
+  )
+
+  // Switching back to B unfolds it again — the fold follows the active project.
   await win.click('.rail__item:has-text("selectable") .rail__name-btn')
   if (!(await waitPreviewPort(app, port(urlB)))) throw new Error('switching back should load B')
-  if ((await chatsB.count()) !== 0) {
-    throw new Error("B stayed collapsed only until it was active again — fold state didn't persist")
-  }
+  await until(
+    async () => (await chatsB.count()) > 0 && (await chatsA.count()) === 0,
+    'switching back to B should unfold B and fold A'
+  )
 
   await win.screenshot({ path: join(artifacts, '10-rail.png') })
-  console.log('RAIL OK — two projects warm, switch swaps preview + per-project chat, folds persist')
+  console.log(
+    'RAIL OK — two projects warm, switch swaps preview + per-project chat, chats fold accordion-style'
+  )
 } catch (err) {
   console.error('RAIL FAILED:', err?.message ?? err)
   process.exitCode = 1

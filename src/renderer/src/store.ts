@@ -603,10 +603,13 @@ export interface ProjectEntry {
   /** Preview viewport for THIS project — each remembers its own; restored on
    *  switch (a global viewport leaked one project's Mobile into the next). */
   viewport?: Viewport
-  /** Rail: hide this project's chat list (chevron toggle). Fully independent of
-   *  `activeKey` — collapsing doesn't deactivate the project (its dev server/
-   *  preview stay live), and switching to another project doesn't collapse this
-   *  one: the fold is per-project state the user sets, persisted with the entry.
+  /** Rail: hide this project's chat list. The rail is an ACCORDION — at most one
+   *  project's chats are unfolded at a time, and it's the project you last
+   *  switched to: `activate`/`openOrActivate` unfold it and fold every other one,
+   *  and the chevron unfolds the same exclusive way (see `foldOthers`). Folding
+   *  still doesn't deactivate a project — its dev server/preview stay live either
+   *  way, only the list is hidden. Persisted with the entry, so a relaunch
+   *  restores the same single open project.
    *  Defaults to expanded (undefined = false). */
   chatsCollapsed?: boolean
   /** Monotonic recency stamp (bumped on activate) — drives LRU warm-server eviction. */
@@ -656,7 +659,8 @@ interface WorkspaceState {
   close: (key: string) => void
   toggleCollapsed: () => void
   toggleChatHidden: () => void
-  /** Toggle whether a project's chat list is hidden — see `chatsCollapsed`. */
+  /** Fold/unfold a project's chat list. Unfolding folds every other project
+   *  away (accordion) — see `chatsCollapsed`. */
   toggleChatsCollapsed: (key: string) => void
   reset: () => void
   /** Replace the whole set (boot restore) — see restore.ts. Also advances the
@@ -972,6 +976,22 @@ let touchSeq = 0
 const bumpTouched = (projects: ProjectEntry[], key: string): ProjectEntry[] =>
   projects.map((p) => (p.key === key ? { ...p, touchedAt: ++touchSeq } : p))
 
+/**
+ * The rail's accordion: unfold `key`'s chat list and fold every other project's
+ * away, so exactly one project is ever open. Applied wherever a project becomes
+ * the one on screen (`openOrActivate`/`activate`) and when the chevron unfolds
+ * one, which is what makes switching read as a hand-off — the project you left
+ * closes as the one you picked opens — instead of stacking every project you've
+ * visited down the rail. Only the list folds; every project stays live.
+ * Entries whose fold is already right come back as the SAME object, so this
+ * never re-renders a row it didn't change.
+ */
+const foldOthers = (projects: ProjectEntry[], key: string): ProjectEntry[] =>
+  projects.map((p) => {
+    const collapsed = p.key !== key
+    return Boolean(p.chatsCollapsed) === collapsed ? p : { ...p, chatsCollapsed: collapsed }
+  })
+
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   projects: [],
   activeKey: null,
@@ -1000,8 +1020,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   openOrActivate: (root, meta) => {
     const key = projectKey(root)
     const exists = get().projects.some((p) => p.key === key)
-    set((s) => ({
-      projects: bumpTouched(
+    set((s) => {
+      const projects = bumpTouched(
         exists
           ? s.projects
           : [
@@ -1021,26 +1041,31 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
               }
             ],
         key
-      ),
-      activeKey: key
-    }))
+      )
+      // Accordion: the project being opened is the one that shows its chats.
+      return { projects: foldOthers(projects, key), activeKey: key }
+    })
     return key
   },
+  // Switching hands the accordion over: the outgoing project's chat list folds
+  // away as the incoming one's unfolds (`foldOthers`).
   activate: (key) =>
     set((s) =>
       s.projects.some((p) => p.key === key)
-        ? { activeKey: key, projects: bumpTouched(s.projects, key) }
+        ? { activeKey: key, projects: foldOthers(bumpTouched(s.projects, key), key) }
         : s
     ),
   patchEntry: (key, partial) =>
     set((s) => ({
       projects: s.projects.map((p) => (p.key === key ? { ...p, ...partial } : p))
     })),
+  // Unfolding is exclusive (the accordion again — opening one project's chats
+  // closes whichever was open); folding just closes this one.
   toggleChatsCollapsed: (key) =>
     set((s) => ({
-      projects: s.projects.map((p) =>
-        p.key === key ? { ...p, chatsCollapsed: !p.chatsCollapsed } : p
-      )
+      projects: s.projects.find((p) => p.key === key)?.chatsCollapsed
+        ? foldOthers(s.projects, key)
+        : s.projects.map((p) => (p.key === key ? { ...p, chatsCollapsed: true } : p))
     })),
   close: (key) =>
     set((s) => {
