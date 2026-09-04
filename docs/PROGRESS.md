@@ -2,6 +2,40 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-02 — Create PR describes git changes instead of pasting chat
+
+PR #8 on `about-me-2026` exposed the failure clearly: Publish used every user
+message after a renderer-side counter as release notes, so its title became
+`pull latest from main (+15 more)` and its body included arguments, `/clear`, Vite
+logs, and Publish's own status text. It also described only the active chat even
+when the branch contained work from several chats.
+
+Publish no longer sends chat copy. Main reads the non-merge commits and changed
+files against the base branch, filters the legacy transcript-paste commit, and builds
+a conventional `Summary` / `Change overview` description with a collapsible diffstat.
+Titles use the sole change summary when there is one, or the actual areas touched
+(UI components, content, styles, media, tests, dependencies, docs, configuration)
+when a PR spans several changes. Reusing an open PR refreshes the bad title/body with
+this cumulative git-based description, so another Create PR repairs existing PR #8.
+
+`test/publish-message.mjs` includes a regression shaped like PR #8 and proves chat
+noise and the legacy pasted body cannot leak through. Verified with `bun run typecheck`
+and the complete `bun run test` suite (118/118).
+
+## 2026-09-02 — Chat color literals have inline previews
+
+Assistant markdown now places a small outlined swatch immediately before CSS hex
+colors, including the common inline-code form (for example, `#edf4ff`). Standard
+3/4/6/8-digit hex forms are supported. Fenced source blocks and links stay untouched
+so code remains clean and URLs are not split. The literal text remains selectable and
+copyable; the supplementary swatch is hidden from assistive technology.
+
+`test/markdown-color.mjs` server-renders the real Markdown component to cover every
+supported hex form plus the source/link exclusions. `test/chat-render.mjs` checks the
+computed swatch color in Electron and captures the result in the existing chat visual
+artifact. Verified with `bun run typecheck` and the complete `bun run test` suite
+(118/118); the chat screenshot was visually inspected.
+
 ## 2026-08-27 — Publish reconciles a moved remote branch without rewriting history
 
 A reused work branch could diverge from `origin/praxis/*`: Publish committed the

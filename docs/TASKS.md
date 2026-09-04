@@ -20,6 +20,22 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       `height: 0` to `auto` so the swap is motion, not a pop. `test/rail.mjs`.
       See PROGRESS 2026-09-04.
 
+## Git-based PR descriptions (2026-09-02, user-reported) — SHIPPED
+
+- [x] **Create PR must not paste the chat transcript.** ✅ 2026-09-02 — PR title
+      and body now come from change-bearing branch commits, changed-file scopes, and
+      diffstat. Conversation-only messages, logs, slash commands, and old
+      `Changes requested in Praxis` publish commits are excluded. Existing PRs get
+      their title/body refreshed on the next Create PR. Regression fixture mirrors
+      the broken `about-me-2026` PR #8.
+
+## Inline chat color previews (2026-09-02, user-requested) — SHIPPED
+
+- [x] **Show a swatch beside hex colors in assistant messages.** ✅ 2026-09-02 —
+      assistant prose and inline code now preview 3/4/6/8-digit CSS hex literals with
+      a small outlined swatch. Fenced code and links remain untouched. Covered by the
+      pure `test/markdown-color.mjs` component regression and the visual
+      `test/chat-render.mjs` Electron regression.
 ## Remote publish reconciliation (2026-08-27, user-reported)
 
 - [x] **Preserve and reconcile both work-branch histories before push.** ✅
@@ -37,6 +53,7 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       fetched base. This removes cross-session branch-name collisions entirely;
       it needs a deliberate migration for current PR-only mode and existing open
       PRs rather than being hidden inside the rejection repair.
+
 ## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
 
 - [x] **Stop the endless `write EIO` dialog loop after the launch terminal closes.** ✅
