@@ -43,6 +43,7 @@ import {
 } from '../spring'
 import { letterSpacing, lineHeight } from '../type-metrics'
 import { interruptWithEscalation } from './interrupt'
+import { parseProjectMemoryEvaluation, projectMemoryEvaluationPrompt } from './memory'
 import { createRecordCapture } from './record'
 import { sanitizeTitle, transcriptDigest } from './title'
 import { AUTO_ALLOW_TOOLS, describeTool, sendToRenderer, toolDetail, touchesSidecar } from './tools'
@@ -1521,9 +1522,57 @@ async function generateTitle(
   }
 }
 
+/** Tool-free post-turn distillation into the one shared project memory. */
+async function updateProjectMemory(
+  currentMemory: string,
+  transcript: SessionTranscriptEntry[],
+  options: AgentOptions
+): Promise<string | null> {
+  const prompt = projectMemoryEvaluationPrompt(currentMemory, transcript)
+  if (!prompt) return null
+
+  const { query } = await loadSdk()
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), 25_000)
+  try {
+    let out = ''
+    const q = query({
+      prompt,
+      options: {
+        settingSources: [],
+        allowedTools: [],
+        includePartialMessages: false,
+        permissionMode: 'default',
+        abortController: abort,
+        maxTurns: 1,
+        canUseTool: async () => ({
+          behavior: 'deny',
+          message: 'Project-memory evaluation uses no tools.'
+        }),
+        ...(options.model ? { model: options.model } : {})
+      }
+    })
+    for await (const msg of q) {
+      if (msg.type === 'assistant') {
+        for (const block of msg.message.content) {
+          if (block.type === 'text') out += block.text
+        }
+      } else if (msg.type === 'result') {
+        break
+      }
+    }
+    return parseProjectMemoryEvaluation(out, currentMemory)
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 export const claudeProvider: ModelProvider = {
   id: 'claude',
   supportsSpawn: true,
   startSession,
-  generateTitle
+  generateTitle,
+  updateProjectMemory
 }

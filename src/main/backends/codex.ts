@@ -27,6 +27,7 @@ import { scrubSecret } from '../providers-store'
 import { praxisRules } from '../rules'
 import { createRetryCause } from './codex-retry'
 import { createItemTracker } from './codex-stream'
+import { parseProjectMemoryEvaluation, projectMemoryEvaluationPrompt } from './memory'
 import { createRecordCapture } from './record'
 import { describeTool, sendToRenderer } from './tools'
 import type { ModelProvider, PendingPrompt, ProviderSession, SpawnContext } from './types'
@@ -498,4 +499,43 @@ async function startSession(
   }
 }
 
-export const codexProvider: ModelProvider = { id: 'codex', startSession }
+/**
+ * A fresh read-only Codex thread distills the finished chat without adding a
+ * hidden turn to the user's live conversation or exposing the project worktree.
+ */
+async function updateProjectMemory(
+  currentMemory: string,
+  transcript: import('../../shared/api').SessionTranscriptEntry[],
+  options: AgentOptions
+): Promise<string | null> {
+  const prompt = projectMemoryEvaluationPrompt(currentMemory, transcript)
+  if (!prompt) return null
+
+  const abort = new AbortController()
+  const timer = setTimeout(() => abort.abort(), 25_000)
+  try {
+    const conn = options.connectionId ? resolveConnection(options.connectionId) : null
+    if (options.connectionId && !conn) return null
+    if (!conn && !(await codexCliPresent())) return null
+    const { Codex } = await loadCodex()
+    const codexOptions = conn ? connectionCodexOptions(conn) : {}
+    const thread = new Codex(codexOptions).startThread({
+      workingDirectory: app.getPath('temp'),
+      skipGitRepoCheck: true,
+      sandboxMode: 'read-only',
+      approvalPolicy: 'never',
+      networkAccessEnabled: false,
+      webSearchMode: 'disabled',
+      ...(options.model ? { model: options.model } : {}),
+      ...(isEffort(options.effort) ? { modelReasoningEffort: options.effort } : {})
+    })
+    const result = await thread.run(prompt, { signal: abort.signal })
+    return parseProjectMemoryEvaluation(result.finalResponse, currentMemory)
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export const codexProvider: ModelProvider = { id: 'codex', startSession, updateProjectMemory }

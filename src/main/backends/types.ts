@@ -161,4 +161,14 @@ export interface ModelProvider {
     transcript: SessionTranscriptEntry[],
     options: AgentOptions
   ) => Promise<string | null>
+  /**
+   * Evaluate a completed chat against the project's current shared memory and
+   * return the complete revised memory. Tool-less and best-effort: `null` means
+   * no durable change or an evaluation failure. agent.ts serializes persistence.
+   */
+  updateProjectMemory?: (
+    currentMemory: string,
+    transcript: SessionTranscriptEntry[],
+    options: AgentOptions
+  ) => Promise<string | null>
 }

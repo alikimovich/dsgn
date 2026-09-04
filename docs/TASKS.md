@@ -212,9 +212,11 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       every row's model/time ends on one trailing edge instead of Main's running 34px
       further right; History now starts folded and the memory brain is hover-revealed
       like ×. See PROGRESS 2026-08-09.
-- [ ] **Suggest memory updates from conversation decisions.** Keep this reviewable:
-      propose additions/removals in the memory editor instead of silently rewriting
-      standing project context.
+- [x] **Learn unified project memory from conversation decisions.** ✅ 2026-09-04 —
+      after each successful turn, Claude and Codex run a tool-free, conservative
+      evaluator that merges durable decisions into shared memory. Per-project queues
+      prevent peer-chat races and protect concurrent manual edits; the memory editor
+      remains the user's direct review and override surface. See PROGRESS 2026-09-04.
 - [ ] **Enable detached background agents on Codex/gateway sessions.** Parent-model
       inheritance is already wired, but the provider capability remains Claude-only;
       unsupported comments explicitly fall back into their chat.

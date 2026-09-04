@@ -16,6 +16,13 @@ export interface ProjectMemoryStore {
   set: (root: string, content: string) => ProjectMemory
 }
 
+export interface ProjectMemoryUpdateQueue {
+  enqueue: (
+    root: string,
+    evaluate: (currentMemory: string) => Promise<string | null>
+  ) => Promise<void>
+}
+
 const EMPTY: ProjectMemory = { content: '', updatedAt: 0 }
 
 /**
@@ -57,6 +64,53 @@ export function createProjectMemoryStore(baseDir: string): ProjectMemoryStore {
   }
 
   return { get, set }
+}
+
+/**
+ * Serialize automatic memory evaluations per project. Each evaluator reads the
+ * latest merged memory when its turn starts, so two peer chats cannot overwrite
+ * one another. The optimistic revision check also protects a manual editor save
+ * made while a model call is in flight; the evaluation retries against that new
+ * authoritative value instead of clobbering it.
+ */
+export function createProjectMemoryUpdateQueue(
+  store: ProjectMemoryStore
+): ProjectMemoryUpdateQueue {
+  const chains = new Map<string, Promise<void>>()
+
+  const enqueue = (
+    root: string,
+    evaluate: (currentMemory: string) => Promise<string | null>
+  ): Promise<void> => {
+    const key = projectKey(root)
+    const prior = chains.get(key) ?? Promise.resolve()
+    const run = prior
+      .catch(() => {})
+      .then(async () => {
+        // One retry is enough to preserve a concurrent manual edit without
+        // allowing a busy editor to trigger an unbounded series of model calls.
+        for (let attempt = 0; attempt < 2; attempt += 1) {
+          const before = store.get(root)
+          const next = await evaluate(before.content)
+          if (next === null || next.trim() === before.content.trim()) return
+          const latest = store.get(root)
+          if (latest.updatedAt !== before.updatedAt || latest.content !== before.content) continue
+          store.set(root, next)
+          return
+        }
+      })
+      .catch(() => {
+        /* best-effort: chat completion must never fail because memory did */
+      })
+
+    chains.set(key, run)
+    void run.finally(() => {
+      if (chains.get(key) === run) chains.delete(key)
+    })
+    return run
+  }
+
+  return { enqueue }
 }
 
 /** A bounded, clearly-delimited rules section shared by every provider. */

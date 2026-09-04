@@ -2,6 +2,33 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Chats now maintain unified project memory
+
+Every successful interactive chat turn now triggers a separate, tool-free model
+evaluation that merges only durable project decisions into the project's shared
+memory. The evaluator keeps accepted architecture/product choices, stable user
+preferences and constraints, naming/workflow conventions, and important long-lived
+requirements; it rejects transient progress, repository-discoverable details,
+unaccepted suggestions, errors, secrets, credentials, and personal data. It returns
+the complete memory or an explicit no-change result, and malformed/failed evaluations
+are safe no-ops. Claude and Codex/connection chats support the path; experimental
+Gemini remains unchanged.
+
+Automatic writes are serialized per project so simultaneous peer chats merge against
+the latest value instead of racing. An optimistic revision check also detects a manual
+memory-editor save during evaluation and retries once against that authoritative edit.
+The editor now explains the automatic behavior and remains the user's direct review
+and override surface. Existing live chats receive learned revisions through the
+already-established one-time next-turn injection.
+
+Added pure coverage for bounded recent-chat digests, the strict JSON/no-change
+protocol, malformed and empty-output safety, peer-chat serialization, and concurrent
+manual-edit protection. Verified both focused memory tests, all TypeScript projects,
+the production Electron build, the project-memory UI flow and screenshot, and the full
+standard matrix at 118/119. The only failure was the unrelated `rail-chat-status` UI
+test's existing state-seeding race (a queried chat row disappeared after the test's
+initial assertion); a focused rerun reproduced it without involving this path.
+
 ## 2026-09-04 — Chats are peers; Main/secondary hierarchy removed
 
 Removed the special Main role from the product model. Every live chat now renders

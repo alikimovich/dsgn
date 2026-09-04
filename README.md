@@ -31,8 +31,9 @@ GitHub PR.
   capabilities differ; see [`docs/PROVIDERS.md`](docs/PROVIDERS.md).
 - **Peer chats and project memory.** Every project has a flat set of isolated,
   independently named chats, with background agents nested under the chat that
-  launched them. Durable decisions shared by every chat live outside Git in
-  project memory. See [`docs/MEMORY.md`](docs/MEMORY.md).
+  launched them. After successful turns, Praxis conservatively learns durable
+  decisions into unified project memory shared by every chat; it lives outside Git
+  and remains directly editable. See [`docs/MEMORY.md`](docs/MEMORY.md).
 - **Bring your own model.** Beyond the two subscription seats, Settings →
   Models & Providers connects any OpenAI-compatible endpoint serving the
   `/responses` API — Vercel AI Gateway, Groq, or a custom host — so open models

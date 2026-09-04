@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   createProjectMemoryStore,
+  createProjectMemoryUpdateQueue,
   MAX_PROJECT_MEMORY_CHARS,
   projectMemoryRules,
   projectMemoryUpdate
@@ -40,6 +41,52 @@ try {
     projectMemoryUpdate('', 'Continue.').includes('memory is now empty'),
     'clearing memory explicitly supersedes an older live-context snapshot'
   )
+
+  const updates = createProjectMemoryUpdateQueue(store)
+  store.set(a, '- Keep existing')
+  let releaseFirst
+  const firstGate = new Promise((resolve) => {
+    releaseFirst = resolve
+  })
+  const first = updates.enqueue(a, async (current) => {
+    await firstGate
+    return `${current}\n- Learned from chat one`
+  })
+  const second = updates.enqueue(a, async (current) => `${current}\n- Learned from chat two`)
+  releaseFirst()
+  await Promise.all([first, second])
+  ok(
+    store.get(a).content.includes('chat one') && store.get(a).content.includes('chat two'),
+    'peer-chat evaluations serialize and merge against the latest memory'
+  )
+
+  let releaseEvaluation
+  const evaluationGate = new Promise((resolve) => {
+    releaseEvaluation = resolve
+  })
+  let markEvaluationStarted
+  const evaluationStarted = new Promise((resolve) => {
+    markEvaluationStarted = resolve
+  })
+  let evaluations = 0
+  const guarded = updates.enqueue(a, async (current) => {
+    evaluations += 1
+    if (evaluations === 1) {
+      markEvaluationStarted()
+      await evaluationGate
+    }
+    return `${current}\n- Automatically learned`
+  })
+  // A user save during the model call is authoritative and forces one re-evaluation.
+  await evaluationStarted
+  store.set(a, `${store.get(a).content}\n- Manually edited`)
+  releaseEvaluation()
+  await guarded
+  ok(
+    store.get(a).content.includes('Manually edited'),
+    'automatic updates preserve concurrent edits'
+  )
+  ok(evaluations === 2, 'a concurrent edit re-evaluates once against current memory')
 
   console.log('PROJECT-MEMORY OK — durable, isolated, bounded, prompt-safe')
 } finally {

@@ -22,14 +22,24 @@ Project memory is deliberately separate from chat history and repository state:
 - Injected into every new chat and background-agent context.
 - If memory changes while a chat stays live, Praxis injects that revision once on the
   chat's next turn instead of repeating it on every turn.
+- After every successful interactive turn, the selected provider runs a separate,
+  tool-free evaluation. It merges only durable decisions, stable preferences,
+  constraints, and long-lived requirements into the unified project memory.
+- Evaluations are serialized per project. Each peer chat merges against the latest
+  memory, and a manual editor save made during evaluation wins and forces a retry.
+- Transient progress, repository-discoverable implementation detail, unaccepted
+  proposals, errors, secrets, credentials, and personal data are excluded. A failed
+  or malformed evaluation is a no-op and never affects the completed chat.
 - A current user request outranks saved memory; the model is told to flag a likely
   stale decision rather than silently follow it.
 
-The memory editor is intentionally curated by the user in this first version. Automatic
-decision extraction should arrive as a reviewable suggestion, never silently rewrite
-standing project context.
+The memory editor remains the user's direct view and final override. Automatic updates
+preserve its current wording unless a completed chat establishes a material addition or
+the user explicitly reverses an existing decision. Claude and Codex/connection chats
+support evaluation; the experimental Gemini CLI backend currently does not.
 
 Implementation: `src/main/project-memory.ts`, `src/main/agent.ts`,
-`src/main/rules.ts`, `src/renderer/src/components/ProjectMemoryDialog.tsx`.
-Regression coverage: `test/project-memory.mjs`, `test/project-memory-ui.mjs`,
-`test/rules.mjs`.
+`src/main/backends/memory.ts`, `src/main/rules.ts`,
+`src/renderer/src/components/ProjectMemoryDialog.tsx`. Regression coverage:
+`test/project-memory.mjs`, `test/project-memory-evaluation.mjs`,
+`test/project-memory-ui.mjs`, `test/rules.mjs`.

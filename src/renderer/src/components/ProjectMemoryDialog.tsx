@@ -82,8 +82,8 @@ export default function ProjectMemoryDialog({
         <DialogHeader>
           <DialogTitle>{name} memory</DialogTitle>
           <DialogDescription>
-            Keep durable product decisions here. Praxis gives them to every new chat and background
-            agent.
+            Praxis learns durable decisions from completed chats and shares them with every chat and
+            background agent. You can review or edit them here anytime.
           </DialogDescription>
         </DialogHeader>
 

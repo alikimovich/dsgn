@@ -43,7 +43,9 @@ import { isRepoRoot } from './git'
 import { commitLiveTurn } from './live-commit'
 import {
   createProjectMemoryStore,
+  createProjectMemoryUpdateQueue,
   type ProjectMemoryStore,
+  type ProjectMemoryUpdateQueue,
   projectMemoryUpdate
 } from './project-memory'
 import { registerProviderIpc } from './providers'
@@ -99,8 +101,10 @@ function dataDir(): string {
 let _store: SessionStore | null = null
 const store = (): SessionStore => (_store ??= createSessionStore(dataDir()))
 let _memoryStore: ProjectMemoryStore | null = null
-const memoryStore = (): ProjectMemoryStore =>
-  (_memoryStore ??= createProjectMemoryStore(dataDir()))
+const memoryStore = (): ProjectMemoryStore => (_memoryStore ??= createProjectMemoryStore(dataDir()))
+let _memoryUpdateQueue: ProjectMemoryUpdateQueue | null = null
+const memoryUpdateQueue = (): ProjectMemoryUpdateQueue =>
+  (_memoryUpdateQueue ??= createProjectMemoryUpdateQueue(memoryStore()))
 
 /** The memory revision already present in each live provider's context. */
 const memoryRevisionBySession = new Map<string, number>()
@@ -216,12 +220,34 @@ async function maybeGenerateTitle(sessionKey: string): Promise<void> {
   }
 }
 
-/** Interactive-session event hook: running-state bookkeeping + one-time auto-naming. */
+/**
+ * After each successful interactive turn, conservatively merge durable decisions
+ * into the project's one shared memory. The queue re-reads memory between peer
+ * chats and protects a concurrent manual editor save; provider/model failures are
+ * intentionally invisible to the completed chat.
+ */
+function evaluateProjectMemory(sessionKey: string): void {
+  const session = sessions.get(sessionKey)
+  if (!session) return
+  session.finalize()
+  const transcript = session.record.transcript.map((entry) => ({ ...entry }))
+  const hasUser = transcript.some((entry) => entry.role === 'user')
+  const hasAssistant = transcript.some((entry) => entry.role === 'assistant')
+  if (!hasUser || !hasAssistant) return
+  const evaluate = pickProvider(session.options).updateProjectMemory
+  if (!evaluate) return
+  const root = session.record.projectRoot
+  const options = { ...session.options }
+  void memoryUpdateQueue().enqueue(root, (currentMemory) =>
+    evaluate(currentMemory, transcript, options)
+  )
+}
+
+/** Interactive-session event hook: bookkeeping, naming, landing, and memory learning. */
 const interactiveEvents =
   (sessionKey: string) =>
   (e: AgentEvent): void => {
     trackRunning(sessionKey)(e)
-    if (e.type === 'done') void maybeGenerateTitle(sessionKey)
     // Providers disagree about terminal sequences: Codex can emit error→done while
     // Claude may emit only error. Claim one outcome. Success may auto-land; failure
     // persists partial work on the chat branch but never writes it into the project.
@@ -231,6 +257,10 @@ const interactiveEvents =
       const transcript = sessions.get(sessionKey)?.record.transcript ?? []
       const last = [...transcript].reverse().find((t) => t.role === 'user')?.text
       afterTurn(sessionKey, firstLine(last ?? 'praxis chat edit'), transcript, terminal)
+      if (terminal === 'success') {
+        void maybeGenerateTitle(sessionKey)
+        evaluateProjectMemory(sessionKey)
+      }
     }
   }
 
@@ -1045,9 +1075,8 @@ export function registerAgentIpc(
     const root = session.record.projectRoot
     const memory = memoryStore().get(root)
     const knownRevision = activeKey ? memoryRevisionBySession.get(activeKey) : undefined
-    const prompt = memory.updatedAt !== knownRevision
-      ? projectMemoryUpdate(memory.content, text)
-      : text
+    const prompt =
+      memory.updatedAt !== knownRevision ? projectMemoryUpdate(memory.content, text) : text
     if (activeKey) memoryRevisionBySession.set(activeKey, memory.updatedAt)
     session.send(prompt, images)
   })

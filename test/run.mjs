@@ -46,6 +46,7 @@ const UNIT = [
   'sessions-store',
   'preferred-model',
   'project-memory',
+  'project-memory-evaluation',
   'providers-store',
   'model-catalog',
   'codex-retry-cause',
