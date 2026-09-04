@@ -23,11 +23,13 @@
     </ul>
     <!-- A .map()-rendered list — every instance shares the IDENTICAL stamp
          (src/Layers.tsx:18:8), since there's only one <li> literal in source.
-         Dragging between these must fall back to the chat agent. -->
+         Dragging between these must fall back to the chat agent. The extra
+         `s-…` class is a compiler style-scope marker (what Svelte-style scoped
+         CSS stamps onto every element): the tree must not show it. -->
     <ul id="mapped-list" data-praxis-source="src/Layers.tsx:16:4">
-      <li class="mapped" data-praxis-source="src/Layers.tsx:18:8">One</li>
-      <li class="mapped" data-praxis-source="src/Layers.tsx:18:8">Two</li>
-      <li class="mapped" data-praxis-source="src/Layers.tsx:18:8">Three</li>
+      <li class="mapped s-p0FWuf5vgUnM" data-praxis-source="src/Layers.tsx:18:8">One</li>
+      <li class="mapped s-p0FWuf5vgUnM" data-praxis-source="src/Layers.tsx:18:8">Two</li>
+      <li class="mapped s-p0FWuf5vgUnM" data-praxis-source="src/Layers.tsx:18:8">Three</li>
     </ul>
   </main>
 </body>

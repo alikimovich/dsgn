@@ -133,6 +133,7 @@
     "test:style-tokens": "bun test/style-tokens.mjs",
     "test:style-provenance": "node test/style-provenance.mjs",
     "test:layers-move": "bun test/layers-move.mjs",
+    "test:layers-labels": "bun test/layers-labels.mjs",
     "test:inline-style": "bun test/inline-style.mjs",
     "test:css-values": "bun test/css-values.mjs",
     "test:elide-url": "bun test/elide-url.mjs",

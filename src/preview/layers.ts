@@ -29,6 +29,31 @@ const MAX_NODES = 4000
 const MAX_DEPTH = 30
 const MAX_CHILDREN_PER_PARENT = 200
 
+/**
+ * Class-name prefixes a compiler uses to scope styles to a component
+ * (`s-p0FWuf5vgUnM`, `svelte-a43zbs`, `sc-bdVaJa`, `css-1x2y3z`, `jsx-712…`,
+ * `astro-jhd3mn`). They're on EVERY element a scoped stylesheet touches, so in
+ * the Layers tree they read as one long meaningless suffix per row.
+ */
+const SCOPE_PREFIXES = new Set(['s', 'svelte', 'sc', 'css', 'jsx', 'astro', 'emotion'])
+
+/**
+ * Is this class a compiler-generated style-scope marker rather than something
+ * the author wrote? Both halves must hold: a known scoping prefix AND a
+ * hash-shaped tail (digits, or mixed case — never a plain word). That keeps
+ * hand-written classes that happen to share a prefix (`s-active`, `css-grid`)
+ * on the row, and it's why this is a prefix allowlist rather than a "looks
+ * random" guess: nothing distinguishes a short hash from a real class name.
+ */
+export function isScopeClass(cls: string): boolean {
+  const dash = cls.indexOf('-')
+  if (dash <= 0) return false
+  const tail = cls.slice(dash + 1)
+  if (!SCOPE_PREFIXES.has(cls.slice(0, dash))) return false
+  if (!/^[A-Za-z0-9_]{4,}$/.test(tail)) return false
+  return /\d/.test(tail) || (/[a-z]/.test(tail) && /[A-Z]/.test(tail))
+}
+
 /** Element children only — text/comment nodes don't get a tree row. */
 function elementChildren(el: Element): Element[] {
   return Array.from(el.children)
@@ -56,9 +81,16 @@ export function buildLayersSnapshot(): LayersSnapshot {
     if (source) stampCounts.set(source, (stampCounts.get(source) ?? 0) + 1)
 
     const tag = el.tagName.toLowerCase()
+    // Scope classes are dropped BEFORE the 5-class cap — filtering later would
+    // let a row whose first five classes are all scope markers show nothing.
     const classes =
       typeof el.className === 'string' && el.className.trim()
-        ? el.className.trim().split(/\s+/).slice(0, 5).map((c) => c.slice(0, 30))
+        ? el.className
+            .trim()
+            .split(/\s+/)
+            .filter((c) => !isScopeClass(c))
+            .slice(0, 5)
+            .map((c) => c.slice(0, 30))
         : []
     const isLeafTag = LEAF_TAGS.has(tag)
     const children = isLeafTag ? [] : elementChildren(el).filter((c) => !SKIP_TAGS.has(c.tagName.toLowerCase()))
