@@ -55,6 +55,7 @@ const UNIT = [
   'terminal-streams',
   'turn-terminal',
   'chat-title',
+  'markdown-color',
   'chat-settings',
   'run-stats',
   'codex-usage',

@@ -1911,6 +1911,23 @@ body.is-resizing {
     border-radius: 5px;
 }
 
+.markdown__color-token {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    white-space: nowrap;
+}
+
+.markdown__color-swatch {
+    display: inline-block;
+    width: 0.78em;
+    height: 0.78em;
+    flex: 0 0 auto;
+    border-radius: 3px;
+    background: var(--markdown-color);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--text) 22%, transparent);
+}
+
 .markdown pre {
     background: var(--muted);
     border: 1px solid var(--border);
