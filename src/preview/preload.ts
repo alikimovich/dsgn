@@ -48,6 +48,7 @@ import {
   PREVIEW_TOOLBAR_ACTION as TOOLBAR_ACTION
 } from '../shared/preview-channels'
 import { buildLayersSnapshot, type LayerFingerprint, resolveLayerElement } from './layers'
+import { formatDistance, type MeasureLine, type MeasureRect, measureRects } from './measure'
 import { specifiedValues, varRefName } from './style-provenance'
 
 type CommentMode = 'comment' | 'annotate' | null
@@ -160,6 +161,17 @@ function setStatusPill(text: string | null): void {
 let selLayer: HTMLDivElement | null = null
 let selEls: Element[] = []
 
+// Alt/Option spacing measurement — with something selected, holding Option and
+// hovering another element draws the distances between the two, Figma-style.
+// `measureTarget` is the hovered element the current drawing measures to;
+// `measureKey` is the geometry it was drawn from, so a mousemove that doesn't
+// move either rect doesn't rebuild the nodes.
+let measureLayer: HTMLDivElement | null = null
+let measureTarget: Element | null = null
+let measureKey = ''
+let altHeld = false
+let lastHovered: Element | null = null
+
 /** Lazily build the shadow-DOM overlay (highlight box + label chip + pins layer). */
 function ensureOverlay(): void {
   if (overlayHost) return
@@ -183,6 +195,11 @@ function ensureOverlay(): void {
   // Persistent selection outlines (behind the hover box + composer).
   const sel = document.createElement('div')
   sel.style.cssText = 'position:fixed;inset:0;pointer-events:none;'
+
+  // Alt/Option spacing measurements (rebuilt per hover — see drawMeasure).
+  const meas = document.createElement('div')
+  meas.setAttribute('data-praxis-measure', '')
+  meas.style.cssText = 'position:fixed;inset:0;pointer-events:none;'
 
   // Whole-page mode hint chip (top-center) while C/Y is armed.
   const hint = document.createElement('div')
@@ -323,13 +340,14 @@ function ensureOverlay(): void {
   // discoverable form of the double-click-to-edit gesture.
   toolbar.append(commentBtn, annotateBtn, inputWrap, editBtn, propsBtn, codeBtn, separator, deleteBtn)
 
-  shadow.append(sel, box, label, pins, hint, toolbar, style)
+  shadow.append(sel, box, meas, label, pins, hint, toolbar, style)
   document.documentElement.appendChild(host)
   overlayHost = host
   overlayBox = box
   overlayLabel = label
   pinsLayer = pins
   selLayer = sel
+  measureLayer = meas
   hintEl = hint
   toolbarEl = toolbar
   inputWrapEl = inputWrap
@@ -612,6 +630,120 @@ function drawOverlay(el: Element): void {
   overlayLabel.style.top = `${Math.max(r.top - 2, 12)}px`
   chipName(overlayLabel, shortLabel(el))
   chipSize(overlayLabel, r)
+}
+
+// ---- Alt/Option spacing measurement ----------------------------------------
+
+// Figma's measurement red. Deliberately not the blue of select/hover — the
+// numbers must read as a separate layer over both outlines.
+const MEASURE_COLOR = '#f24822'
+/** Half-length of the perpendicular tick capping each measured span. */
+const CAP = 3.5
+
+function rectOf(el: Element): MeasureRect {
+  const r = el.getBoundingClientRect()
+  return { left: r.left, top: r.top, right: r.right, bottom: r.bottom }
+}
+
+/** One axis-aligned hairline. `dashed` marks a guide (an extended edge) rather
+ *  than a measured span. */
+function measureLine(l: MeasureLine, dashed: boolean): HTMLDivElement {
+  const d = document.createElement('div')
+  const w = Math.abs(l.x2 - l.x1)
+  const h = Math.abs(l.y2 - l.y1)
+  const vertical = h >= w
+  const fill = dashed
+    ? `background:repeating-linear-gradient(${vertical ? 'to bottom' : 'to right'},` +
+      `${MEASURE_COLOR} 0 3px,transparent 3px 6px);opacity:0.6;`
+    : `background:${MEASURE_COLOR};`
+  d.style.cssText =
+    `position:fixed;pointer-events:none;left:${Math.min(l.x1, l.x2)}px;` +
+    `top:${Math.min(l.y1, l.y2)}px;width:${vertical ? 1 : w}px;` +
+    `height:${vertical ? h : 1}px;${fill}`
+  return d
+}
+
+/** The tick that closes off a measured span's end. */
+function measureCap(x: number, y: number, axis: 'x' | 'y'): HTMLDivElement {
+  const d = document.createElement('div')
+  const vertical = axis === 'x' // an x-axis span is capped by vertical ticks
+  d.style.cssText =
+    `position:fixed;pointer-events:none;background:${MEASURE_COLOR};` +
+    `left:${vertical ? x : x - CAP}px;top:${vertical ? y - CAP : y}px;` +
+    `width:${vertical ? 1 : CAP * 2}px;height:${vertical ? CAP * 2 : 1}px;`
+  return d
+}
+
+function measureLabel(text: string, x: number, y: number): HTMLDivElement {
+  const d = document.createElement('div')
+  d.setAttribute('data-praxis-measure-label', '')
+  d.textContent = text
+  d.style.cssText =
+    `position:fixed;pointer-events:none;left:${x}px;top:${y}px;` +
+    'transform:translate(-50%,-50%);white-space:nowrap;' +
+    'font:700 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#fff;' +
+    'background:#111;padding:2px 6px;border-radius:5px;'
+  return d
+}
+
+function clearMeasure(): void {
+  if (!measureTarget && !measureKey) return // nothing drawn — don't touch the DOM
+  measureTarget = null
+  measureKey = ''
+  if (measureLayer) measureLayer.textContent = ''
+}
+
+/**
+ * Draw the distances from the selection to `target` — or clear them when the
+ * gesture no longer applies (Option released, nothing selected, the pointer is
+ * over the selection itself or over our own overlay, a composer is open).
+ *
+ * Re-run on every mousemove while Option is down, plus on scroll/resize, so the
+ * numbers track live layout; the geometry key makes the repeat calls cheap.
+ */
+function drawMeasure(target: Element | null): void {
+  const anchor = selectedEl
+  if (
+    !altHeld ||
+    editing ||
+    commenting ||
+    !anchor ||
+    !anchor.isConnected ||
+    !target ||
+    !target.isConnected ||
+    target === anchor ||
+    isOverlay(target)
+  ) {
+    clearMeasure()
+    return
+  }
+  ensureOverlay()
+  if (!measureLayer) return
+  const a = rectOf(anchor)
+  const b = rectOf(target)
+  const key = [a.left, a.top, a.right, a.bottom, b.left, b.top, b.right, b.bottom]
+    .map((n) => Math.round(n))
+    .join(',')
+  if (target === measureTarget && key === measureKey) return
+  measureTarget = target
+  measureKey = key
+  measureLayer.textContent = ''
+  const { segments, guides } = measureRects(a, b)
+  for (const g of guides) measureLayer.appendChild(measureLine(g, true))
+  for (const s of segments) {
+    measureLayer.appendChild(measureLine(s, false))
+    measureLayer.appendChild(measureCap(s.x1, s.y1, s.axis))
+    measureLayer.appendChild(measureCap(s.x2, s.y2, s.axis))
+    measureLayer.appendChild(
+      measureLabel(formatDistance(s.distance), (s.x1 + s.x2) / 2, (s.y1 + s.y2) / 2)
+    )
+  }
+}
+
+/** Re-derive the measurement from the current Option state + hovered element.
+ *  Called from the key handlers and from scroll/resize. */
+function refreshMeasure(): void {
+  drawMeasure(altHeld ? (measureTarget ?? lastHovered) : null)
 }
 
 /** A short, reasonably-stable CSS selector path (id wins; else tag:nth-of-type). */
@@ -1008,15 +1140,20 @@ function onMove(e: MouseEvent): void {
   }
   if (editing || commenting) return // frozen while editing / composing
   if (!active && !commentMode) return
+  altHeld = e.altKey
   const el = e.target as Element | null
   if (!el || isOverlay(el)) {
     // Over our own UI (toolbar, composer, pins): drop the hover highlight —
     // leaving the last-crossed element lit under the toolbar reads as if IT
     // were selected. The persistent selection outlines are a separate layer.
+    lastHovered = null
     hideOverlay()
+    clearMeasure()
     return
   }
+  lastHovered = el
   drawOverlay(el)
+  drawMeasure(el)
 }
 
 function onClick(e: MouseEvent): void {
@@ -1320,6 +1457,7 @@ function setCommentMode(next: CommentMode, fromRenderer = false): void {
     // renderer clears its selection too).
     hideToolbar()
     setSelectionHighlight(null)
+    clearMeasure()
     selectedEl = null
     document.documentElement.style.cursor = 'crosshair'
     showModeHint()
@@ -1347,12 +1485,31 @@ function onKey(e: KeyboardEvent): void {
     }
     return
   }
+  // Option/Alt down over an already-hovered element: measure to it without
+  // waiting for the pointer to move again.
+  if (e.key === 'Alt') {
+    if (!altHeld) {
+      altHeld = true
+      refreshMeasure()
+    }
+    return
+  }
   if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey || isTypingTarget(e.target)) return
   if (e.key === 's' || e.key === 'S') {
     // S must work with the preview focused too. The renderer owns the toggle
     // (store + web/simulator routing) — relay instead of flipping locally.
     e.preventDefault()
     ipcRenderer.send(TOGGLE_SELECT)
+  }
+}
+
+/** Releasing Option (or losing the key entirely on window blur) ends the
+ *  measurement — nothing else in the overlay is keyed to it. */
+function onKeyUp(e: KeyboardEvent): void {
+  if (!altHeld) return
+  if (e.key === 'Alt' || !e.altKey) {
+    altHeld = false
+    clearMeasure()
   }
 }
 
@@ -1368,6 +1525,7 @@ function setActive(next: boolean): void {
     hideOverlay()
     hideToolbar()
     setSelectionHighlight(null)
+    clearMeasure()
     selectedEl = null
     document.documentElement.style.cursor = ''
   }
@@ -1453,11 +1611,19 @@ if (!IS_SIM_BRIDGE) {
 window.addEventListener('click', onClick, true)
 window.addEventListener('dblclick', onDblClick, true)
 window.addEventListener('keydown', onKey, true)
+window.addEventListener('keyup', onKeyUp, true)
+// A window switch (Cmd+Tab) swallows the Option keyup — drop the measurement
+// rather than leave it stuck on when focus comes back.
+window.addEventListener('blur', () => {
+  altHeld = false
+  clearMeasure()
+})
 window.addEventListener('scroll', () => {
   if (commenting) {
     drawOverlay(commenting) // keep the highlight tracking the frozen el
   } else if (active || commentMode) {
     hideOverlay()
+    clearMeasure() // the hover it was measured from is gone too
   }
   if (selectedEl) positionToolbar() // the pill tracks the selection in both states
   if (selEls.length) positionSelection()
@@ -1468,6 +1634,7 @@ window.addEventListener('resize', () => {
   if (selectedEl) positionToolbar()
   if (selEls.length) positionSelection()
   if (pinDots.size) positionPins()
+  if (measureTarget) refreshMeasure()
   positionFrame()
 })
 // Cursor left the preview entirely (relatedTarget null) — drop the HOVER
@@ -1477,7 +1644,9 @@ window.addEventListener(
   'mouseout',
   (e: MouseEvent) => {
     if (e.relatedTarget || commenting) return
+    lastHovered = null
     hideOverlay()
+    clearMeasure()
   },
   true
 )
@@ -1486,6 +1655,7 @@ const pinTimer = setInterval(() => {
   if (pinDots.size) positionPins()
   // Selection outlines track layout changes (async content, HMR) the same way.
   if (selEls.length) positionSelection()
+  if (measureTarget) refreshMeasure()
 }, 600)
 window.addEventListener('pagehide', () => {
   clearInterval(pinTimer)
@@ -1529,6 +1699,7 @@ window.addEventListener('load', () => {
     selectedEl = null
     hideToolbar()
     setSelectionHighlight(null)
+    clearMeasure()
   })
   ipcRenderer.on(SET_STATUS, (_e, text: string | null) => setStatusPill(text))
   // Styles panel (relayed from the island by main): payloads originate in our

@@ -193,6 +193,10 @@ src/
                     Layers panel (bulk read, panel-driven select/hover, the
                     structural MutationObserver watch) — split out of preload.ts,
                     which only wires the IPC into it
+  preview/measure.ts  spacing measurement geometry for the Option/Alt distance
+                    overlay (select one element, hold Option, hover another):
+                    gap between separated boxes, matched-edge deltas when they
+                    nest/intersect. Pure — preload.ts only draws what it returns
   preview/style-provenance.ts  proves a style property's value comes from a
                     design token instead of merely equalling one: reads the
                     SPECIFIED (unresolved) declaration — inline `style=` or a
