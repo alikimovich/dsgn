@@ -156,6 +156,8 @@ Project-memory persistence and Main-context reset are documented in `docs/MEMORY
   `store.ts`, or `styles.css` (already oversized — see `docs/TASKS.md`).
 - Auth is per-user at runtime; never commit secrets. Nothing sensitive in-repo.
 - Commit in small, focused commits with the Co-Authored-By trailer.
+- The user has pre-authorized commits for this project; do not ask for separate
+  confirmation before staging and committing completed, in-scope work.
 
 ## Gotchas (hard-won — read before debugging these areas)
 
