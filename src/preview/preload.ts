@@ -682,7 +682,7 @@ function measureLabel(text: string, x: number, y: number): HTMLDivElement {
     `position:fixed;pointer-events:none;left:${x}px;top:${y}px;` +
     'transform:translate(-50%,-50%);white-space:nowrap;' +
     'font:700 12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#fff;' +
-    'background:#111;padding:2px 6px;border-radius:5px;'
+    `background:${MEASURE_COLOR};padding:2px 6px;border-radius:5px;`
   return d
 }
 

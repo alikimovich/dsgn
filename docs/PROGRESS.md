@@ -2,6 +2,18 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Measurement values join the red geometry
+
+Replaced the measurement value badges' hard-coded black fill with the shared
+`#f24822` measurement color, so labels, spans, and end caps read as one overlay.
+White numerals remain the more legible text choice on this red (APCA Lc 68.4,
+versus 40.5 for near-black). The real Option-hover regression now reads computed
+styles from the preview overlay and requires every value and geometry fill to match.
+Verified all TypeScript projects, the pure geometry test, the real preview gesture,
+and its captured pixels. The standard matrix finished at 121/122: the changed
+measurement path passed, with only the already-documented `rail-chat-status`
+state-seeding race failing at its unchanged missing-row geometry assertion.
+
 ## 2026-09-04 — Option-hover spacing measurement
 
 The completed measurement work had remained only on `agent/lkm-78` in conflicted

@@ -3,6 +3,12 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Red measurement labels (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Match measurement value badges to their red geometry.** Value labels now
+      use the same `#f24822` fill as measurement lines and caps, with an end-to-end
+      assertion preventing the fills from diverging again.
+
 ## Quiet remote status (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Reduce the remote badge's visual weight.** The bordered accent pill is now

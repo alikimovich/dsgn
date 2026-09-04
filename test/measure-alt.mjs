@@ -41,10 +41,15 @@ const hover = (alt) => `(() => {
     .querySelector('[data-praxis-overlay]')
     ?.shadowRoot?.querySelector('[data-praxis-measure]')
   const labels = [...(layer?.querySelectorAll('[data-praxis-measure-label]') ?? [])]
+  const geometry = [...(layer?.children ?? [])].filter(
+    (node) => !node.hasAttribute('data-praxis-measure-label')
+  )
   const a = document.querySelector('#hero-title').getBoundingClientRect()
   const b = el.getBoundingClientRect()
   return {
     labels: labels.map((l) => l.textContent),
+    labelBackgrounds: labels.map((l) => getComputedStyle(l).backgroundColor),
+    geometryBackgrounds: geometry.map((node) => getComputedStyle(node).backgroundColor),
     lines: layer ? layer.childElementCount - labels.length : 0,
     gap: b.top - a.bottom
   }
@@ -130,6 +135,18 @@ try {
   }
   // The span itself plus its two end caps.
   if (held.lines !== 3) throw new Error(`expected a span with two caps, got ${held.lines} lines`)
+  const measurementRed = 'rgb(242, 72, 34)'
+  if (
+    held.labelBackgrounds.some((color) => color !== measurementRed) ||
+    held.geometryBackgrounds.some((color) => color !== measurementRed)
+  ) {
+    throw new Error(
+      `label and line fills must share measurement red: ${JSON.stringify({
+        labels: held.labelBackgrounds,
+        geometry: held.geometryBackgrounds
+      })}`
+    )
+  }
 
   const png = await app.evaluate(async ({ webContents }) => {
     const wc = webContents
