@@ -6,7 +6,10 @@ import PanelApp from './components/PanelApp'
 import { installWebApi } from './web-api'
 import './styles.css'
 
-if (window.__PRAXIS_WEB_CONFIG__) installWebApi(window.__PRAXIS_WEB_CONFIG__)
+// Browser mode has no preload bridge; Electron does. Keeping that second guard
+// prevents an injected/stale browser config from replacing the native bridge and
+// also lets the remote-only chrome be exercised in the Electron visual harness.
+if (window.__PRAXIS_WEB_CONFIG__ && !window.api) installWebApi(window.__PRAXIS_WEB_CONFIG__)
 
 const params = new URLSearchParams(location.search)
 

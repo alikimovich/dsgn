@@ -2050,10 +2050,15 @@ export default function App(): React.JSX.Element {
                 )}
                 {window.__PRAXIS_WEB_CONFIG__?.remote && (
                   <span
-                    className="previewbar__remote"
-                    title="Available only inside your Tailscale network"
+                    className="previewbar__remote flex size-5 shrink-0 items-center justify-center"
+                    role="status"
+                    aria-label="Remote access active"
+                    title="Remote access active — available only inside your Tailscale network"
                   >
-                    Remote access active
+                    <span
+                      className="size-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400"
+                      aria-hidden="true"
+                    />
                   </span>
                 )}
                 <div className="previewbar__actions">

@@ -3,6 +3,11 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Quiet remote status (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Reduce the remote badge's visual weight.** The bordered accent pill is now
+      a small connection dot with an accessible status label and full tooltip.
+
 ## Compact composer controls (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Truncate long provider/model labels instead of wrapping the toolbar.**

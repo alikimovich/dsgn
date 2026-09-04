@@ -2,6 +2,21 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Remote status recedes into the preview toolbar
+
+Replaced the heavy bordered “Remote access active” pill with a single small connection
+dot. The full status remains available to screen readers and through its Tailscale-only
+tooltip, but no longer competes with the URL, preview actions, or primary Publish
+button. A contrast review rejected low-contrast 11px microcopy in both themes; the
+text-free indicator avoids that readability regression. Styling now lives with the
+component's Tailwind utilities, and the touched legacy CSS block was removed. A
+focused Electron regression verifies the 20px transparent status slot, 6px dot,
+absence of pill chrome, accessible name/tooltip, and captured toolbar appearance.
+Verified all TypeScript projects, the browser-mode integration, and the focused visual
+test. The standard matrix finished at 119/120; the new path passed, with only the
+already-documented `rail-chat-status` state-seeding race failing at its unchanged
+missing-row geometry assertion.
+
 ## 2026-09-04 — Composer pickers truncate instead of wrapping
 
 Kept the provider, model, and permission pickers on one line in narrow chat panes.
