@@ -5,10 +5,9 @@ Models edit there; the preview and the user's editor remain on the live checkout
 isolation boundary is the worktree, while convergence is owned by one repository-scoped
 landing queue.
 
-The rail's **Main** label is a product role, not a concurrency bypass: Main remains an
-isolated chat today and crosses the same landing queue as secondary chats. Secondary
-chat identity and worktree identity are independent; closing/clearing a conversation
-does not justify retaining a stale branch.
+All chats are peers in the rail and in the isolation model: each crosses the same
+landing queue. Chat identity and worktree identity are independent; closing a
+conversation does not justify retaining a stale branch.
 
 ## State model
 

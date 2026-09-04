@@ -630,7 +630,7 @@ export default function ChatPanel(): React.JSX.Element {
               );
           }
           // `pkey` is the PARENT SESSION key now, not the bare project key — a
-          // spawn from a secondary chat reads `<projectKey>#<uuid>`. Match on the
+          // spawn from another peer chat reads `<projectKey>#<uuid>`. Match on the
           // project prefix so the finished agent still refreshes its history.
           const root = useSession.getState().projectRoot;
           const pk = root ? projectKey(root) : null;

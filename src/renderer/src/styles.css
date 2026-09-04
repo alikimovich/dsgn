@@ -1038,9 +1038,8 @@ body.is-fullscreen .sidebar-toggle {
 }
 /* Row actions (rename pencil + close ×) float OVER the row's trailing meta
    instead of sitting in its flow. In flow they shortened the model/time slot of
-   exactly the rows that HAVE them, which is why Main — which has neither — used
-   to push its model label ~34px further right than every other chat row. As an
-   overlay every row ends its meta on the same trailing edge, and the meta fades
+   exactly the rows that have them. As an overlay, every row ends its meta on the
+   same trailing edge, and the meta fades
    out underneath on hover rather than the row reserving permanent empty space.
    pointer-events are off while hidden so the invisible buttons can't swallow a
    click meant for the row; the parent hover turns them on before they're

@@ -1,6 +1,6 @@
 /**
  * The user's preferred default for a chat that has no stored settings of its own
- * (first project of a session, a Main with nothing persisted yet).
+ * (first project of a session, or a chat with nothing persisted yet).
  *
  * Two modes:
  * - `last-used` (the product default) — whatever model the user last picked in

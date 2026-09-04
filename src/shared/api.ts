@@ -202,7 +202,7 @@ export interface QuestionRequest {
   id: string
   questions: QuestionSpec[]
   /** The chat session this question belongs to — same value as the emitting
-   *  `AgentEvent.projectKey` (the project's own key for its default chat, or
+   *  `AgentEvent.projectKey` (the project's own key for its first chat, or
    *  `${projectKey}#…` for an additional/resumed chat). Lets the renderer keep
    *  a backgrounded chat's cards out of whichever chat is on screen, instead of
    *  a single un-keyed global list. */
@@ -486,13 +486,11 @@ export interface SessionRecord {
   /** A detached comment spawn (v8 F1), vs the interactive project chat. */
   kind?: 'comment'
   /**
-   * The project's current Main thread, persisted on quit/close so a relaunch
-   * restores it in place instead of starting a blank Main and listing the
-   * conversation under History. `sessions:list` / the rail History section omit
-   * this slot; **Project memory → Clear context** archives it as a normal
-   * previous agent (no `slot`) and starts a fresh Main.
+   * The project's last-active chat, persisted on quit/close so a relaunch can
+   * continue it in place. It is omitted from History while current. `main` is a
+   * read-only compatibility value for records written before chats became peers.
    */
-  slot?: 'main'
+  slot?: 'current' | 'main'
   /**
    * The Claude Agent SDK's own resumable session id (v9 resume), captured off
    * the `system`/init message. Only the Claude backend sets this (Codex/Gemini
@@ -502,7 +500,7 @@ export interface SessionRecord {
   sdkSessionId?: string
 }
 
-/** What `agent:open-project` hands back so the renderer can paint Main. */
+/** What `agent:open-project` hands back so the renderer can paint the current chat. */
 export interface OpenProjectResult {
   transcript: SessionTranscriptEntry[]
   title?: string
@@ -1370,7 +1368,10 @@ export interface PraxisApi {
   controls: {
     /** Panels matching the selection's candidate files (two-stamp match), with
      *  every param's value freshly resolved against the live tree. */
-    get: (root: string, q: { files: string[]; component?: string }) => Promise<ResolvedControlPanel[]>
+    get: (
+      root: string,
+      q: { files: string[]; component?: string }
+    ) => Promise<ResolvedControlPanel[]>
     /** Every stored panel for the repo (unresolved manifests). */
     list: (root: string) => Promise<ControlPanelManifest[]>
     /** Delete a panel by id ("Remove panel"). */
@@ -1508,9 +1509,6 @@ export interface PraxisApi {
       sessionKey: string,
       options?: AgentOptions
     ) => Promise<{ ok: boolean; error?: string }>
-    /** Archive Main's current transcript and restart its provider context under
-     * the same stable project session key. Project memory is not modified. */
-    clearMainContext: (root: string) => Promise<{ ok: boolean; error?: string }>
     /**
      * Resume a past ("previous agent") session by its history record id — requires
      * the record to carry a Claude `sdkSessionId` (else `ok:false`). Starts a live
@@ -1564,12 +1562,21 @@ export interface PraxisApi {
       parentSessionKey: string,
       options?: AgentOptions,
       origin?: BackgroundSpawnOrigin
-    ) => Promise<{ ok: boolean; spawnId?: string; branch?: string; queued?: boolean; reason?: string }>
+    ) => Promise<{
+      ok: boolean
+      spawnId?: string
+      branch?: string
+      queued?: boolean
+      reason?: string
+    }>
     /** Cancel a running or queued background spawn (the rail row's ×). */
     spawnInterrupt: (spawnId: string) => Promise<void>
     /** F1 Phase 2 — apply a finished spawn's branch diff onto the live working tree
      *  (the dev server HMRs it). `conflict` when the patch overlapped local edits. */
-    spawnApply: (root: string, branch: string) => Promise<{ ok: boolean; conflict?: boolean; error?: string }>
+    spawnApply: (
+      root: string,
+      branch: string
+    ) => Promise<{ ok: boolean; conflict?: boolean; error?: string }>
     /** F1 Phase 2 — delete a finished spawn's branch (Discard). */
     spawnDiscard: (root: string, branch: string) => Promise<{ ok: boolean }>
     /** F1 Phase 2 — push a finished spawn's branch + open a PR from it. */
@@ -1583,7 +1590,12 @@ export interface PraxisApi {
      *  with both sides 3-way merged; `conflicted` lists the files with real overlap and
      *  `prompt` is the resolution turn the renderer should `send`. An empty `conflicted`
      *  means the sides merged cleanly and were already applied (no turn to run). */
-    resolveConflict: () => Promise<{ ok: boolean; conflicted: string[]; prompt?: string; error?: string }>
+    resolveConflict: () => Promise<{
+      ok: boolean
+      conflicted: string[]
+      prompt?: string
+      error?: string
+    }>
     /** v9 conflict card — "Discard changes" on the ACTIVE parked chat (drop its work). */
     discardConflict: () => Promise<{ ok: boolean }>
     onEvent: (cb: (event: AgentEvent) => void) => () => void
@@ -1623,15 +1635,12 @@ export interface PraxisApi {
   /** Persisted agent-session history ("previous agents") — v5-D. */
   sessions: {
     /** Past sessions for a project, newest first. Excludes the live session and
-     *  the current Main slot (that's restored in place, not listed as History). */
+     *  the current-chat slot (that's restored in place, not listed as History). */
     list: (root: string) => Promise<SessionRecord[]>
     get: (id: string) => Promise<SessionRecord | null>
     /** Rename a past session (rail inline rename). `ok:false` for an unknown
      *  record or an empty name. */
-    rename: (
-      id: string,
-      title: string
-    ) => Promise<{ ok: boolean; title?: string; error?: string }>
+    rename: (id: string, title: string) => Promise<{ ok: boolean; title?: string; error?: string }>
     remove: (id: string) => Promise<void>
   }
   /** In-app feedback → a GitHub issue on Praxis's own repo (LKM-27). */

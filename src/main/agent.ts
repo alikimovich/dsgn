@@ -127,7 +127,7 @@ const contextWithMemory = (
  */
 
 // v5 (extended v9): one or more persistent sessions per open project, keyed by
-// `sessionKey` — `projectKey` itself for the project's default/live chat, and
+// `sessionKey` — `projectKey` itself for the first live chat, and
 // `` `${projectKey}#${sdkSessionId or a generated id}` `` for additional chats
 // started via `agent:new-chat` or past sessions revived via `agent:resume-session`.
 // Only the ACTIVE session (across the whole app, at most one at a time — the one
@@ -146,11 +146,10 @@ let activeKey: string | null = null
 const activeSession = (): ProviderSession | null =>
   activeKey ? (sessions.get(activeKey) ?? null) : null
 // Per-project memory of which of ITS OWN sessionKeys was last active — so
-// switching back to a project (agent:set-active) restores whichever chat the
-// user was last looking at instead of always resetting to the default session.
-// Untouched by projects that never open a second chat: `get(key) === key` then.
+// switching back to a project (agent:set-active) restores whichever peer chat the
+// user was last looking at. Untouched by projects with only one chat.
 const activeSessionKeyByProject = new Map<string, string>()
-/** All live sessionKeys belonging to a project (its default + any extra/resumed chats). */
+/** All live sessionKeys belonging to a project. */
 const sessionKeysForProject = (key: string): string[] =>
   [...sessions.keys()].filter((k) => k === key || k.startsWith(`${key}#`))
 // The project the renderer LAST asked to make active (via open-project or
@@ -291,10 +290,13 @@ const cleanTitle = (t: unknown): string =>
   typeof t === 'string' ? t.replace(/\s+/g, ' ').trim().slice(0, 120) : ''
 
 /** Tear down a session: stop it emitting, deny its prompts, provider teardown,
- * then persist it. `main` keeps it as the project's current Main thread (restored
+ * then persist it. `current` keeps it as the project's last-active chat (restored
  * in place on the next open); `history` archives it as a previous agent; `none`
  * skips disk (the conversation is being transferred onto a replacement session). */
-function closeSession(s: ProviderSession, persist: 'main' | 'history' | 'none' = 'history'): void {
+function closeSession(
+  s: ProviderSession,
+  persist: 'current' | 'history' | 'none' = 'history'
+): void {
   s.dispose()
   ;[...s.pending.keys()].forEach((id) => resolvePending(s, id, 'deny'))
   // Release any unanswered questions so their SDK callbacks unblock (dismiss).
@@ -308,8 +310,8 @@ function closeSession(s: ProviderSession, persist: 'main' | 'history' | 'none' =
     if (persist === 'none') return
     if (s.record.transcript.some((t) => t.role === 'user')) {
       s.record.endedAt = Date.now()
-      if (persist === 'main') {
-        store().saveMain(s.record)
+      if (persist === 'current') {
+        store().saveCurrent(s.record)
       } else {
         delete s.record.slot
         store().save(s.record)
@@ -575,21 +577,26 @@ export function registerAgentIpc(
     const prior = opening.get(key)
     const run = (async (): Promise<OpenProjectResult> => {
       if (prior) await prior.catch(() => {})
-      // Replacing a live Main persists it as the current thread so this open (or
-      // a later relaunch) can restore it, instead of dumping it into History.
-      const existing = sessions.get(key)
-      if (existing) {
-        const terminal = runningKeys.has(key) ? 'failed' : 'success'
-        closeSession(existing, 'main')
-        sessions.delete(key)
-        memoryRevisionBySession.delete(key)
-        runningKeys.delete(key)
-        // Merge + tear down the replaced chat's worktree BEFORE forking the new one,
-        // so the fresh worktree's captureBase includes the old chat's merged output.
-        await releaseChat(key, terminal)
+      // Reopening a live project replaces all of its peer chats. Preserve whichever
+      // one was last active as the current continuation; the others become History.
+      // Tear every worktree down before forking the replacement so its captureBase
+      // includes all safely landed output.
+      const existingKeys = sessionKeysForProject(key)
+      const currentKey = activeSessionKeyByProject.get(key) ?? existingKeys[0]
+      for (const sessionKey of existingKeys) {
+        const existing = sessions.get(sessionKey)
+        if (!existing) continue
+        const terminal = runningKeys.has(sessionKey) ? 'failed' : 'success'
+        closeSession(existing, sessionKey === currentKey ? 'current' : 'history')
+        sessions.delete(sessionKey)
+        memoryRevisionBySession.delete(sessionKey)
+        runningKeys.delete(sessionKey)
+        await releaseChat(sessionKey, terminal)
       }
-      const priorMain = store().currentMain(key)
-      const resumeSessionId = priorMain?.sdkSessionId
+      activeSessionKeyByProject.delete(key)
+      if (activeKey && (activeKey === key || activeKey.startsWith(`${key}#`))) activeKey = null
+      const priorCurrent = store().current(key)
+      const resumeSessionId = priorCurrent?.sdkSessionId
       // Isolated chats run in a private `praxis/chat-<id>` worktree (repo roots only);
       // isolatedCwd returns the live root otherwise. adoptSession re-stamps the record
       // back to the live project so history/reattach see it under the real root.
@@ -616,9 +623,9 @@ export function registerAgentIpc(
         s = await start()
       }
       adoptSession(key, s.record, root)
-      if (priorMain) seedFromRecord(s.record, priorMain, { reuseId: true })
+      if (priorCurrent) seedFromRecord(s.record, priorCurrent, { reuseId: true })
       s.record.endedAt = null
-      if (priorMain?.title) s.emit({ type: 'title', title: priorMain.title })
+      if (priorCurrent?.title) s.emit({ type: 'title', title: priorCurrent.title })
       sessions.set(key, s)
       // Only claim the active slot if the renderer still wants this project active.
       // A later open/set-active for a different project moved `intendedKey` on, and
@@ -668,16 +675,17 @@ export function registerAgentIpc(
 
   // Close a project's session(s) (renderer single-active teardown; the rail uses
   // this when a project is closed, not merely switched away from). Tears down
-  // EVERY sessionKey belonging to this project — its default chat plus any
-  // additional/resumed ones (v9) — so closing a project never leaks a live
-  // subprocess the renderer no longer shows anywhere.
+  // EVERY sessionKey belonging to this project, so closing a project never leaks
+  // a live subprocess the renderer no longer shows anywhere.
   ipcMain.handle('agent:close-project', async (_e, root: string) => {
     const key = projectKey(root)
-    for (const sk of sessionKeysForProject(key)) {
+    const projectSessionKeys = sessionKeysForProject(key)
+    const currentSessionKey = activeSessionKeyByProject.get(key) ?? projectSessionKeys[0]
+    for (const sk of projectSessionKeys) {
       const s = sessions.get(sk)
       if (s) {
         const terminal = runningKeys.has(sk) ? 'failed' : 'success'
-        closeSession(s, sk === key ? 'main' : 'history')
+        closeSession(s, sk === currentSessionKey ? 'current' : 'history')
         sessions.delete(sk)
         memoryRevisionBySession.delete(sk)
         runningKeys.delete(sk)
@@ -699,8 +707,8 @@ export function registerAgentIpc(
   // Switch the active project to an already-open (warm) session, without
   // recreating it — used by the rail when switching between open projects.
   // Without `sessionKey`, restores whichever of the project's OWN sessionKeys
-  // (default, or an additional/resumed chat) was last active for it, defaulting
-  // to the plain project key the first time. With `sessionKey` (v9 multi-chat
+  // was last active for it, defaulting to its first live chat. With `sessionKey`
+  // (v9 multi-chat
   // switcher), selects that SPECIFIC one of the project's already-live sessions —
   // a no-op if it isn't actually live (e.g. it was closed elsewhere meanwhile).
   ipcMain.handle('agent:set-active', async (_e, root: string, sessionKey?: string) => {
@@ -714,7 +722,7 @@ export function registerAgentIpc(
         ? sessionKey
         : remembered && sessions.has(remembered)
           ? remembered
-          : key
+          : (sessionKeysForProject(key)[0] ?? key)
     if (sessions.has(target)) {
       activeKey = target
       activeSessionKeyByProject.set(key, target)
@@ -734,7 +742,7 @@ export function registerAgentIpc(
       options: AgentOptions = {}
     ): Promise<{ ok: boolean; sessionKey?: string; error?: string }> => {
       const key = projectKey(root)
-      if (!sessions.has(key)) {
+      if (sessionKeysForProject(key).length === 0) {
         return { ok: false, error: 'Open the project before starting another chat.' }
       }
       intendedKey = key
@@ -774,7 +782,10 @@ export function registerAgentIpc(
     root: string,
     sessionKey: string,
     options: AgentOptions = {},
-    how: { persist: 'main' | 'history' | 'none'; seed: boolean } = { persist: 'none', seed: true }
+    how: { persist: 'current' | 'history' | 'none'; seed: boolean } = {
+      persist: 'none',
+      seed: true
+    }
   ): Promise<{ ok: boolean; error?: string }> => {
     const key = projectKey(root)
     if (!sessionKeysForProject(key).includes(sessionKey)) {
@@ -821,31 +832,6 @@ export function registerAgentIpc(
       sessionKey: string,
       options: AgentOptions = {}
     ): Promise<{ ok: boolean; error?: string }> => restartChatSession(root, sessionKey, options)
-  )
-
-  // Main is a stable project slot, not an infinitely growing provider thread.
-  // Clearing archives its current transcript through closeSession(), then starts
-  // a fresh provider context under the SAME projectKey with the same model/posture.
-  // Project memory is loaded again by restartChatSession and remains untouched.
-  ipcMain.handle(
-    'agent:clear-main-context',
-    async (_e, root: string): Promise<{ ok: boolean; error?: string }> => {
-      const key = projectKey(root)
-      const session = sessions.get(key)
-      if (!session) return { ok: false, error: 'The Main chat is not open.' }
-      if (runningKeys.has(key)) {
-        return { ok: false, error: 'Wait for Main to finish before clearing its context.' }
-      }
-      if (isolationSnapshot(key)?.state === 'parked') {
-        return { ok: false, error: 'Resolve or discard Main’s conflict before clearing context.' }
-      }
-      return restartChatSession(
-        root,
-        key,
-        { ...session.options },
-        { persist: 'history', seed: false }
-      )
-    }
   )
 
   // v9 resume — hand a past ("previous agent") SessionRecord back to a LIVE SDK
@@ -933,17 +919,17 @@ export function registerAgentIpc(
       const s = sessions.get(sessionKey)
       if (s) {
         const terminal = runningKeys.has(sessionKey) ? 'failed' : 'success'
-        closeSession(s, sessionKey === key ? 'main' : 'history')
+        closeSession(s, 'history')
         sessions.delete(sessionKey)
         memoryRevisionBySession.delete(sessionKey)
         runningKeys.delete(sessionKey)
         void releaseChat(sessionKey, terminal) // running partial work parks; idle work tears down
       }
       const remaining = sessionKeysForProject(key)
-      // Prefer the project's default chat as the survivor, else the first remaining.
+      // Every chat is a peer; keep the first remaining session as the fallback.
       let nextActive = activeSessionKeyByProject.get(key) ?? null
       if (!nextActive || nextActive === sessionKey || !sessions.has(nextActive)) {
-        nextActive = remaining.includes(key) ? key : (remaining[0] ?? null)
+        nextActive = remaining[0] ?? null
         if (nextActive) activeSessionKeyByProject.set(key, nextActive)
         else activeSessionKeyByProject.delete(key)
       }
@@ -980,7 +966,10 @@ export function registerAgentIpc(
 
   // Does this project still have a live session? (LRU eviction can suspend a
   // backgrounded project's session; the renderer reopens it on switch-back.)
-  ipcMain.handle('agent:is-open', (_e, root: string) => sessions.has(projectKey(root)))
+  ipcMain.handle(
+    'agent:is-open',
+    (_e, root: string) => sessionKeysForProject(projectKey(root)).length > 0
+  )
 
   ipcMain.handle('agent:set-model', async (_e, model: string) => {
     const session = activeSession()
@@ -1293,7 +1282,7 @@ export function registerAgentIpc(
   ipcMain.handle('sessions:list', (_e, root: string) =>
     store()
       .list(projectKey(root))
-      .filter((r) => r.slot !== 'main')
+      .filter((r) => r.slot !== 'current' && r.slot !== 'main')
   )
   ipcMain.handle('sessions:get', (_e, id: string) => store().get(id))
   ipcMain.handle('sessions:rename', (_e, id: string, title: string) => {
@@ -1383,8 +1372,16 @@ export function registerAgentIpc(
 
   // Don't leave any backend subprocess running after praxis quits.
   app.on('before-quit', () => {
+    const currentByProject = new Map(activeSessionKeyByProject)
+    for (const sessionKey of sessions.keys()) {
+      const project = sessions.get(sessionKey)?.record.projectKey
+      if (project && !currentByProject.has(project)) currentByProject.set(project, sessionKey)
+    }
     for (const [sessionKey, s] of sessions) {
-      closeSession(s, sessionKey === s.record.projectKey ? 'main' : 'history')
+      closeSession(
+        s,
+        sessionKey === currentByProject.get(s.record.projectKey) ? 'current' : 'history'
+      )
     }
     sessions.clear()
     memoryRevisionBySession.clear()

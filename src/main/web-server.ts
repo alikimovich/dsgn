@@ -54,7 +54,6 @@ const ROOT_ARGUMENTS: Record<string, number | 'options'> = {
   'agent:is-open': 0,
   'agent:new-chat': 0,
   'agent:restart-chat': 0,
-  'agent:clear-main-context': 0,
   'agent:resume-session': 0,
   'agent:close-chat': 0,
   'agent:tag-session': 0,

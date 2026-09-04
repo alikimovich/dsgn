@@ -13,12 +13,12 @@ import type { SessionRecord } from '../shared/api'
  */
 export interface SessionStore {
   save: (rec: SessionRecord) => void
-  /** Persist this as the project's current Main thread, replacing any previous
-   *  Main slot so a relaunch restores one conversation rather than stacking them. */
-  saveMain: (rec: SessionRecord) => void
+  /** Persist this as the project's last-active chat, replacing the previous
+   *  current slot so a relaunch restores one conversation rather than stacking them. */
+  saveCurrent: (rec: SessionRecord) => void
   list: (projectKey: string) => SessionRecord[]
-  /** Newest `slot: 'main'` record for a project, if any. */
-  currentMain: (projectKey: string) => SessionRecord | null
+  /** Current record for a project, including the legacy `slot: 'main'` shape. */
+  current: (projectKey: string) => SessionRecord | null
   get: (id: string) => SessionRecord | null
   remove: (id: string) => void
 }
@@ -26,6 +26,7 @@ export interface SessionStore {
 const MAX_PER_PROJECT = 50
 // Reject absurd ids defensively — the id becomes a filename.
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/
+const isCurrent = (rec: SessionRecord): boolean => rec.slot === 'current' || rec.slot === 'main'
 
 export function createSessionStore(baseDir: string): SessionStore {
   const dir = join(baseDir, 'sessions')
@@ -59,17 +60,17 @@ export function createSessionStore(baseDir: string): SessionStore {
     ensureDir()
     writeFileSync(fileFor(rec.id), JSON.stringify(rec), 'utf8')
     // Prune the oldest History records beyond the per-project cap. The current
-    // Main slot is the live thread, not History — never drop it to make room.
+    // slot is not History — never drop it to make room.
     const history = readAll()
-      .filter((r) => r.projectKey === rec.projectKey && r.slot !== 'main')
+      .filter((r) => r.projectKey === rec.projectKey && !isCurrent(r))
       .sort((a, b) => b.startedAt - a.startedAt)
     for (const stale of history.slice(MAX_PER_PROJECT)) remove(stale.id)
   }
 
-  const saveMain = (rec: SessionRecord): void => {
-    rec.slot = 'main'
+  const saveCurrent = (rec: SessionRecord): void => {
+    rec.slot = 'current'
     for (const old of readAll().filter(
-      (r) => r.projectKey === rec.projectKey && r.slot === 'main' && r.id !== rec.id
+      (r) => r.projectKey === rec.projectKey && isCurrent(r) && r.id !== rec.id
     )) {
       remove(old.id)
     }
@@ -81,8 +82,8 @@ export function createSessionStore(baseDir: string): SessionStore {
       .filter((r) => r.projectKey === projectKey)
       .sort((a, b) => b.startedAt - a.startedAt)
 
-  const currentMain = (projectKey: string): SessionRecord | null =>
-    list(projectKey).find((r) => r.slot === 'main') ?? null
+  const current = (projectKey: string): SessionRecord | null =>
+    list(projectKey).find(isCurrent) ?? null
 
   const get = (id: string): SessionRecord | null => {
     if (!SAFE_ID.test(id)) return null
@@ -102,5 +103,5 @@ export function createSessionStore(baseDir: string): SessionStore {
     }
   }
 
-  return { save, saveMain, list, currentMain, get, remove }
+  return { save, saveCurrent, list, current, get, remove }
 }

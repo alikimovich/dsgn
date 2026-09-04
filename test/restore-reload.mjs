@@ -11,7 +11,7 @@
  *   A. messagesFromTranscript + hydrate: seeds a slice, honors the only-if-empty
  *      guard, and (isRunning) opens a streaming message that continuing deltas
  *      append to — no double render.
- *   B. Reattach: a live main session + persisted workspace, hard-reload the
+ *   B. Reattach: a live chat + persisted workspace, hard-reload the
  *      renderer, and assert the project + its chat transcript come back.
  *   C. Resilience: a persisted-but-DEAD workspace (nothing live in main, no
  *      launchSpec) stays on Welcome instead of wedging.
@@ -181,13 +181,13 @@ try {
   const historyAfterReopen = await win.evaluate((f) => window.api.sessions.list(f), fixture)
   assert(
     reopened === 'hello from before the reload',
-    `reopen restores Main's transcript, got "${reopened}"`
+    `reopen restores the current chat's transcript, got "${reopened}"`
   )
   assert(
     !historyAfterReopen.some((r) =>
       r.transcript.some((t) => t.text === 'hello from before the reload')
     ),
-    'restored Main must not also appear as a History row'
+    'restored current chat must not also appear as a History row'
   )
 
   // ── C. A persisted-but-dead workspace must not wedge the app ─────────────────
@@ -223,7 +223,7 @@ try {
   assert(dead === 0, `persisted-but-dead workspace stays on Welcome, got ${dead} project(s)`)
 
   console.log(
-    'RESTORE-RELOAD OK — seed guard + streaming tail, live reattach seeds chat, Main survives close/open, dead workspace no-wedge'
+    'RESTORE-RELOAD OK — seed guard + streaming tail, live reattach, current chat survives close/open, dead workspace no-wedge'
   )
 } catch (err) {
   console.error('RESTORE-RELOAD FAILED:', err?.message ?? err)

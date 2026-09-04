@@ -10,6 +10,15 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Flat peer chats (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Remove the Main/secondary hierarchy.** Every live chat now uses its own
+      title, renders in the same newest-first list, and has the same rename and
+      close actions. The Main-only context reset was removed; a fresh context is
+      simply a new peer chat. When sessions stop, relaunch continuity follows the
+      last-active chat instead of privileging the project's first-created key.
+      Legacy `slot: 'main'` records remain readable and migrate to `slot: 'current'`.
+
 ## Browser and hosted Praxis (2026-09-03, user-requested) — IN PROGRESS
 
 - [x] **Write the architecture plan.** ✅ 2026-09-03 — `docs/BROWSER.md` covers a
@@ -100,7 +109,7 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       logged recursively. Other stream errors still surface.
       `test/terminal-streams.mjs` covers the classifier and guard behavior.
 
-## Default model + Main surviving reload (2026-08-18, user-requested) — SHIPPED
+## Default model + Main surviving reload (2026-08-18, user-requested) — SUPERSEDED
 
 - [x] **New chats follow last-used, or a Settings default.** ✅ 2026-08-18 —
       Claude is no longer hardcoded as the only fallback. `preferred-model.ts`
@@ -183,7 +192,7 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       206/`Content-Range` path with a PNG, but nothing exercises a real `<video>`
       (seeking, `video/quicktime` on a .mov). Needs a checked-in seconds-long clip.
 
-## Main chat, child agents, and project memory (2026-08-08)
+## Main chat, child agents, and project memory (2026-08-08) — SUPERSEDED
 
 - [x] **Make Main a stable, visible project role.** ✅ 2026-08-08 — Main is pinned
       first, cannot be closed like a secondary, and History is a separate rail section.

@@ -461,8 +461,8 @@ try {
     session.setChatAgentSettings({ provider: 'codex', model: 'default', effort: 'high' })
     return { key, newer }
   })
-  // Main is a permanent first row, and secondary chats remain visible even before
-  // their first message because they already own provider context + a worktree.
+  // Peer chats remain visible even before their first message because they already
+  // own provider context + a worktree.
   await win.waitForFunction(() => document.querySelectorAll('.rail__chat').length === 2, null, {
     timeout: 5000
   })
@@ -488,8 +488,8 @@ try {
     window.__praxisWorkspace.getState().projects.find((p) => p.key === key)?.chatSettings?.[newer]?.model,
   perChat)
   if (changedNew !== codexValue) throw new Error(`new chat model was not stored: ${changedNew}`)
-  // Main stays first; the secondary chat follows it.
-  await win.locator('.rail__chat').nth(0).click()
+  // Chats render newest first; switch to the older peer and back.
+  await win.locator('.rail__chat').nth(1).click()
   await win.waitForFunction(
     () => window.__praxisSession.getState().model === 'sonnet',
     null,
@@ -502,7 +502,7 @@ try {
   if (oldPicker.provider !== 'claude' || oldPicker.model !== 'sonnet') {
     throw new Error(`old chat picker leaked the new chat model: ${JSON.stringify(oldPicker)}`)
   }
-  await win.locator('.rail__chat').nth(1).click()
+  await win.locator('.rail__chat').nth(0).click()
   await win.waitForFunction(
     (expected) => window.__praxisSession.getState().model === expected,
     codexValue,

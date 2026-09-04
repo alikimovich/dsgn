@@ -2,6 +2,31 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Chats are peers; Main/secondary hierarchy removed
+
+Removed the special Main role from the product model. Every live chat now renders
+newest-first under its generated or user-edited title and exposes the same rename
+and close actions. The first-created session keeps the plain project key as an
+internal transport identity only; it no longer receives a pinned label, protected
+close behavior, or special empty-chat handling. Background agents still nest under
+the exact peer chat that launched them.
+
+Project memory is now only shared durable context; its Main-only reset panel and IPC
+were removed. Starting a peer chat is the single way to get a fresh model context.
+When a project's sessions stop, the last-active peer becomes its relaunch
+continuation and the other stopped peers enter History. Persistence now writes
+`slot: 'current'`, while accepting legacy `slot: 'main'` records and replacing them
+on the next save. Reopening also collapses stale renderer session keys onto the one
+restored continuation and carries over that chat's model settings.
+
+Updated the rail, persistence, memory, and model-switching regressions plus the user
+documentation. Verified the production build, all three TypeScript projects,
+changed test-file syntax, session-store/chat-settings/preferred-model/docs-link unit
+tests, and the full unit tier at 58/60. Its two failures were sandbox restrictions on
+binding a loopback port and Unix socket; all other unit tests passed. Focused Electron
+UI launch was unavailable because the host rejected GUI execution after reaching its
+execution-usage limit, so those updated flows remain to be rerun when it resets.
+
 ## 2026-09-04 — Secure remote-browser access through Tailscale Serve
 
 Added `praxis serve <repo> --remote`, the first usable mode 2 slice. Praxis keeps

@@ -44,8 +44,7 @@ interface Props {
  * then the chat name — still flush at the project name's indent — then whatever
  * trailing meta the caller passes. The hover-revealed rename pencil and close ×
  * float OVER that meta rather than sitting in the row's flow, so every row —
- * including the ones with no actions at all (Main, "Show N more") — ends its
- * meta on the same trailing edge.
+ * ends its meta on the same trailing edge.
  *
  * Renaming happens in place: the pencil swaps the row for an input seeded with the
  * current name. Enter/blur commits, Escape reverts. The caller owns persistence

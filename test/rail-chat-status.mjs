@@ -113,7 +113,7 @@ try {
     { timeout: 3000 }
   )
 
-  // Main is pinned first; secondary chats render newest-first. History is separate.
+  // All live chats are peers and render newest-first. History is separate.
   const seen = await win.evaluate(() =>
     [...document.querySelectorAll('.rail__chats > .rail__chat-item')].map((li) => ({
       name: li.querySelector('.rail__chat-name')?.textContent ?? '',
@@ -124,9 +124,9 @@ try {
     }))
   )
   const want = [
-    ['Main', 'idle'],
     ['Thinking chat', 'working'],
-    ['Finished chat', 'done']
+    ['Finished chat', 'done'],
+    ['Stale chat', 'idle']
   ]
   for (const [i, [name, status]] of want.entries()) {
     if (seen[i]?.name !== name || seen[i]?.status !== status)
@@ -198,9 +198,8 @@ try {
       throw new Error(`rail label left ${left} ≠ project name left ${geom.projectNameLeft}`)
   }
 
-  // Every chat row's trailing meta ends on ONE line, whether or not the row has
-  // hover actions: Main has neither pencil nor ×, the others have both, and the
-  // buttons overlay the meta instead of shortening it.
+  // Every chat row's trailing meta ends on one line; peer rows all have the same
+  // actions, which overlay the meta instead of shortening it.
   const metaRights = await win.evaluate(() =>
     [
       ...document.querySelectorAll(
@@ -211,7 +210,8 @@ try {
       .filter(Boolean)
       .map((el) => el.getBoundingClientRect().right)
   )
-  if (metaRights.length < 3) throw new Error(`expected several meta chips, got ${metaRights.length}`)
+  if (metaRights.length < 3)
+    throw new Error(`expected several meta chips, got ${metaRights.length}`)
   for (const right of metaRights) {
     if (Math.abs(right - metaRights[0]) > 0.5)
       throw new Error(`chat meta right edge ${right} ≠ ${metaRights[0]}`)
@@ -243,11 +243,11 @@ try {
     { timeout: 3000 }
   )
   await win.screenshot({ path: join(artifacts, '20-rail-chat-hover.png') })
-  // Main has no actions at all, so hovering it must NOT hide its model label.
+  // Every peer chat has both actions.
   await win.evaluate(() => {
-    const li = document.querySelector('.rail__chats > .rail__chat-item')
-    if (li.classList.contains('rail__chat-item--actions'))
-      throw new Error('Main should carry no row actions')
+    const rows = [...document.querySelectorAll('.rail__chats > .rail__chat-item')]
+    if (rows.some((li) => !li.classList.contains('rail__chat-item--actions')))
+      throw new Error('every live chat should carry the same row actions')
   })
 
   // Opening a finished chat clears its green dot — reading it IS the review.
@@ -259,7 +259,7 @@ try {
     timeout: 3000
   })
 
-  // Main is a role and cannot be renamed. Rename the first secondary chat instead.
+  // Any peer chat can be renamed.
   await win.evaluate(() => {
     document.querySelector('.rail__chats .rail__chat-rename').click()
   })

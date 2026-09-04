@@ -87,7 +87,7 @@ try {
   if (folded.list) throw new Error('history list should be folded away by default')
   if (!folded.text?.includes('9')) throw new Error(`folded heading lost its count: ${folded.text}`)
 
-  // Unfold → Main remains visible; History is capped to 3 records + the toggle row.
+  // Unfold → live chats remain visible; History is capped to 3 records + the toggle row.
   await clickHeading()
   await win.waitForFunction(
     () => document.querySelectorAll('.rail__history .rail__chat-item').length === 4,

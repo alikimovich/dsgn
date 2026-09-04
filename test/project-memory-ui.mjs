@@ -32,7 +32,7 @@ try {
   await win.waitForSelector('[aria-label$="project memory"]', { timeout: 10_000 })
 
   const decision =
-    '# Decisions\n\n- Main lands on praxis/master.\n- Secondary chats use detached worktrees.'
+    '# Decisions\n\n- Chats land on praxis/master.\n- Every chat uses a detached worktree.'
   await win.fill('[aria-label$="project memory"]', decision)
   await win.click('button:has-text("Save memory")')
   await win.waitForFunction(() => document.body.textContent.includes('Project memory saved.'))
@@ -53,20 +53,11 @@ try {
   if (restored !== decision)
     throw new Error('memory did not survive closing and reopening the editor')
 
-  await win.click('button:has-text("Clear context…")')
-  await win.click('button:has-text("Clear Main context")')
-  await win.waitForFunction(
-    () => document.body.textContent.includes('Main now has a fresh context.'),
-    undefined,
-    { timeout: 15_000 }
-  )
-  const afterClear = await win.evaluate(
-    (projectRoot) => window.api.projectMemory.get(projectRoot),
-    fixture
-  )
-  if (afterClear.content !== decision) throw new Error('clearing Main changed project memory')
+  if (await win.locator('button:has-text("Clear context")').count()) {
+    throw new Error('project memory must not expose a privileged chat-context reset')
+  }
 
-  console.log('PROJECT-MEMORY-UI OK — edit, save, reopen, clear Main without memory loss')
+  console.log('PROJECT-MEMORY-UI OK — edit, save, and reopen peer-shared memory')
 } catch (error) {
   console.error('PROJECT-MEMORY-UI FAILED:', error?.message ?? error)
   process.exitCode = 1

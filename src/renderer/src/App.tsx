@@ -932,7 +932,7 @@ export default function App(): React.JSX.Element {
     const preferred = preferredChatAgentSettings()
     const existing = useWorkspace.getState().projects.find((p) => p.key === key)
     const chatSettings = existing
-      ? chatAgentSettingsFor(existing, key, preferred)
+      ? chatAgentSettingsFor(existing, existing.activeSessionKey ?? key, preferred)
       : preferred
     useSession.getState().setChatAgentSettings(chatSettings)
     const initialName = root.split('/').filter(Boolean).pop() ?? root
@@ -1087,13 +1087,13 @@ export default function App(): React.JSX.Element {
         previewKind: kind,
         branch: useSession.getState().branch,
         launchSpec: launchSpec.current,
+        sessionKeys: [projectKey(root)],
+        activeSessionKey: projectKey(root),
         // Record the posture this session was started with, keyed by its sessionKey
         // (the project key — openProject creates the default chat). Without it a
         // switch away and back re-seeded the toolbar from the DEFAULTS, which is how
         // the picker could read "Auto" for a session main was asking on.
         chatSettings: {
-          ...useWorkspace.getState().projects.find((p) => p.key === projectKey(root))
-            ?.chatSettings,
           [projectKey(root)]: chatSettings
         }
       })
@@ -1267,8 +1267,7 @@ export default function App(): React.JSX.Element {
     useAnnotations.getState().setList([])
     useAnnotations.getState().setFocused(null)
     useWorkspace.getState().activate(target.key)
-    // v9 multi-chat: restore whichever of THIS project's own sessionKeys (default,
-    // or an additional/resumed chat) was last active, not always the plain default.
+    // Restore whichever of this project's peer chats was last active.
     useChat.getState().setActiveChat(target.activeSessionKey ?? target.key)
     const chatSettings = chatAgentSettingsFor(
       target,
@@ -1294,28 +1293,35 @@ export default function App(): React.JSX.Element {
       setRetry(null)
     }
     // Reopen the agent session if it was LRU-suspended; else just re-activate it.
-    // Suspending persists Main to disk, so the reopen restores that thread (Claude
-    // resumes the SDK session; other backends at least restore the transcript).
+    // Suspending persists the last-active chat, so reopen restores that thread
+    // (Claude resumes the SDK session; other backends at least restore the transcript).
     if (await window.api.agent.isOpen(target.root)) {
       void window.api.agent.setActive(target.root, target.activeSessionKey ?? target.key)
     } else {
       try {
-        const mainSettings = chatAgentSettingsFor(
+        const currentSettings = chatAgentSettingsFor(
           target,
-          target.key,
+          target.activeSessionKey ?? target.key,
           preferredChatAgentSettings()
         )
         const opened = await window.api.agent.openProject(
           target.root,
-          agentOptionsFor(mainSettings)
+          agentOptionsFor(currentSettings)
         )
+        for (const sessionKey of target.sessionKeys ?? [target.key]) {
+          useChat.getState().clearChat(sessionKey)
+        }
         useWorkspace.getState().patchEntry(target.key, {
-          chatSettings: { ...target.chatSettings, [target.key]: mainSettings }
+          sessionKeys: [target.key],
+          activeSessionKey: target.key,
+          chatSettings: { [target.key]: currentSettings }
         })
         if (opened.transcript.length) {
           useChat.getState().hydrate(target.key, messagesFromTranscript(opened.transcript))
         }
         if (opened.title) useChat.getState().setTitle(target.key, opened.title)
+        useChat.getState().setActiveChat(target.key)
+        useSession.getState().setChatAgentSettings(currentSettings)
         useLog.getState().append(`Reopened ${target.name}'s agent (was suspended).`)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -1384,11 +1390,12 @@ export default function App(): React.JSX.Element {
   const newChatForProject = async (key: string): Promise<void> => {
     const entry = useWorkspace.getState().projects.find((p) => p.key === key)
     if (!entry) return
-    // An empty secondary chat already IS a "new chat" — switch to it instead of
-    // stacking another session, so mashing "+" can't mint unlimited empty chats.
-    // Main is a permanent role, not a reusable secondary slot.
+    // Any empty chat already IS a "new chat" — switch to it instead of stacking
+    // another session, so mashing "+" can't mint unlimited empty chats.
     const chats = useChat.getState().byKey
-    const empty = (entry.sessionKeys ?? [key]).filter((sk) => sk !== key).find(
+    const sessionKeys = entry.sessionKeys ?? [key]
+    const activeSessionKey = entry.activeSessionKey ?? sessionKeys[0]
+    const empty = [activeSessionKey, ...sessionKeys.filter((sk) => sk !== activeSessionKey)].find(
       (sk) => (chats[sk]?.messages.length ?? 0) === 0
     )
     if (empty) {
@@ -1519,7 +1526,7 @@ export default function App(): React.JSX.Element {
   // Rail chat × — close ONE of a project's live chats without closing the project.
   // Closing the project's LAST chat closes the whole project (nothing left to show),
   // so it falls through to closeProjectFromRail. Otherwise main tears down just that
-  // session and reports the survivor; we drop the slice + rewire the entry, switching
+  // session and reports a peer survivor; we drop the slice + rewire the entry, switching
   // the visible chat only when the closed one was the active chat on screen.
   const closeChatForProject = async (key: string, sessionKey: string): Promise<void> => {
     const entry = useWorkspace.getState().projects.find((p) => p.key === key)
@@ -2272,14 +2279,6 @@ export default function App(): React.JSX.Element {
         open={!!memoryTarget}
         onOpenChange={(open) => {
           if (!open) setMemoryTarget(null)
-        }}
-        onMainCleared={(root) => {
-          const key = projectKey(root)
-          const chat = useChat.getState()
-          chat.clearChat(key)
-          if (chat.activeKey === key) chat.setActiveChat(key)
-          useWorkspace.getState().patchEntry(key, { publishedMsgCount: 0 })
-          void useHistory.getState().load(root)
         }}
       />
     </div>

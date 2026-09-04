@@ -1158,7 +1158,7 @@ export const useHistory = create<HistoryState>((set) => ({
   },
   rename: async (root, id, title) => {
     const key = projectKey(root)
-    // Main normalises + validates the name, and is the only writer of the record —
+    // The main process normalises + validates the name and owns the record write —
     // adopt what it echoes back rather than the raw input.
     const res = await window.api.sessions.rename(id, title).catch(() => null)
     if (!res?.ok || !res.title) return

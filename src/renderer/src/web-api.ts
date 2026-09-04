@@ -307,7 +307,6 @@ export function installWebApi(config: WebConfig): void {
       newChat: (root, options) => invoke('agent:new-chat', root, options),
       restartChat: (root, sessionKey, options) =>
         invoke('agent:restart-chat', root, sessionKey, options),
-      clearMainContext: (root) => invoke('agent:clear-main-context', root),
       resumeSession: (root, recordId, options) =>
         invoke('agent:resume-session', root, recordId, options),
       closeChat: (root, sessionKey) => invoke('agent:close-chat', root, sessionKey),

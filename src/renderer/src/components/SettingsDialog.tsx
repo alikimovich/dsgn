@@ -153,7 +153,7 @@ export default function SettingsDialog(): React.JSX.Element {
                   </select>
                   <p className="text-xs text-muted-foreground">
                     {preferred.mode === 'fixed'
-                      ? 'New chats and a first-open Main use this model. Existing chats keep their own.'
+                      ? 'New chats use this model. Existing chats keep their own.'
                       : 'New chats follow the last model you picked in any chat.'}
                   </p>
                 </div>

@@ -27,13 +27,13 @@ interface Props {
   onCreate: () => void
   /** Open a past session for review (v5-D). */
   onReview: (rec: SessionRecord) => void
-  /** v9 multi-chat — start an ADDITIONAL live chat for this (already-open) project. */
+  /** Start another live chat for this already-open project. */
   onNewChat: (key: string) => void
   /** v9 multi-chat — switch to one of this project's already-live sessionKeys. */
   onSwitchSession: (key: string, sessionKey: string) => void
   /** v9 multi-chat — close one of this project's live chats (leaving the project open). */
   onCloseChat: (key: string, sessionKey: string) => void
-  /** Open this project's durable memory + Main-context controls. */
+  /** Open this project's durable memory. */
   onOpenMemory: (root: string, name: string) => void
 }
 
@@ -204,15 +204,10 @@ export default function Rail({
             const past = expanded
               ? (history[p.key] ?? []).filter((r) => !(anyParked && r.id.startsWith('chatpark-')))
               : []
-            // Main is a stable product role and always stays first. Secondary chats
-            // follow newest-first. Empty live chats remain visible: unlike history,
-            // they own a provider context + worktree and are actionable state.
-            const live = expanded
-              ? [
-                  ...(sessionKeys.includes(p.key) ? [p.key] : []),
-                  ...sessionKeys.filter((sk) => sk !== p.key).reverse()
-                ]
-              : []
+            // Every live chat is a peer, newest first. Empty chats remain visible:
+            // unlike history, they own a provider context + worktree and are
+            // actionable state.
+            const live = expanded ? [...sessionKeys].reverse() : []
             // Background agents are filed under the sessionKey that launched them.
             // Closing that chat while its agent still runs would otherwise drop the
             // row (and its Cancel ×) out of the rail entirely, so any agent left
@@ -317,11 +312,9 @@ export default function Rail({
                     <div className="rail__section-label">Chats</div>
                     <ul className="rail__chats" aria-label={`${p.name}'s live chats`}>
                       {live.map((sk, row) => {
-                        const main = sk === p.key
                         const isActiveChat = active && sk === (p.activeSessionKey ?? p.key)
-                        const conversationName =
+                        const name =
                           byKey[sk]?.title ?? chatTitle(firstUserText(byKey[sk]?.messages ?? []))
-                        const name = main ? 'Main' : conversationName
                         const parked = byKey[sk]?.isolation === 'parked'
                         const childAgents =
                           row === 0 ? [...(spawns[sk] ?? []), ...orphanAgents] : (spawns[sk] ?? [])
@@ -342,13 +335,11 @@ export default function Rail({
                               title={
                                 parked
                                   ? `${name} — changes couldn't be merged; open to resolve`
-                                  : main && conversationName !== 'New chat'
-                                    ? `Main — ${conversationName}`
-                                    : name
+                                  : name
                               }
                               onOpen={() => onSwitchSession(p.key, sk)}
-                              onRename={main ? undefined : (next) => renameLiveChat(sk, next)}
-                              onClose={main ? undefined : () => onCloseChat(p.key, sk)}
+                              onRename={(next) => renameLiveChat(sk, next)}
+                              onClose={() => onCloseChat(p.key, sk)}
                             >
                               {parked ? (
                                 <span

@@ -50,10 +50,7 @@ try {
   store.save(rec('s4', '/p/b', 999))
   const a = store.list('/p/a')
   ok(a.length === 3, 'list filters to project a (3)')
-  ok(
-    a[0].id === 's2' && a[1].id === 's3' && a[2].id === 's1',
-    'list sorts newest startedAt first'
-  )
+  ok(a[0].id === 's2' && a[1].id === 's3' && a[2].id === 's1', 'list sorts newest startedAt first')
   ok(store.list('/p/b').length === 1, 'project b isolated')
 
   // Remove.
@@ -68,16 +65,26 @@ try {
   ok(c[0].id === 'c59', 'newest survives prune')
   ok(!c.some((r) => r.id === 'c0'), 'oldest pruned away')
 
-  // Main slot is not History: saveMain replaces the previous Main, list still
-  // includes it (filtering is the IPC/History layer), and prune never drops it.
-  store.saveMain(rec('m1', '/p/m', 1))
-  store.saveMain(rec('m2', '/p/m', 2))
-  ok(store.get('m1') === null, 'a new Main slot replaces the previous one')
-  const main = store.currentMain('/p/m')
-  ok(main && main.id === 'm2' && main.slot === 'main', 'currentMain is the latest Main slot')
+  // The last-active chat is not History: saveCurrent replaces the prior current
+  // slot, and prune never drops it. Legacy `main` records are still readable.
+  store.saveCurrent(rec('m1', '/p/m', 1))
+  store.saveCurrent(rec('m2', '/p/m', 2))
+  ok(store.get('m1') === null, 'a new current chat replaces the previous one')
+  const current = store.current('/p/m')
+  ok(
+    current && current.id === 'm2' && current.slot === 'current',
+    'current returns the active slot'
+  )
   for (let i = 0; i < 60; i++) store.save(rec(`h${i}`, '/p/m', 3000 + i))
-  ok(store.get('m2') && store.get('m2').slot === 'main', 'prune never drops the Main slot')
-  ok(store.list('/p/m').filter((r) => r.slot !== 'main').length === 50, 'history still caps at 50')
+  ok(store.get('m2') && store.get('m2').slot === 'current', 'prune never drops current')
+  ok(
+    store.list('/p/m').filter((r) => r.slot !== 'current' && r.slot !== 'main').length === 50,
+    'history still caps at 50'
+  )
+  store.save(rec('legacy-main', '/p/legacy', 1, { slot: 'main' }))
+  ok(store.current('/p/legacy')?.id === 'legacy-main', 'legacy Main slot migrates as current')
+  store.saveCurrent(rec('legacy-current', '/p/legacy', 2))
+  ok(store.get('legacy-main') === null, 'saving current replaces a legacy Main slot')
 
   // Unsafe ids are rejected on save and ignored on get/remove (id → filename).
   let threw = false

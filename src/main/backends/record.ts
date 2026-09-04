@@ -71,8 +71,8 @@ export function createRecordCapture(root: string, projectKey: string): RecordCap
 /**
  * Copy a past record's conversation onto a freshly started live record so the
  * UI (and a later persist) keep the thread. `reuseId` keeps the same history
- * file (Main restore / in-place restart); leave it off when the source record
- * should stay in History on its own (v9 resume).
+ * file (current-chat restore / in-place restart); leave it off when the source
+ * record should stay in History on its own (v9 resume).
  */
 export function seedFromRecord(
   live: SessionRecord,
