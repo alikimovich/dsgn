@@ -586,6 +586,9 @@ export interface LayerNode {
   depth: number
   tag: string
   id: string | null
+  /** LABEL material, not the live class list: capped at 5 and stripped of
+   *  compiler style-scope markers (`s-…`/`svelte-…`/`sc-…`) — see
+   *  `isScopeClass` in `src/preview/layers.ts`. */
   classes: string[]
   source: string | null
   componentSource: string | null

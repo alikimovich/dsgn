@@ -73,6 +73,7 @@ const UNIT = [
   'token-match',
   'style-tokens',
   'layers-move',
+  'layers-labels',
   'inline-style',
   'css-values',
   'elide-url',

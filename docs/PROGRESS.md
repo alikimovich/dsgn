@@ -2,6 +2,28 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Layers rows drop compiler style-scope classes
+
+Every row in a scoped-CSS project carried the compiler's own scoping class
+(`s-p0FWuf5vgUnM`, `svelte-a43zbs`, `sc-bdVaJa`, …). It's identical on every
+element a scoped stylesheet touches, so it added a long meaningless suffix to
+each label and drowned the class that actually identifies the element.
+
+`buildLayersSnapshot` now filters them out via a new pure `isScopeClass`
+predicate in `src/preview/layers.ts`. Two deliberate choices: the filter runs
+BEFORE the existing 5-class cap (otherwise a row whose first five classes are
+scope markers would show nothing), and it's a prefix ALLOWLIST plus a
+hash-shaped-tail check rather than a "looks random" heuristic — nothing
+reliably separates a short hash from a real class name, so `s-active` and
+`css-grid` stay on the row while `s-p0FWuf5vgUnM` goes. `LayerNode.classes` was
+already label material (capped, lossy), so filtering at capture rather than in
+`LayersTree` costs no other consumer; `api.ts` says so now.
+
+`test/layers-labels.mjs` (new, unit) covers both directions of the predicate;
+the `layers-app` fixture's mapped `<li>`s gained a scope class so
+`test/layers-panel.mjs` fails if one ever leaks into a label again. Verified
+with `bun run typecheck` and the complete `bun run test` suite (119/119).
+
 ## 2026-09-02 — Create PR describes git changes instead of pasting chat
 
 PR #8 on `about-me-2026` exposed the failure clearly: Publish used every user
