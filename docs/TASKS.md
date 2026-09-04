@@ -10,6 +10,14 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Clean selection titles (2026-09-04, user-reported) — SHIPPED
+
+- [x] **Hide compiler style-scope classes everywhere selections are named.**
+      PR #223's predicate is now shared by Layers, the native preview badge and
+      `SelectedElement` payload, and the browser preview bridge. CSS selectors retain
+      raw classes; only human-facing identity is filtered. `test/select-element.mjs`
+      covers both the visible badge and renderer payload.
+
 ## Option-hover spacing measurement (2026-09-04, user-reported) — SHIPPED
 
 - [x] **Restore the unmerged Figma-style measurement overlay.** ✅ 2026-09-04 —

@@ -567,6 +567,8 @@ export interface Bounds {
 export interface SelectedElement {
   tag: string
   id: string | null
+  /** Authored display classes only; compiler-generated style-scope markers are
+   * omitted before this crosses into titles, chat context, or style panels. */
   classes: string[]
   selector: string
   source: string | null

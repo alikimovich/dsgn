@@ -15,6 +15,7 @@
  */
 import { ipcRenderer } from 'electron'
 import type { SelectedElement } from '../shared/api'
+import { isScopeClass } from '../shared/display-classes'
 import { FRAME_DATA_URI, FRAME_INSET } from '../shared/iphone-frame'
 // Channels (preview ⇄ main). The strings live in shared/preview-channels.ts —
 // main imports the very same constants, so the two ends can no longer drift.
@@ -47,7 +48,11 @@ import {
   PREVIEW_TOGGLE_SELECT as TOGGLE_SELECT,
   PREVIEW_TOOLBAR_ACTION as TOOLBAR_ACTION
 } from '../shared/preview-channels'
-import { buildLayersSnapshot, type LayerFingerprint, resolveLayerElement } from './layers'
+import {
+  buildLayersSnapshot,
+  type LayerFingerprint,
+  resolveLayerElement
+} from './layers'
 import { formatDistance, type MeasureLine, type MeasureRect, measureRects } from './measure'
 import { specifiedValues, varRefName } from './style-provenance'
 
@@ -607,12 +612,22 @@ function setText(el: Element | null, text: string): void {
   if (el && el.textContent !== text) el.textContent = text
 }
 
+/** Authored classes suitable for human-facing selection labels. Compiler scope
+ *  markers use selector internals, not identity, so omit them before the cap. */
+function displayClasses(el: Element, limit: number): string[] {
+  return typeof el.className === 'string' && el.className.trim()
+    ? el.className
+        .trim()
+        .split(/\s+/)
+        .filter((cls) => !isScopeClass(cls))
+        .slice(0, limit)
+    : []
+}
+
 function shortLabel(el: Element): string {
   const id = el.id ? `#${el.id}` : ''
-  const cls =
-    typeof el.className === 'string' && el.className.trim()
-      ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.')
-      : ''
+  const classes = displayClasses(el, 2)
+  const cls = classes.length ? `.${classes.join('.')}` : ''
   return `${el.tagName.toLowerCase()}${id}${cls}`
 }
 
@@ -810,10 +825,7 @@ function describe(el: Element): SelectedElement {
   }
   const r = el.getBoundingClientRect()
   const rawText = (el.textContent ?? '').replace(/\s+/g, ' ').trim()
-  const classes =
-    typeof el.className === 'string' && el.className.trim()
-      ? el.className.trim().split(/\s+/).slice(0, 20)
-      : []
+  const classes = displayClasses(el, 20)
   // The previewed page is only semi-trusted; cap every page-controlled field so
   // a pathological/hostile attribute can't bloat the IPC payload, store, or prompt.
   return {

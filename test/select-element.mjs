@@ -162,6 +162,14 @@ try {
   // The inspector should identify the element we clicked.
   const tag = (await win.textContent('.inspector__tag'))?.trim()
   if (tag !== 'h1#hero-title') throw new Error(`expected tag "h1#hero-title", got "${tag}"`)
+  const selectedClasses = await win.evaluate(
+    () => window.__praxisSelection.getState().selected?.classes
+  )
+  if (JSON.stringify(selectedClasses) !== JSON.stringify(['hero-title'])) {
+    throw new Error(
+      `selection payload leaked a compiler scope class: ${JSON.stringify(selectedClasses)}`
+    )
+  }
 
   await win.screenshot({ path: join(artifacts, '06-select-element.png') })
 
@@ -217,8 +225,8 @@ try {
       return badge.textContent + '|' + (size === want ? 'ok' : 'want ' + want + ', got ' + size)
     })()`)
   })
-  if (!/^h1#hero-title\d+ × \d+\|ok$/.test(badgeText)) {
-    throw new Error(`selection badge should read the tag plus its size: ${badgeText}`)
+  if (!/^h1#hero-title\.hero-title\d+ × \d+\|ok$/.test(badgeText)) {
+    throw new Error(`selection badge should show authored classes only plus its size: ${badgeText}`)
   }
 
   // The overlay lives in the preview WebContentsView, so it's absent from the

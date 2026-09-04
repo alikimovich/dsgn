@@ -2,6 +2,26 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Selection titles drop compiler style-scope classes
+
+The Layers fix in PR #223 only filtered `buildLayersSnapshot`; the preview's blue
+hover/selection badge and the `SelectedElement` IPC payload still read raw
+`className`, so the same `s-p0FWuf5vgUnM`-style suffixes leaked into selection
+titles, Inspector/composer state, chat snapshots, and prompt context.
+
+The scope-class predicate now lives in `src/shared/display-classes.ts` and is used by
+both Layers and native preview selection. Filtering happens before the existing
+display caps, while CSS selector construction keeps raw classes so targeting is not
+weakened. The browser preview bridge serializes that same shared pattern into its
+in-page selection payload, keeping native and browser behavior aligned.
+
+The selectable fixture now gives its heading a generated scope marker followed by an
+authored class. `test/select-element.mjs` proves the renderer payload contains only
+the authored class and the real native preview badge renders only that class. Verified
+with the scope-filter unit test, all three TypeScript projects, the focused Electron
+selection test, browser-mode integration, visual inspection of the native preview
+capture, and the complete `bun run test` suite (123/123).
+
 ## 2026-09-04 — Option-hover spacing measurement restored to main
 
 The completed measurement work had remained only on `agent/lkm-78` in conflicted
