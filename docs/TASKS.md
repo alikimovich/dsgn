@@ -10,6 +10,14 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Option-hover spacing measurement (2026-09-04, user-reported) — SHIPPED
+
+- [x] **Restore the unmerged Figma-style measurement overlay.** ✅ 2026-09-04 —
+      PR #224's pure geometry and preview input/rendering path are integrated into
+      main. Select an element, hold Option/Alt, and hover another to see facing-edge
+      gaps or matched-edge insets. `test/measure-distance.mjs` and
+      `test/measure-alt.mjs` cover geometry, the real gesture, cleanup, and pixels.
+
 ## Rail accordion (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Switching projects hands the open chat list over.** ✅ 2026-09-04 — the

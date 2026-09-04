@@ -2,6 +2,28 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Option-hover spacing measurement restored to main
+
+The completed measurement work had remained only on `agent/lkm-78` in conflicted
+PR #224, so released builds contained the selected-element size chip but none of the
+Option-hover measurement module or event wiring. The branch is now integrated into
+main with both test registries resolved as unions, retaining every newer main test.
+
+Select an element in the preview, then hold Option/Alt and hover another: the overlay
+draws Figma-style red distance spans and pixel labels. Separated boxes get the facing
+edge gap on each separated axis (with dashed extension guides for diagonal geometry);
+nested or intersecting boxes get matched-edge deltas, which exposes container insets.
+The pure geometry lives in `src/preview/measure.ts`; `preload.ts` owns the fixed overlay
+and clears it on Option-up, blur, scroll, mouse-out, and selection teardown.
+
+`test/measure-distance.mjs` covers gaps, diagonals, guides, containment insets, flush
+edges, and sub-pixel noise. `test/measure-alt.mjs` drives the real preview gesture,
+compares its label to live DOM geometry, verifies cleanup, and captures the native
+preview overlay for visual inspection. The value badge uses 12px/700 white text on
+`#111` (APCA Lc -107.4, pass) while the measurement geometry keeps the Figma-red
+accent. Verified with `bun run typecheck`, both focused tests, visual inspection of
+the native preview capture, and the complete `bun run test` suite (123/123).
+
 ## 2026-09-04 — Candidate integrated into main
 
 Merged the seven candidate-only commits with the seven main-only commits. The one
