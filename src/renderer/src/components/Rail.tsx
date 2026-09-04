@@ -58,10 +58,15 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
 
 /**
  * v5 left rail (Cursor-style) — the open projects, each led by a folder icon
- * (open while the project is expanded, closed otherwise). Every project owns its
- * OWN expanded/collapsed state (`chatsCollapsed`, persisted with the entry), so
- * switching projects leaves the others exactly as the user left them — the
- * chevron is the only thing that folds a project away. An expanded project shows
+ * (open while the project is expanded, closed otherwise). The list is an
+ * ACCORDION: one project shows its chats at a time and switching hands that slot
+ * over — the project you leave folds away as the one you pick unfolds
+ * (`foldOthers` in store.ts, applied on activate/open and by the chevron, which
+ * unfolds exclusively too). The fold is still real per-project state persisted
+ * with the entry, so a relaunch reopens the same one, and folding never
+ * deactivates a project: its dev server and preview stay live either way. The
+ * chat list animates open as it mounts (`.rail__project-body`), so the hand-off
+ * reads as motion instead of two lists popping. An expanded project shows
  * a flat, left-aligned list of its chats: first its live/open chats (the one on
  * screen highlighted — only the active project can have one), then its
  * **previous chats** (v5-D persisted sessions, one row per chat with a trailing
@@ -189,10 +194,10 @@ export default function Rail({
         <ul className="rail__list">
           {projects.map((p) => {
             const active = p.key === activeKey
-            // Expansion is the project's OWN state, not a side effect of being
-            // active: switching projects must not fold the outgoing one away.
-            // Collapsing only hides the list — the project (and its dev server/
-            // preview) stays live either way.
+            // Expansion is the project's own persisted state, which the store
+            // keeps to one project at a time (the accordion) — normally the
+            // active one. Folding only hides the list; the project (and its dev
+            // server/preview) stays live either way.
             const expanded = !p.chatsCollapsed
             const sessionKeys = p.sessionKeys ?? [p.key]
             // A live chat whose changes couldn't auto-merge is "parked" (v9). While one
@@ -241,9 +246,10 @@ export default function Rail({
                       The favicon rides `rail__folder` so it inherits the same
                       16px slot and the same hover cross-fade as the folder it
                       replaces; only the paint differs.
-                      It only ever folds THIS project's chat list, active or not
-                      — switching projects is the name button's job, so a fold
-                      never drags the preview along with it. */}
+                      It only ever folds a chat list — switching projects is the
+                      name button's job, so a fold never drags the preview along
+                      with it. Unfolding closes whichever project was open (the
+                      accordion); folding just closes this one. */}
                     <button
                       type="button"
                       className="rail__glyph-btn"

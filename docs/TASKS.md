@@ -10,6 +10,16 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
 > and all. So "needs a display" is no longer a reason to leave an electron-tier
 > assertion unrun anywhere below.
 
+## Rail accordion (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Switching projects hands the open chat list over.** ✅ 2026-09-04 — the
+      rail keeps exactly one project unfolded: `foldOthers` in `store.ts` runs on
+      `activate`/`openOrActivate` and on the chevron (which unfolds exclusively
+      too), so the project you leave folds as the one you pick opens instead of
+      every visited project stacking up. `.rail__project-body` animates from
+      `height: 0` to `auto` so the swap is motion, not a pop. `test/rail.mjs`.
+      See PROGRESS 2026-09-04.
+
 ## Remote publish reconciliation (2026-08-27, user-reported)
 
 - [x] **Preserve and reconcile both work-branch histories before push.** ✅
@@ -27,7 +37,6 @@ Full narrative for shipped work lives in `docs/PROGRESS.md`.
       fetched base. This removes cross-session branch-name collisions entirely;
       it needs a deliberate migration for current PR-only mode and existing open
       PRs rather than being hidden inside the rejection repair.
-
 ## Terminal shutdown errors (2026-08-24, user-reported) — SHIPPED
 
 - [x] **Stop the endless `write EIO` dialog loop after the launch terminal closes.** ✅

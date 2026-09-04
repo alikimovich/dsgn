@@ -29,6 +29,38 @@ remote that advances from a `pre-push` race, and lock release. The longer-term r
 of permanent shared work branches remains tracked in TASKS: publish unique
 `praxis/publish/<session-id>` branches from fresh `origin/<base>` snapshots. Verified:
 `bun run typecheck` and the complete `bun run test` suite (117/117) pass.
+## 2026-09-04 — The rail's project list is an accordion again (one open at a time)
+
+User-reported: switching projects should hand the open chat list over — the one
+you leave closes as the one you pick opens. Since 2026-08-07 the fold was fully
+independent per project (that change fixed the opposite bug: `expanded` used to
+mean "is the active project", so a fold reset on every switch). Independent folds
+meant every project you visited stayed unfolded, and the rail grew a stack of
+open chat lists you had to close by hand.
+
+`store.ts` now has one helper, `foldOthers(projects, key)` — unfold `key`, fold
+everything else — applied at the three places a list opens: `activate`,
+`openOrActivate`, and the chevron's `toggleChatsCollapsed`. The chevron unfolds
+exclusively too, so "at most one open" holds however you got there; folding the
+open one just closes it (nothing springs open in its place). `chatsCollapsed`
+stays real persisted per-project state, so a relaunch restores the same single
+open project, and folding still never deactivates anything — the dev server and
+preview of every open project stay live.
+
+The list also animates open now, or the swap would happen in one frame:
+`.rail__project-body` runs a `rail-unfold` keyframe from `height: 0` to
+`height: auto`, which needs `interpolate-size: allow-keywords` (set on
+`.rail__item`) since the list's real height depends on how many chats it has.
+Verified by sampling the element per frame in Electron 43: 5 → 25 → 47 → 65 →
+78 → 86 → 87px, then the animation ends. Reduced-motion drops it.
+
+`src/renderer/src/store.ts`, `src/renderer/src/components/Rail.tsx` (comments),
+`src/renderer/src/styles.css`, `test/rail.mjs` — which flips its old
+"B's chats stay listed after switching away" assertion into the accordion ones
+(switch folds the outgoing project, the chevron unfolds exclusively, folding
+reopens nothing). Verified: `bun run typecheck`, plus `rail`, `rail-collapse`,
+`rail-favicon`, `rail-chat-overflow`, `rail-chat-status`, `viewport-per-project`
+and `restore-reload` on the Electron tier.
 
 ## 2026-08-24 — Closing the launch terminal no longer causes endless error dialogs
 
