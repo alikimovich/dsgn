@@ -961,18 +961,6 @@ body.is-fullscreen .sidebar-toggle {
     text-overflow: ellipsis;
     white-space: nowrap;
 }
-.rail__model {
-    flex: 0 1 auto;
-    max-width: 66px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-muted);
-    font-size: 9px;
-    font-weight: 500;
-    opacity: 0.75;
-    transition: opacity 0.12s ease;
-}
 .rail__chat-time {
     flex: 0 0 auto;
     font-size: 11px;
@@ -1036,16 +1024,13 @@ body.is-fullscreen .sidebar-toggle {
     opacity: 1;
     pointer-events: auto;
 }
-.rail__chat-item--actions:hover .rail__model,
 .rail__chat-item--actions:hover .rail__chat-time,
 .rail__chat-item--actions:hover .rail__chat-badge {
     opacity: 0;
 }
-/* A model label (≤66px) is wider than the two buttons, so they land entirely
-   inside it. A history row's "3h" isn't — the buttons would reach ~20px into the
-   name. Padding, not width, so only the text re-ellipsises: the row's own boxes
-   don't move. */
-.rail__history .rail__chat-item--actions:hover .rail__chat-name {
+/* Make room for hover actions without permanently shortening chat titles. */
+.rail__chat-item--actions:hover .rail__chat-name,
+.rail__chat-item--actions:focus-within .rail__chat-name {
     padding-right: 24px;
 }
 .rail__chat-x,
@@ -1347,13 +1332,13 @@ body.is-fullscreen .sidebar-toggle {
     height: 100%;
 }
 
-/* Chat sits directly on the main surface (no card, no border) — the preview
-   card next to it provides the visual separation. */
+/* Chat sits directly on the main surface beside the flush preview. */
 .pane--chat {
     flex: 0 0 auto;
     display: flex;
     flex-direction: column;
     position: relative;
+    --chat-scrollbar-width: 12px;
 }
 
 /* Hidden UI (⌘. / previewbar toggle): width goes to 0 inline (App.tsx) while
@@ -1390,7 +1375,7 @@ body.is-fullscreen .sidebar-toggle {
     position: absolute;
     top: 0;
     left: 0;
-    right: 0;
+    right: var(--chat-scrollbar-width);
     height: 72px;
     z-index: 5;
     pointer-events: none;
@@ -1404,16 +1389,8 @@ body.is-fullscreen .sidebar-toggle {
     position: relative;
     flex: 1 1 auto;
     display: flex;
-    /* Equal breathing room on all open sides — the card floats top to bottom.
-       Left is 0 because the chat pane + divider normally occupy that edge. */
-    padding: 10px 10px 10px 0;
+    padding: 0;
     background: var(--bg);
-}
-
-/* With the chat hidden nothing sits to the card's left — restore the left
-   padding so the full-window preview is inset equally on both sides. */
-.panes--chat-hidden .pane--preview {
-    padding-left: 10px;
 }
 
 /* Hide-UI also collapses the rail — visually only (mirrors .rail--collapsed),
@@ -1428,30 +1405,15 @@ body.is-fullscreen .sidebar-toggle {
     transform: translateX(-100%);
     opacity: 0;
 }
-/* Fills exactly the pane's own top padding (the previewcard/previewbar below
-   it already drag on their own) — the last top-of-window gap between the
-   chat pane's strip and the previewbar's drag surface. */
-.preview-drag {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 10px;
-    -webkit-app-region: drag;
-}
-
-/* The preview card — its own surface with a header bar (branch, URL, controls)
-   and the live preview inset below (Cursor / claude.ai design-mode style). */
+/* Preview toolbar and content fill the available pane. */
 .previewcard {
     flex: 1 1 auto;
     min-width: 0;
     display: flex;
     flex-direction: column;
     background: var(--bg-subtle);
-    border: 1px solid var(--border-prominent);
-    /* Match the composer's rounded-2xl (16px) so the Ask-Praxis form and the
-       preview card round the same way (both squircled by the global rule). */
-    border-radius: 16px;
+    border: 0;
+    border-radius: 0;
     overflow: hidden;
 }
 
@@ -1489,21 +1451,20 @@ body.is-fullscreen .sidebar-toggle {
     -webkit-app-region: no-drag;
 }
 
-/* Flush — the native view fills the body edge-to-edge; its own corner radius
-   matches the card's rounded bottom (12px outer − 1px border). */
+/* Native and browser previews fill the body edge to edge. */
 .previewcard__body {
     flex: 1 1 auto;
     min-height: 0;
     /* Positioning context for the v9 code drawer (absolute, pinned to the bottom
        over the strip usePanelInset frees up under the shrunk native view). */
     position: relative;
-    border: 1px solid var(--border-prominent);
-    border-radius: 16px;
-    margin: 0 -1px -1px -1px;
+    border: 0;
+    border-top: 1px solid var(--border-prominent);
+    border-radius: 0;
+    margin: 0;
 }
 
-/* Dev-server launch failure: the body's bottom corners flatten so the error
-   bar below it becomes the card's rounded bottom edge instead of the body. */
+/* Dev-server launch failure keeps the error bar flush below the preview. */
 .previewcard__body--errored {
     border-bottom-left-radius: 0;
     border-bottom-right-radius: 0;
@@ -1624,7 +1585,16 @@ body.is-resizing {
    `scrollClassName` prop on ConversationContent, not .chat__messages. */
 .chat__scroll {
     scrollbar-gutter: stable !important;
-    scrollbar-color: var(--scroll-thumb) var(--bg);
+    scrollbar-color: auto;
+    scrollbar-width: auto;
+}
+.chat__scroll::-webkit-scrollbar {
+    width: var(--chat-scrollbar-width);
+}
+.chat__scroll::-webkit-scrollbar-thumb {
+    background: var(--scroll-thumb);
+    border: 3px solid var(--bg);
+    border-radius: 999px;
 }
 .chat__scroll::-webkit-scrollbar-track {
     background: var(--bg);
@@ -2097,6 +2067,8 @@ body.is-resizing {
     gap: 8px;
     min-height: 28px;
     margin-top: -42px;
+    /* Leave the scrollbar gutter above the fade, fully visible and clickable. */
+    margin-right: var(--chat-scrollbar-width);
     /* Bottom padding (new): now that the composer frame paints an opaque
        --card fill instead of staying transparent, the cat needs real
        clearance above it — a 0 bottom inset let the two abut with nothing

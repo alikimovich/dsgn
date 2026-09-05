@@ -3,6 +3,12 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Compact sidebar and flush preview (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Remove Chats headings and chat-row model labels.** Keep titles and actions.
+- [x] **Keep the chat scrollbar above the fades.** Reserve its gutter at both ends.
+- [x] **Use the full desktop preview pane.** Remove outer padding and rounded corners.
+
 ## Reliable rail-status regression (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Fix the recurring rail-chat-status failure.** Target Finished chat by

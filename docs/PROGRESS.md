@@ -2,6 +2,21 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Compact chat lists and flush preview
+
+Removed the per-project Chats heading and model labels from live chat and
+background-agent rows. Titles retain hover/focus room for rename/close actions.
+Desktop previews now fill the pane without outer padding, card borders, or CSS
+and native corner rounding; the mobile device frame retains its screen shape.
+The chat's top and bottom fades stop before a shared 12px scrollbar gutter, so
+the thumb remains visible and reachable through the fade area.
+
+Verified all TypeScript projects and the full unit/Electron suite (125/125).
+Inspected the preview, chat, and rail hover screenshots; a separate overflowing
+conversation check measured a 12px uncovered gutter and confirmed the thumb's
+bottom edge remains fully visible. The initial sandboxed test attempt could not
+start local services/Electron; the authorized unsandboxed run passed completely.
+
 ## 2026-09-04 — Rail-status failure diagnosed and repaired
 
 The repeatedly reported missing-row crash had two test defects. Its immediate

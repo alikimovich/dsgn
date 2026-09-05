@@ -26,12 +26,8 @@ import {
 type Rect = { left: number; top: number; width: number; height: number };
 type ViewRect = Rect & { radius: number };
 
-/** The native view rounds all four corners at this radius via setBorderRadius.
- *  Its corners are genuinely transparent, so the card behind (a DOM rounded-rect
- *  with a 1px border) shows through them — the card's border reads as a clean
- *  rounded frame around the preview, no painting/masks. 15 = the card's inner
- *  radius (16px outer − 1px border). */
-export const DESKTOP_CORNER_RADIUS = 15;
+/** Desktop previews use the entire rectangular surface. */
+export const DESKTOP_CORNER_RADIUS = 0;
 
 export default function PreviewPane(): React.JSX.Element {
   const slotRef = useRef<HTMLDivElement>(null);
@@ -99,7 +95,7 @@ export default function PreviewPane(): React.JSX.Element {
         });
         setBezel({ left: bx - r.x, top: by - r.y, width: w, height: h });
       } else {
-        // Flush inside the card body, natively rounded to the card's inner radius.
+        // Fill the desktop surface without clipping its corners.
         window.api.preview.setBounds({
           x: r.x,
           y: r.y,

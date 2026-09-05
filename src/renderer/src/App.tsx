@@ -1993,7 +1993,6 @@ export default function App(): React.JSX.Element {
             {/* Window-drag strip over the pane's own top padding — the only
                 top-of-window gap left once the rail and chat strips drag
                 (the previewbar below it already drags on its own). */}
-            <div className="preview-drag" aria-hidden="true" />
             {/* The preview lives in its own card (Cursor/claude.ai design-mode
                 style): a header bar with the branch, URL, and controls, and the
                 live preview inset below it. */}

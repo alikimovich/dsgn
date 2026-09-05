@@ -143,13 +143,15 @@ try {
         `row ${i}: expected ${name}/${status}, got ${seen[i]?.name}/${seen[i]?.status}`
       )
   }
+  if (await win.locator('.rail__model, .rail__section-label:not(.rail__section-toggle)').count())
+    throw new Error('chat lists should have no model labels or Chats heading')
   const historyName = await win.textContent('.rail__history .rail__chat-name')
   if (historyName !== 'Past chat') throw new Error(`history expected Past chat, got ${historyName}`)
   const nested = await win.evaluate(() => ({
     name: document.querySelector('.rail__agents .rail__chat-name')?.textContent,
     model: document.querySelector('.rail__agents .rail__model')?.textContent
   }))
-  if (nested.name !== 'Review mobile layout' || nested.model !== 'Claude sonnet') {
+  if (nested.name !== 'Review mobile layout' || nested.model !== undefined) {
     throw new Error(`nested agent missing or mislabeled: ${JSON.stringify(nested)}`)
   }
 
@@ -189,8 +191,6 @@ try {
         ...[...document.querySelectorAll(flat)].map(
           (li) => mid(li.querySelector('.rail__chat-name')).left
         ),
-        // Both section headings: "Chats" (plain) and "History" (the fold toggle).
-        textLeft('.rail__section-label:not(.rail__section-toggle)'),
         textLeft('.rail__section-toggle')
       ],
       projectNameLeft: mid(document.querySelector('.rail__item--active .rail__name')).left
@@ -217,7 +217,7 @@ try {
       .filter(Boolean)
       .map((el) => el.getBoundingClientRect().right)
   )
-  if (metaRights.length < 3)
+  if (metaRights.length < 1)
     throw new Error(`expected several meta chips, got ${metaRights.length}`)
   for (const right of metaRights) {
     if (Math.abs(right - metaRights[0]) > 0.5)
@@ -240,8 +240,7 @@ try {
       const cs = (sel) => getComputedStyle(li.querySelector(sel))
       return (
         cs('.rail__chat-actions').opacity === '1' &&
-        cs('.rail__chat-actions').pointerEvents === 'auto' &&
-        cs('.rail__model').opacity === '0'
+        cs('.rail__chat-actions').pointerEvents === 'auto'
       )
     },
     finishedSelector,

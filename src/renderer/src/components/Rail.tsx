@@ -3,8 +3,6 @@ import { Fragment, useEffect, useState } from 'react'
 import type { SessionRecord } from '../../../shared/api'
 import { useProjectIcons } from '../project-icons'
 import {
-  chatAgentSettingsFor,
-  chatModelLabel,
   chatTitle,
   shortAgo,
   useChat,
@@ -284,7 +282,6 @@ export default function Rail({
                 </div>
                 {expanded && (
                   <div className="rail__project-body">
-                    <div className="rail__section-label">Chats</div>
                     <ul className="rail__chats" aria-label={`${p.name}'s live chats`}>
                       {live.map((sk, row) => {
                         const isActiveChat = active && sk === (p.activeSessionKey ?? p.key)
@@ -300,7 +297,6 @@ export default function Rail({
                             : byKey[sk]?.needsReview
                               ? 'done'
                               : 'idle'
-                        const modelLabel = chatModelLabel(chatAgentSettingsFor(p, sk))
                         return (
                           <Fragment key={sk}>
                             <RailChatRow
@@ -316,16 +312,12 @@ export default function Rail({
                               onRename={(next) => renameLiveChat(sk, next)}
                               onClose={() => onCloseChat(p.key, sk)}
                             >
-                              {parked ? (
+                              {parked && (
                                 <span
                                   className="rail__chat-badge"
                                   title="Changes couldn't be merged"
                                 >
                                   conflict
-                                </span>
-                              ) : (
-                                <span className="rail__model" title={modelLabel}>
-                                  {modelLabel}
                                 </span>
                               )}
                             </RailChatRow>
@@ -344,15 +336,11 @@ export default function Rail({
                                         : agent.label
                                     }
                                     status={agent.status === 'queued' ? 'idle' : 'working'}
-                                    title={`${agent.label} — ${agent.modelLabel}`}
+                                    title={agent.label}
                                     onClose={() => void window.api.agent.spawnInterrupt(agent.id)}
                                     closeLabel="Cancel agent"
                                     closeTitle="Cancel this agent"
-                                  >
-                                    <span className="rail__model" title={agent.modelLabel}>
-                                      {agent.modelLabel}
-                                    </span>
-                                  </RailChatRow>
+                                  />
                                 ))}
                               </ul>
                             )}
