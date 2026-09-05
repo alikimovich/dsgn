@@ -489,6 +489,7 @@ try {
   })
   // "+" while an empty live chat exists reuses it (here: the already-active
   // `newer`) instead of stacking another session.
+  await win.locator('.rail__row').hover()
   await win.click('.rail__new-chat')
   const afterPlus = await win.evaluate(({ key }) => {
     const p = window.__praxisWorkspace.getState().projects.find((x) => x.key === key)

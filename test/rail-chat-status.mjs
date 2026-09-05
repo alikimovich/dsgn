@@ -145,7 +145,7 @@ try {
   }
 
   // Alignment: EVERY leading glyph in a project's block — the status dots, the
-  // "New chat" +, the History fold chevron — centres on the active project's
+  // History fold chevron — centres on the active project's
   // folder glyph, and every label starts at the project name's indent.
   const geom = await win.evaluate(() => {
     const mid = (el) => {
@@ -174,14 +174,12 @@ try {
         ...[...document.querySelectorAll(flat)].map(
           (li) => mid(li.querySelector('.rail__chat-status')).x
         ),
-        glyph('.rail__new-chat svg'),
         glyph('.rail__section-chevron')
       ],
       labelLefts: [
         ...[...document.querySelectorAll(flat)].map(
           (li) => mid(li.querySelector('.rail__chat-name')).left
         ),
-        mid(document.querySelector('.rail__new-chat span')).left,
         // Both section headings: "Chats" (plain) and "History" (the fold toggle).
         textLeft('.rail__section-label:not(.rail__section-toggle)'),
         textLeft('.rail__section-toggle')

@@ -643,7 +643,7 @@ body.is-fullscreen .sidebar-toggle {
 .rail__item {
     display: flex;
     /* Stack the project row above its previous-sessions sub-list (v5-D). The inner
-     .rail__row keeps the open/close buttons horizontal. */
+     .rail__row keeps the project name and actions horizontal. */
     flex-direction: column;
     align-items: stretch;
     border-radius: 6px;
@@ -746,30 +746,7 @@ body.is-fullscreen .sidebar-toggle {
     line-height: 16px;
     text-align: center;
 }
-.rail__close {
-    flex: 0 0 auto;
-    width: 20px;
-    height: 20px;
-    margin-right: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 4px;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.12s ease;
-}
-.rail__item:hover .rail__close,
-.rail__close:focus-visible {
-    opacity: 1;
-}
-.rail__close:hover {
-    background: var(--border);
-    color: var(--text);
-}
+
 /* Project actions (Open / New) — quiet list items that echo the project rows
    below them (no dashed CTA borders), each led by an icon. */
 .rail__action {
@@ -910,34 +887,6 @@ body.is-fullscreen .sidebar-toggle {
     padding-top: 4px;
     padding-bottom: 4px;
     font-size: 11px;
-}
-/* Project memory — an icon action on the project row, next to ×. Hover-gated the
-   same way, so the two row actions appear together and a project at rest is just
-   its folder and name. */
-.rail__memory {
-    flex: 0 0 auto;
-    width: 20px;
-    height: 20px;
-    margin-right: 2px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border: none;
-    border-radius: 4px;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    opacity: 0;
-    transition: opacity 0.12s ease;
-}
-.rail__item:hover .rail__memory,
-.rail__memory:focus-visible {
-    opacity: 0.7;
-}
-.rail__memory:hover {
-    background: var(--border);
-    color: var(--text);
-    opacity: 1;
 }
 /* An expanded project with nothing to list yet (freshly opened, or its only chat
    hasn't been sent) still renders the list — drop its margin so it doesn't leave
@@ -1148,37 +1097,6 @@ body.is-fullscreen .sidebar-toggle {
     50% {
         opacity: 1;
     }
-}
-
-/* v9 multi-chat — "New chat" starts another live chat for this project. It sits
-   under the chat list as a full-width quiet row (it appends to that list), and
-   shares the chat rows' box exactly — same full width, same 8px padding, same
-   7px gap — so its + lands on the status-dot column and its label at the names'
-   31px indent instead of a further-right line of its own. */
-.rail__new-chat {
-    width: 100%;
-    margin: 1px 0 0;
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 5px 8px;
-    border: none;
-    border-radius: 6px;
-    background: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    font: inherit;
-    font-size: 11px;
-    text-align: left;
-}
-/* 14px glyph centred in the 16px slot the status dots occupy. */
-.rail__new-chat svg {
-    flex: 0 0 auto;
-    margin: 0 1px;
-}
-.rail__new-chat:hover {
-    background: rgb(from var(--rail-text) r g b / 0.075);
-    color: var(--text);
 }
 
 /* Praxis self-update — pinned at the rail's bottom (a rail__inner sibling, not

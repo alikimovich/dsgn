@@ -27,8 +27,10 @@ try {
   await app.evaluate(({ BrowserWindow }) =>
     BrowserWindow.getAllWindows()[0].webContents.send('menu:action', 'open-project')
   )
-  await win.waitForSelector('.rail__memory', { timeout: 60_000 })
-  await win.click('.rail__memory')
+  await win.waitForSelector('.rail__project-menu', { timeout: 60_000 })
+  await win.locator('.rail__row').hover()
+  await win.click('.rail__project-menu')
+  await win.getByRole('menuitem', { name: 'Memory', exact: true }).click()
   await win.waitForSelector('[aria-label$="project memory"]', { timeout: 10_000 })
 
   const decision =
@@ -47,7 +49,9 @@ try {
 
   await win.click('button:has-text("Close")')
   await win.waitForSelector('[aria-label$="project memory"]', { state: 'detached' })
-  await win.click('.rail__memory')
+  await win.locator('.rail__row').hover()
+  await win.click('.rail__project-menu')
+  await win.getByRole('menuitem', { name: 'Memory', exact: true }).click()
   await win.waitForSelector('[aria-label$="project memory"]', { timeout: 10_000 })
   const restored = await win.inputValue('[aria-label$="project memory"]')
   if (restored !== decision)

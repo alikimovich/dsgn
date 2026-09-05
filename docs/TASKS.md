@@ -3,6 +3,12 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Project header actions (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Reveal project actions on hover.** Memory and Remove project share an
+      ellipsis menu, followed by a New chat compose icon at the header's right edge.
+      Keyboard focus reveals the controls too; touch keeps them available.
+
 ## Red measurement labels (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Match measurement value badges to their red geometry.** Value labels now

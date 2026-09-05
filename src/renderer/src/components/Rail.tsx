@@ -1,4 +1,4 @@
-import { Brain, ChevronRight, Folder, FolderOpen, MessageSquare, Plus, X } from 'lucide-react'
+import { ChevronRight, Folder, FolderOpen, MessageSquare, Plus, X } from 'lucide-react'
 import { Fragment, useEffect, useState } from 'react'
 import type { SessionRecord } from '../../../shared/api'
 import { useProjectIcons } from '../project-icons'
@@ -14,6 +14,7 @@ import {
   useUpdate,
   useWorkspace
 } from '../store'
+import RailProjectActions from './RailProjectActions'
 import RailChatRow, { type ChatStatus } from './RailChatRow'
 
 interface Props {
@@ -76,19 +77,9 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
  * hover pencil — see RailChatRow). Each chat row leads with a status dot that
  * sits in the same 16px slot the project's folder icon occupies, so dots and
  * folders share a centre line; the names stay flush-left at the project name's
- * level. Clicking a project switches; × closes; clicking a chat opens/reviews it.
- *
- * Where the per-project controls live: the project ROW carries the two things
- * that act on the project itself — the memory brain and × — both hover-only, so
- * a project at rest is just its folder and name. "New chat" is not a row glyph:
- * it's a full-width button under the chat list, because it appends to that list.
- * The previous-chats section is an accordion — its "History n" heading unfolds
- * the list (CLOSED by default, session-only state, same as "Show N more").
- *
- * Everything in a project's block shares one indent grid: the folder glyph, the
- * chat status dots, the "New chat" +, and the History chevron all centre on the
- * same 16px slot, and every label (project name, chat names, section headings)
- * starts at 31px. See the .rail__chat comment in styles.css for the arithmetic.
+ * level. Clicking a project switches; clicking a chat opens/reviews it.
+ * The project header reveals an actions menu and New chat on hover or keyboard
+ * focus. Memory and Remove project live in that menu. History stays collapsible.
  *
  * The collapse/expand toggle no longer lives here — it floats by the traffic lights
  * (see App's `.sidebar-toggle`) so it stays reachable once the rail is gone. When
@@ -232,7 +223,7 @@ export default function Rail({
             const icon = icons[p.key]
             return (
               <li key={p.key} className={`rail__item ${active ? 'rail__item--active' : ''}`}>
-                <div className="rail__row">
+                <div className="rail__row group/project">
                   <div className="rail__open" title={icon ? `${p.root} — ${icon.path}` : p.root}>
                     {/* Project glyph: the project's OWN favicon when it ships one,
                       else the Cursor-style subdued folder (open when expanded,
@@ -287,31 +278,12 @@ export default function Rail({
                       )}
                     </button>
                   </div>
-                  {/* Project memory is an ACTION on the project row (it's about the
-                      project, not about a chat), sitting where the quiet icon
-                      buttons live — hover-revealed like ×, so the row at rest is
-                      just the folder and the name. */}
-                  <button
-                    type="button"
-                    className="rail__memory"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onOpenMemory(p.root, p.name)
-                    }}
-                    aria-label={`Open project memory for ${p.name}`}
-                    title="Project memory"
-                  >
-                    <Brain className="size-3.5" aria-hidden="true" />
-                  </button>
-                  <button
-                    type="button"
-                    className="rail__close"
-                    onClick={() => onClose(p.key)}
-                    aria-label={`Close ${p.name}`}
-                    title="Close project"
-                  >
-                    <X className="size-3.5" aria-hidden="true" />
-                  </button>
+                  <RailProjectActions
+                    name={p.name}
+                    onMemory={() => onOpenMemory(p.root, p.name)}
+                    onRemove={() => onClose(p.key)}
+                    onNewChat={() => onNewChat(p.key)}
+                  />
                 </div>
                 {expanded && (
                   <div className="rail__project-body">
@@ -391,20 +363,6 @@ export default function Rail({
                         )
                       })}
                     </ul>
-
-                    {/* "New chat" reads as the last item of the chat list rather
-                        than a header glyph — it's how you ADD to the list above,
-                        so it sits directly under it. */}
-                    <button
-                      type="button"
-                      className="rail__new-chat"
-                      onClick={() => onNewChat(p.key)}
-                      aria-label={`Start another chat for ${p.name}`}
-                      title="Start another chat for this project"
-                    >
-                      <Plus className="size-3.5" aria-hidden="true" />
-                      <span>New chat</span>
-                    </button>
 
                     {past.length > 0 && (
                       <>

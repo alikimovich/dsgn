@@ -189,6 +189,30 @@ try {
     'switching back to B should unfold B and fold A'
   )
 
+  // Header actions stay quiet until hover/focus, and the menu owns project actions.
+  await itemB.locator('.rail__glyph-btn').focus()
+  await win.keyboard.press('Tab')
+  await win.evaluate(() => document.activeElement.blur())
+  await win.mouse.move(600, 100)
+  const newChat = itemB.locator('.rail__new-chat')
+  const menu = itemB.locator('.rail__project-menu')
+  await until(async () => await newChat.evaluate((el) => getComputedStyle(el).opacity === '0'),
+    'New chat should be hidden at rest')
+  await itemB.locator('.rail__row').hover()
+  await until(async () => await newChat.evaluate((el) => getComputedStyle(el).opacity === '1'),
+    'New chat should appear on project header hover')
+  const menuBox = await menu.boundingBox()
+  const newBox = await newChat.boundingBox()
+  if (newBox.x <= menuBox.x) throw new Error('New chat must be to the right of the menu')
+  await menu.click()
+  await win.getByRole('menuitem', { name: 'Memory', exact: true }).waitFor()
+  await win.getByRole('menuitem', { name: 'Remove project', exact: true }).waitFor()
+  await win.screenshot({ path: join(artifacts, '10-rail-menu.png') })
+  await win.keyboard.press('Escape')
+  await newChat.focus()
+  await until(async () => await newChat.evaluate((el) => getComputedStyle(el).opacity === '1'),
+    'Keyboard focus should reveal New chat')
+
   await win.screenshot({ path: join(artifacts, '10-rail.png') })
   console.log(
     'RAIL OK — two projects warm, switch swaps preview + per-project chat, chats fold accordion-style'

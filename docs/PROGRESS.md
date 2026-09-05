@@ -2,6 +2,23 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Hover actions in project headers
+
+Moved New chat from below the chat list to a compose icon at the right of each
+project header. An ellipsis immediately to its left opens the existing shadcn menu
+with Memory and Remove project; removal preserves the existing close-project
+behavior. The header reveals both controls on hover or keyboard focus, the menu
+trigger remains visible while open, and touch devices retain visible controls.
+Extracted the controls into RailProjectActions and removed their legacy CSS.
+
+The rail regression checks hidden/resting and hover/focus states, right-side ordering,
+and menu entries, with a captured menu inspected visually. Updated Memory's editor
+round-trip and New chat's existing interaction tests to use the new header controls,
+and removed the obsolete list-row alignment expectation. All TypeScript projects
+and the focused rail and Memory flows pass. The full suite finished at 124/125;
+only the previously documented rail-chat-status missing-row geometry assertion
+failed, while the changed rail, Memory, and chat-render flows passed.
+
 ## 2026-09-04 — Measurement values join the red geometry
 
 Replaced the measurement value badges' hard-coded black fill with the shared
