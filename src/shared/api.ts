@@ -622,8 +622,8 @@ export interface LayerFingerprint {
 }
 
 /**
- * A Layers-panel drag-to-reorder request. Both sides are identified by their
- * `data-praxis-source` stamp — main never needs the DOM path, only the
+ * A Layers-panel or native-preview drag-to-reorder request. Both sides are
+ * identified by their `data-praxis-source` stamp — main never needs the DOM path, only the
  * renderer does (to resolve rows back to elements). `sessionId` is a UUID
  * minted client-side once per drag gesture: it becomes the `commitEdit`
  * coalesce key, and deliberately never coalesces with anything else — a move
@@ -1355,6 +1355,8 @@ export interface PraxisApi {
     /** A full snapshot of the previewed page's DOM tree. Null on timeout / no
      *  preview (mirrors `styles.read`'s contract). */
     read: () => Promise<LayersSnapshot | null>
+    /** A trusted native-preview modifier drag, ready for the source move engine. */
+    onMoveRequest: (cb: (request: MoveNodeRequest) => void) => () => void
     /** Fires on a debounced structural DOM change while the watch is armed —
      *  the renderer decides whether/when to re-`read()`. */
     onChanged: (cb: () => void) => () => void

@@ -27,6 +27,7 @@ import {
   PREVIEW_CLEAR_SELECTED,
   PREVIEW_COMMENT,
   PREVIEW_COMMENT_MODE,
+  PREVIEW_MOVE_NODE,
   PREVIEW_PICKED,
   PREVIEW_PIN_CLICK,
   PREVIEW_READINESS,
@@ -463,6 +464,10 @@ export function registerPreviewIpc(host: PreviewIpcHost): void {
   })
   // Drag-to-reorder: writes real source for a same-parent sibling move;
   // anything ambiguous reports `needsAgent` instead (see move-node.ts).
+  ipcMain.on(PREVIEW_MOVE_NODE, (e, req: MoveNodeRequest) => {
+    if (!fromPreview(e)) return
+    sendToMain('layers:move-request', req)
+  })
   ipcMain.handle('layers:move', (e, root: string, req: MoveNodeRequest) => {
     if (!fromMainWindow(e)) return null
     return applyMoveNode(root, req)

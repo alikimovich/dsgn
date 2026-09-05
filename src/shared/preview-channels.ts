@@ -51,3 +51,5 @@ export const LAYERS_CHANGED = 'layers:changed' // → main (debounced mutation p
 export const LAYERS_SELECT = 'layers:select' // → preload ({path, fingerprint})
 export const LAYERS_HOVER = 'layers:hover' // → preload ({path, fingerprint} | null)
 export const LAYERS_SET_WATCH = 'layers:set-watch' // → preload (boolean)
+
+export const PREVIEW_MOVE_NODE = 'praxis:preview:move-node' // → main (MoveNodeRequest)

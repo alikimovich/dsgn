@@ -219,6 +219,7 @@ const api: PraxisApi = {
   },
   layers: {
     read: (): Promise<LayersSnapshot | null> => ipcRenderer.invoke('layers:read'),
+    onMoveRequest: on<MoveNodeRequest>('layers:move-request'),
     onChanged: on<void>('layers:changed'),
     select: (path: number[], fingerprint: LayerFingerprint): void =>
       ipcRenderer.send('layers:select', { path, fingerprint }),

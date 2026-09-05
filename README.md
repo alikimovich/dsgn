@@ -41,6 +41,11 @@ GitHub PR.
   endpoint's model catalog, and you tick which models to offer in the picker.
   Connections run on the Codex harness; the key is encrypted with the OS
   keychain and never leaves the main process.
+- **Drag to reorder in the desktop preview.** Select an element, then hold
+  Command (Control on Windows/Linux) and drag it among its siblings. An insertion
+  line shows the drop position for columns, rows, and grids; nesting stays fixed.
+  Escape or releasing the modifier cancels. Moves write source and support undo;
+  ambiguous template/data moves prepare a chat prompt.
 - **Click-to-edit.** A **Select** mode maps a clicked element to its source
   location (via the `data-praxis-source` stamp — see
   [`docs/DESIGN.md`](docs/DESIGN.md)), then edits its **props** with typed
