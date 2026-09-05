@@ -3,6 +3,11 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Chat/preview divider (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Add a border between chat and preview.** The existing resize handle is
+      a full-height 1px line using the shared border token; hiding chat removes it.
+
 ## Compact sidebar and flush preview (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Remove Chats headings and chat-row model labels.** Keep titles and actions.

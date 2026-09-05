@@ -2,6 +2,13 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Visible chat/preview separator
+
+The existing resize divider now paints a full-height 1px line with the shared
+border-prominent token. Its widened drag target stays intact, and Hide UI still
+unmounts it. Preview padding and square corners remain unchanged. Verified all
+TypeScript projects, all 125 unit/Electron tests, and the preview screenshot.
+
 ## 2026-09-04 — Compact chat lists and flush preview
 
 Removed the per-project Chats heading and model labels from live chat and

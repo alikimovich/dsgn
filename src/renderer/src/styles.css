@@ -1517,11 +1517,11 @@ body.is-fullscreen .sidebar-toggle {
     box-shadow: inset 2px 0 0 #3b82f6;
 }
 
-/* Invisible but grabbable resize handle between the chat and the preview card. */
+/* Full-height separator doubles as the chat/preview resize handle. */
 .divider {
     flex: 0 0 auto;
-    width: 0;
-    background: transparent;
+    width: 1px;
+    background: var(--border-prominent);
     position: relative;
     cursor: col-resize;
 }
