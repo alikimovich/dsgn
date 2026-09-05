@@ -3,6 +3,12 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Reliable rail-status regression (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Fix the recurring rail-chat-status failure.** Target Finished chat by
+      identity instead of its DOM child position, wait for project initialization
+      before seeding chats, and isolate the test in a temporary profile.
+
 ## Browse project chats without switching (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Project names toggle their chat lists.** Clicking the expanded project

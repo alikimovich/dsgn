@@ -2,6 +2,23 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Rail-status failure diagnosed and repaired
+
+The repeatedly reported missing-row crash had two test defects. Its immediate
+cause was positional selection: after newest-first ordering, the working chat's
+nested agent list occupies the second DOM child, so `.rail__chat-item:nth-child(2)`
+matches nothing even while all three chats are present. The hover check now targets
+Finished chat by identity and uses Playwright's locator hover.
+
+After correcting that selector, the real initialization race became visible:
+openProject mounts the rail before awaiting annotations, then writes its final
+single-session workspace snapshot, overwriting the test's synthetic chats. The test
+now starts in a disposable profile and waits for the completed workspace entry's
+URL before seeding. Status, alignment, hover, review-clearing, and rename assertions
+remain intact. This corrects the earlier logs' incomplete timing-only diagnosis.
+Verified with three consecutive focused passes, inspected hover pixels, all
+TypeScript projects, and the complete suite: 125/125 passed, zero failures.
+
 ## 2026-09-04 — Project headers browse without switching chats
 
 Project-name clicks now share the chevron's exclusive expand/collapse action.

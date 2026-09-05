@@ -13,7 +13,8 @@
  * Run with: bun run test:rail-status
  */
 
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import electronPath from 'electron'
@@ -23,18 +24,18 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const fixture = join(root, 'test', 'fixtures', 'static-app')
 const artifacts = join(root, 'test', 'artifacts')
 mkdirSync(artifacts, { recursive: true })
+const userData = mkdtempSync(join(tmpdir(), 'praxis-rail-status-'))
 
 let app
 try {
   app = await electron.launch({
     executablePath: electronPath,
     args: [join(root, 'out', 'main', 'index.js')],
-    cwd: root
+    cwd: root,
+    env: { ...process.env, PRAXIS_USER_DATA: userData }
   })
   const win = await app.firstWindow()
-  // Either the empty state (fresh userData) or an already-restored workspace —
-  // opening the fixture below makes it the active project either way.
-  await win.waitForSelector('.empty__open, .rail', { timeout: 30000 })
+  await win.waitForSelector('.empty__open', { timeout: 30000 })
   await app.evaluate(async ({ dialog }, f) => {
     dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [f] })
   }, fixture)
@@ -42,6 +43,14 @@ try {
     BrowserWindow.getAllWindows()[0].webContents.send('menu:action', 'open-project')
   )
   await win.waitForSelector('.rail__chats', { state: 'attached', timeout: 60000 })
+
+  // The rail mounts before openProject finishes loading annotations and writing
+  // its final sessionKeys snapshot. Seed only after that snapshot has a URL.
+  await win.waitForFunction(
+    (root) => window.__praxisWorkspace.getState().projects.some((p) => p.root === root && p.url),
+    fixture,
+    { timeout: 60000 }
+  )
 
   // Three live chats — one per status — plus a past chat (always stale).
   await win.evaluate((fixtureRoot) => {
@@ -220,16 +229,14 @@ try {
   // Hovering a row with actions reveals them OVER its meta (which fades out) and
   // arms them for clicks — they're pointer-events:none while hidden so an
   // invisible × can't eat a click meant for the row itself.
-  const box = await win.evaluate(() => {
-    const r = document
-      .querySelector('.rail__chats > .rail__chat-item:nth-child(2)')
-      .getBoundingClientRect()
-    return { x: r.left + 40, y: r.top + r.height / 2 }
-  })
-  await win.mouse.move(box.x, box.y)
+  // A nested agent list is a sibling between the first and second chat rows,
+  // so :nth-child(2) would select that list rather than Finished chat.
+  const finishedSelector =
+    '.rail__chats > .rail__chat-item:has(> .rail__chat[title="Finished chat"])'
+  await win.locator(finishedSelector).hover({ position: { x: 40, y: 8 } })
   await win.waitForFunction(
-    () => {
-      const li = document.querySelector('.rail__chats > .rail__chat-item:nth-child(2)')
+    (selector) => {
+      const li = document.querySelector(selector)
       const cs = (sel) => getComputedStyle(li.querySelector(sel))
       return (
         cs('.rail__chat-actions').opacity === '1' &&
@@ -237,7 +244,7 @@ try {
         cs('.rail__model').opacity === '0'
       )
     },
-    undefined,
+    finishedSelector,
     { timeout: 3000 }
   )
   await win.screenshot({ path: join(artifacts, '20-rail-chat-hover.png') })
@@ -296,4 +303,5 @@ try {
   console.log('rail-chat-status: OK')
 } finally {
   await app?.close()
+  rmSync(userData, { recursive: true, force: true })
 }
