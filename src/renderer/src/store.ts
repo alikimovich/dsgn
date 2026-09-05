@@ -604,9 +604,9 @@ export interface ProjectEntry {
    *  switch (a global viewport leaked one project's Mobile into the next). */
   viewport?: Viewport
   /** Rail: hide this project's chat list. The rail is an ACCORDION — at most one
-   *  project's chats are unfolded at a time, and it's the project you last
-   *  switched to: `activate`/`openOrActivate` unfold it and fold every other one,
-   *  and the chevron unfolds the same exclusive way (see `foldOthers`). Folding
+   *  project's chats are unfolded at a time. Project headers toggle only the
+   *  list; selecting a chat activates its project. `activate`/`openOrActivate`
+   *  and both header buttons unfold exclusively (see `foldOthers`). Folding
    *  still doesn't deactivate a project — its dev server/preview stay live either
    *  way, only the list is hidden. Persisted with the entry, so a relaunch
    *  restores the same single open project.

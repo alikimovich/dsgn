@@ -1957,7 +1957,6 @@ export default function App(): React.JSX.Element {
       ) : (
         <div className={`panes ${chatHidden ? 'panes--chat-hidden' : ''}`}>
           <Rail
-            onSwitch={(key) => void switchTo(key)}
             onClose={(key) => void closeProjectFromRail(key)}
             onOpen={() => void openAnother()}
             onCreate={() => void createNewProject()}

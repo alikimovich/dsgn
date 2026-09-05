@@ -1,8 +1,8 @@
 /**
  * v5-C rail + switching — end to end. Open project A, then "+ New project" B
- * keeping A warm, then switch back to A via the rail. Asserts:
+ * keeping A warm, then switch back to A via a chat row. Asserts:
  *  - both appear in the rail; both dev servers stay running (warm),
- *  - switching swaps the active preview URL to the target project,
+ *  - header clicks only toggle lists; chat clicks swap the active preview,
  *  - the per-project chat slice swaps with the active project,
  *  - the rail is an ACCORDION: one project's chats are unfolded at a time —
  *    switching (and the chevron) folds whichever was open.
@@ -138,8 +138,35 @@ try {
   // Preview is showing B.
   if (!(await waitPreviewPort(app, port(urlB)))) throw new Error("preview should show B after opening it")
 
-  // Switch to A via the rail.
-  await win.click('.rail__item:has-text("praxis-fixture-static") .rail__open')
+  // Header browsing never changes the active chat or preview.
+  const itemA = win.locator('.rail__item', { hasText: 'praxis-fixture-static' })
+  const itemB = win.locator('.rail__item', { hasText: 'selectable' })
+  const chatsA = itemA.locator('.rail__chats .rail__chat-item')
+  const chatsB = itemB.locator('.rail__chats .rail__chat-item')
+  const activeBefore = await win.evaluate(() => window.__praxisWorkspace.getState().activeKey)
+  const assertStillB = async () => {
+    const state = await win.evaluate(() => ({
+      key: window.__praxisWorkspace.getState().activeKey,
+      text: window.__praxisStore.getState().messages.at(-1)?.text
+    }))
+    if (state.key !== activeBefore || state.text !== 'hello from B' || port(await previewUrl(app)) !== port(urlB)) {
+      throw new Error('project header changed the active chat or preview')
+    }
+  }
+  await itemB.locator('.rail__name-btn').click()
+  await until(async () => (await chatsB.count()) === 0, 'expanded header should collapse')
+  await assertStillB()
+  await itemB.locator('.rail__name-btn').click()
+  await until(async () => (await chatsB.count()) > 0, 'collapsed header should expand')
+  await itemA.locator('.rail__name-btn').click()
+  await until(async () => (await chatsA.count()) > 0 && (await chatsB.count()) === 0,
+    'another project header should open exclusively')
+  await assertStillB()
+  await itemA.locator('.rail__name-btn').click()
+  await until(async () => (await chatsA.count()) === 0, 'inactive expanded header should collapse')
+  await assertStillB()
+  await itemA.locator('.rail__name-btn').click()
+  await itemA.locator('.rail__chats button.rail__chat').first().click()
   await win.waitForFunction(
     (u) => document.querySelector('.previewbar__url')?.textContent?.includes(u),
     new URL(urlA).host,
@@ -154,10 +181,6 @@ try {
 
   // The rail is an accordion: switching to A unfolded A's chats and folded B's
   // away, so exactly one project's list is open.
-  const itemA = win.locator('.rail__item', { hasText: 'praxis-fixture-static' })
-  const itemB = win.locator('.rail__item', { hasText: 'selectable' })
-  const chatsA = itemA.locator('.rail__chats .rail__chat-item')
-  const chatsB = itemB.locator('.rail__chats .rail__chat-item')
   await until(
     async () => (await chatsB.count()) === 0,
     "switching to A should fold B's chats away (accordion)"
@@ -182,7 +205,8 @@ try {
   )
 
   // Switching back to B unfolds it again — the fold follows the active project.
-  await win.click('.rail__item:has-text("selectable") .rail__name-btn')
+  await itemB.locator('.rail__name-btn').click()
+  await itemB.locator('.rail__chats button.rail__chat').first().click()
   if (!(await waitPreviewPort(app, port(urlB)))) throw new Error('switching back should load B')
   await until(
     async () => (await chatsB.count()) > 0 && (await chatsA.count()) === 0,

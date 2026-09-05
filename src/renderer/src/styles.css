@@ -648,9 +648,8 @@ body.is-fullscreen .sidebar-toggle {
     align-items: stretch;
     border-radius: 6px;
 }
-/* .rail__open is now a plain flex wrapper (not a button) around two buttons —
-   the glyph (toggles the active project's chat list) and the name (switches
-   project) — so they can have independent click behavior. */
+/* Both project header buttons toggle the chat list without changing the
+   active chat or preview. */
 .rail__open {
     flex: 1 1 auto;
     display: flex;

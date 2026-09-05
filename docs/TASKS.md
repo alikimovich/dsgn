@@ -3,6 +3,13 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Browse project chats without switching (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Project names toggle their chat lists.** Clicking the expanded project
+      collapses it; clicking a collapsed project expands it and folds the others.
+      Header clicks preserve the active chat and preview. Select a chat directly
+      to switch to it.
+
 ## Project header actions (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Reveal project actions on hover.** Memory and Remove project share an

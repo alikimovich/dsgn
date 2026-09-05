@@ -18,8 +18,6 @@ import RailProjectActions from './RailProjectActions'
 import RailChatRow, { type ChatStatus } from './RailChatRow'
 
 interface Props {
-  /** Switch to an already-open project. */
-  onSwitch: (key: string) => void
   /** Close (fully stop) a project. */
   onClose: (key: string) => void
   /** Open another project, keeping the current one warm. */
@@ -77,7 +75,7 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
  * hover pencil — see RailChatRow). Each chat row leads with a status dot that
  * sits in the same 16px slot the project's folder icon occupies, so dots and
  * folders share a centre line; the names stay flush-left at the project name's
- * level. Clicking a project switches; clicking a chat opens/reviews it.
+ * level. Clicking a project toggles its list; clicking a chat opens/reviews it.
  * The project header reveals an actions menu and New chat on hover or keyboard
  * focus. Memory and Remove project live in that menu. History stays collapsible.
  *
@@ -88,7 +86,6 @@ const renameLiveChat = (sessionKey: string, name: string): void => {
  * animate instead of popping in and out.
  */
 export default function Rail({
-  onSwitch,
   onClose,
   onOpen,
   onCreate,
@@ -232,10 +229,9 @@ export default function Rail({
                       The favicon rides `rail__folder` so it inherits the same
                       16px slot and the same hover cross-fade as the folder it
                       replaces; only the paint differs.
-                      It only ever folds a chat list — switching projects is the
-                      name button's job, so a fold never drags the preview along
-                      with it. Unfolding closes whichever project was open (the
-                      accordion); folding just closes this one. */}
+                      Both glyph and name only fold the chat list, leaving the
+                      active chat and preview untouched. Unfolding closes whichever
+                      project was open; folding just closes this one. */}
                     <button
                       type="button"
                       className="rail__glyph-btn"
@@ -244,6 +240,7 @@ export default function Rail({
                         useWorkspace.getState().toggleChatsCollapsed(p.key)
                       }}
                       aria-label={`${expanded ? 'Collapse' : 'Expand'} ${p.name}'s chats`}
+                      aria-expanded={expanded}
                     >
                       <span className="rail__glyph" aria-hidden="true">
                         {icon ? (
@@ -264,8 +261,8 @@ export default function Rail({
                     <button
                       type="button"
                       className="rail__name-btn"
-                      onClick={() => onSwitch(p.key)}
-                      aria-current={active}
+                      onClick={() => useWorkspace.getState().toggleChatsCollapsed(p.key)}
+                      aria-expanded={expanded}
                     >
                       <span className="rail__name">{p.name}</span>
                       {workingCount > 0 && (

@@ -78,8 +78,11 @@ try {
       console.error(`  ✗ ${label}: want ${want}, got ${JSON.stringify(got)}`)
     }
   }
-  const switchProject = () =>
-    win.click('.rail__item:not(.rail__item--active) .rail__open')
+  const switchProject = async () => {
+    const item = win.locator('.rail__item:not(.rail__item--active)')
+    await item.locator('.rail__name-btn').click()
+    await item.locator('.rail__chats button.rail__chat').first().click()
+  }
 
   await openVia(fixtureA)
   const urlA = await waitNewUrl()

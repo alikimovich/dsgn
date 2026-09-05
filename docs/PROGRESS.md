@@ -2,6 +2,21 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Project headers browse without switching chats
+
+Project-name clicks now share the chevron's exclusive expand/collapse action.
+Clicking the unfolded project closes its list; clicking another opens that list
+and folds the others, preserving the active conversation and native preview.
+Direct chat clicks still activate the selected chat and its project. Removed the
+unused Rail switching callback and exposed expanded state on both header buttons.
+
+The rail regression exercises active and inactive header toggles, checks that the
+current conversation and preview survive browsing, and then verifies direct chat
+switching. The viewport regression now switches through chat rows too. Verified
+TypeScript, both interaction flows, and the captured rail layout. The full suite
+finished at 124/125; only the previously documented rail-chat-status missing-row
+geometry assertion failed.
+
 ## 2026-09-04 — Hover actions in project headers
 
 Moved New chat from below the chat list to a compose icon at the right of each
