@@ -3,6 +3,16 @@
 Roadmap / next steps. Tick items as you finish them and log in PROGRESS.md.
 Full narrative for shipped work lives in `docs/PROGRESS.md`.
 
+## Preview sibling dragging (2026-09-04, user-requested) — SHIPPED
+
+- [x] **Cmd/Ctrl-drag the selected element among its siblings in the native preview.**
+      Generic geometry supports columns, rows, and grids, promotes nested hit
+      content to the selected object, and never changes parents. Includes insertion
+      feedback, movement threshold, boundary tolerance, cancellation, source edits,
+      undo, and the existing agent-prompt fallback for ambiguous moves.
+- [ ] **Bring the gesture to the browser preview bridge.** Native preview ships first;
+      browser Layers/selection editing parity remains tracked below.
+
 ## Chat/preview divider (2026-09-04, user-requested) — SHIPPED
 
 - [x] **Add a border between chat and preview.** The existing resize handle is

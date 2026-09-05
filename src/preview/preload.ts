@@ -31,6 +31,7 @@ import {
   LAYERS_READ_REPLY,
   LAYERS_SELECT,
   LAYERS_SET_WATCH,
+  PREVIEW_MOVE_NODE,
   PREVIEW_PICKED as PICKED,
   PREVIEW_PIN_CLICK as PIN_CLICK,
   PREVIEW_READINESS as READINESS,
@@ -53,6 +54,7 @@ import {
   type LayerFingerprint,
   resolveLayerElement
 } from './layers'
+import { installDragReorder } from './drag-reorder'
 import { formatDistance, type MeasureLine, type MeasureRect, measureRects } from './measure'
 import { specifiedValues, varRefName } from './style-provenance'
 
@@ -1133,6 +1135,7 @@ function replayStyle(prop: string, from: string, to: string): void {
 }
 
 function onMove(e: MouseEvent): void {
+  if (previewDrag?.active()) return
   // Self-heal: if the frozen node was swapped out (HMR) without a blur, clear it
   // so a mode isn't stranded anchored to a detached element.
   if (editing && !editing.isConnected) endEdit()
@@ -1616,6 +1619,14 @@ function setFrame(on: boolean): void {
   frameHost = host
   positionFrame()
 }
+
+const previewDrag = IS_SIM_BRIDGE ? null : installDragReorder({
+  selection: () => selectedEl,
+  blocked: () => !!(editing || commenting || commentMode),
+  overlay: () => { ensureOverlay(); return overlayHost!.shadowRoot! },
+  clearHover: () => { hideOverlay(); clearMeasure() },
+  move: request => ipcRenderer.send(PREVIEW_MOVE_NODE, request)
+})
 
 // Capture-phase so we see events before the page and can suppress the click.
 if (!IS_SIM_BRIDGE) {

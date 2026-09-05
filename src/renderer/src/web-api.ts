@@ -238,6 +238,7 @@ export function installWebApi(config: WebConfig): void {
     },
     layers: {
       read: () => unavailable('Layers'),
+      onMoveRequest: on('layers:move-request'),
       onChanged: on('layers:changed'),
       select: (path, fingerprint) => postPreview('layers-select', { path, fingerprint }),
       hover: (path, fingerprint) => postPreview('layers-hover', { path, fingerprint }),

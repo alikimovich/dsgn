@@ -2,6 +2,28 @@
 
 Newest first. Append a dated entry when you finish a chunk of work.
 
+## 2026-09-04 — Modifier-drag siblings in the native preview
+
+Select any stamped element, then Command-drag (Control on Windows/Linux) to
+reorder it among its current parent's children. Nested text/icons keep the
+selected object as the drag source. Tag-independent edge geometry handles
+columns, rows, grids, and reversed flow, with a five-pixel start threshold,
+insertion line, and six-pixel target tolerance. This first version never reparents.
+
+The preview sends only trusted gestures through a sender-checked relay to the
+existing Layers source mover. React/Svelte/HTML edits retain edit-history undo;
+ambiguous template/data moves seed the composer. Escape, modifier release,
+leaving the parent, blur, scrolling, and structural changes cancel safely, and
+cancelled gestures suppress the page click. Browser gesture parity remains open.
+
+Verified all TypeScript projects and the full unit/Electron suite (127/127).
+The new geometry regression covers rows, columns, grids, reverse flow, and no-ops.
+The native-preview regression uses non-list cards with nested content and checks
+source persistence, live reload, exact undo, horizontal dragging, cancellation,
+outside-parent drops, ordinary input, and synthetic-event rejection. Inspected
+the captured native preview insertion line. The renderer subscription lives in
+its own hook, independently of whether the Layers panel is open.
+
 ## 2026-09-04 — Visible chat/preview separator
 
 The existing resize divider now paints a full-height 1px line with the shared

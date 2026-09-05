@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { usePreviewReorder } from './use-preview-reorder'
 import ChatPanel from './components/ChatPanel'
 import CatLoader from './components/CatLoader'
 import ConsolePanel from './components/ConsolePanel'
@@ -194,6 +195,7 @@ export default function App(): React.JSX.Element {
   const inspecting = useSelection((s) => s.inspecting)
   const propsIslandOpen = usePropsIsland((s) => s.open)
   const projectRoot = useSession((s) => s.projectRoot)
+  usePreviewReorder(setStatus)
   const drawerSource = useCodeDrawer((s) => s.source)
 
   // Custom Controls (v10): the selection's AI-surfaced panels, fetched here
